@@ -1,33 +1,32 @@
 ;;; orpheus-ui.el --- The orpheus player interface -*- lexical-binding: t -*-
 
-;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
+;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-;; SPDX-License-Identifier: MIT
+;;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
 
-;; One buffer holds the player.  A header line shows what is playing, the
-;; first line of the buffer holds the tabs, and the rest is the list the
-;; current tab shows: the queue, the filesystem, artists, albums, playlists or
-;; search results.
-;;
-;; The interface is text first, so it works in a terminal as well as in a
-;; graphical frame.  Two things are added when the frame can draw them: cover
-;; art above the list, and the progress bar's Unicode fill, which falls back to
-;; ASCII when `orpheus-ui-plain-ascii' says so.  Everything else is ordinary
-;; Emacs text, faces and a keymap, so a terminal user loses nothing but
-;; pictures.
-;;
-;; The status lives in `header-line-format' on purpose: it changes every
-;; second, and redrawing only the header line leaves the list, point and the
-;; scroll position untouched.
+;;; One buffer holds the player.  A header line shows what is playing, the
+;;; first line of the buffer holds the tabs, and the rest is the list the
+;;; current tab shows: the queue, the filesystem, artists, albums, playlists or
+;;; search results.
+;;;
+;;; The interface is text first, so it works in a terminal as well as in a
+;;; graphical frame.  Two things are added when the frame can draw them: cover
+;;; art above the list, and the progress bar's Unicode fill, which falls back to
+;;; ASCII when `orpheus-ui-plain-ascii' says so.  Everything else is ordinary
+;;; Emacs text, faces and a keymap, so a terminal user loses nothing but
+;;; pictures.
+;;;
+;;; The status lives in `header-line-format' on purpose: it changes every
+;;; second, and redrawing only the header line leaves the list, point and the
+;;; scroll position untouched.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
 (require 'orpheus-backend)
-
 
 ;;; Look
 
@@ -102,16 +101,15 @@ Set it in a terminal whose font has no play, pause or block characters."
   "Width of the progress bar in the status line, in columns."
   :type 'integer :group 'orpheus)
 
-
 ;;; Glyphs and strings
 
 (defun orpheus-status-glyph (status)
   "Return the glyph that stands for STATUS's state."
   (let ((plain orpheus-ui-plain-ascii))
     (pcase (and status (orpheus-status-state status))
-      ('play (if plain ">" "▶"))
-      ('pause (if plain "||" "⏸"))
-      (_ (if plain "." "⏹")))))
+           ('play (if plain ">" "▶"))
+           ('pause (if plain "||" "⏸"))
+           (_ (if plain "." "⏹")))))
 
 (defun orpheus-ui--flag (on letter)
   "Return LETTER when ON, and a blank column otherwise."
@@ -119,16 +117,16 @@ Set it in a terminal whose font has no play, pause or block characters."
 
 (defun orpheus-ui--status-string (status track)
   "Return the one-line status of STATUS and TRACK."
-  (let* ((elapsed (and status (orpheus-status-elapsed status)))
-         (total (and status (orpheus-status-total status)))
-         (flags (concat (orpheus-ui--flag (and status (orpheus-status-repeat status)) "R")
-                        (orpheus-ui--flag (and status (orpheus-status-random status)) "Z")
-                        (orpheus-ui--flag (and status (orpheus-status-single status)) "S")
-                        (orpheus-ui--flag (and status (orpheus-status-consume status)) "C"))))
+  (let ((elapsed (and status (orpheus-status-elapsed status)))
+        (total (and status (orpheus-status-total status)))
+        (flags (concat (orpheus-ui--flag (and status (orpheus-status-repeat status)) "R")
+                       (orpheus-ui--flag (and status (orpheus-status-random status)) "Z")
+                       (orpheus-ui--flag (and status (orpheus-status-single status)) "S")
+                       (orpheus-ui--flag (and status (orpheus-status-consume status)) "C"))))
     (format " %s  %s  %s / %s  [%s] %3d%%  vol %d  %s"
             (orpheus-status-glyph status)
             (if (and track (not (string-empty-p (orpheus-track-label track))))
-                (orpheus-track-label track)
+              (orpheus-track-label track)
               (if status "nothing playing" "connecting…"))
             (orpheus-format-time elapsed)
             (orpheus-format-time total)
@@ -139,9 +137,9 @@ Set it in a terminal whose font has no play, pause or block characters."
 
 (defun orpheus-ui--elide (string width)
   "Return STRING fitted into WIDTH columns, cut with an ellipsis."
-  (let ((width (max 1 width)))
+  (let* ((width (max 1 width)))
     (if (<= (string-width string) width)
-        string
+      string
       (truncate-string-to-width string width nil nil "…"))))
 
 (defun orpheus-ui--columns (left right width)
@@ -155,14 +153,14 @@ Set it in a terminal whose font has no play, pause or block characters."
 (defun orpheus-ui-kind-title (kind)
   "Return the tab title for the browse KIND."
   (pcase kind
-    ('queue "Queue")
-    ('directories "Directories")
-    ('artists "Artists")
-    ('albumartists "Album Artists")
-    ('albums "Albums")
-    ('playlists "Playlists")
-    ('search "Search")
-    (_ (capitalize (symbol-name kind)))))
+         ('queue "Queue")
+         ('directories "Directories")
+         ('artists "Artists")
+         ('albumartists "Album Artists")
+         ('albums "Albums")
+         ('playlists "Playlists")
+         ('search "Search")
+         (_ (capitalize (symbol-name kind)))))
 
 (defun orpheus-ui--tabs-for-capabilities (capabilities)
   "Return the tabs a backend with CAPABILITIES gets, as (KIND . TITLE).
@@ -172,7 +170,6 @@ The queue is always there, because every backend can queue."
                   (when (or (eq kind 'queue) (memq kind capabilities))
                     (cons kind (orpheus-ui-kind-title kind))))
                 orpheus-backend-browse-kinds)))
-
 
 ;;; State
 
@@ -188,16 +185,16 @@ The queue is always there, because every backend can queue."
   (loading nil))
 
 (defvar-local orpheus-ui--tabs nil
-  "Vector of `orpheus-ui-tab' in this buffer.")
+              "Vector of `orpheus-ui-tab' in this buffer.")
 
 (defvar-local orpheus-ui--tab 0
-  "Index of the tab this buffer shows.")
+              "Index of the tab this buffer shows.")
 
 (defvar-local orpheus-ui--backend nil
-  "The backend the tabs were built for.")
+              "The backend the tabs were built for.")
 
 (defvar-local orpheus-ui--render-key nil
-  "What the buffer was last drawn from, so an unchanged view is left alone.")
+              "What the buffer was last drawn from, so an unchanged view is left alone.")
 
 (defvar orpheus-ui--art nil
   "Plist of the cover art in use: :uri and, once fetched, :file.")
@@ -226,7 +223,6 @@ The queue is always there, because every backend can queue."
     (when (and tab (integerp index))
       (setf (orpheus-ui-tab-index tab) index))))
 
-
 ;;; Drawing
 
 (defvar orpheus-ui-item-map
@@ -241,7 +237,7 @@ The queue is always there, because every backend can queue."
   "Return the header line of the player."
   (if (and orpheus-backend-current
            (orpheus-backend-connected-p orpheus-backend-current))
-      (orpheus-ui--status-string orpheus-status-current orpheus-track-current)
+    (orpheus-ui--status-string orpheus-status-current orpheus-track-current)
     (propertize " orpheus  not connected" 'face 'orpheus-error-face)))
 
 (defun orpheus-ui--tab-string ()
@@ -251,7 +247,7 @@ The queue is always there, because every backend can queue."
     (dolist (tab (append orpheus-ui--tabs nil))
       (push (propertize (format "%d %s" (1+ index) (orpheus-ui-tab-title tab))
                         'face (if (= index orpheus-ui--tab)
-                                  'orpheus-tab-active-face
+                                'orpheus-tab-active-face
                                 'orpheus-tab-face))
             parts)
       (setq index (1+ index)))
@@ -261,11 +257,11 @@ The queue is always there, because every backend can queue."
   "Return the path inside the current tab, for the header."
   (let ((tab (orpheus-ui--current-tab)))
     (if (and tab (orpheus-ui-tab-arg tab))
-        (concat "  " (string-join
-                      (delq nil (mapcar (lambda (part)
-                                          (when (stringp part) part))
-                                        (orpheus-ui-tab-arg tab)))
-                      " / "))
+      (concat "  " (string-join
+                    (delq nil (mapcar (lambda (part)
+                                        (when (stringp part) part))
+                                      (orpheus-ui-tab-arg tab)))
+                    " / "))
       "")))
 
 (defun orpheus-ui--art-image ()
@@ -278,11 +274,11 @@ The queue is always there, because every backend can queue."
 (defun orpheus-ui--insert-art (width)
   "Insert the cover art centred in WIDTH, when there is one."
   (when-let* ((image (orpheus-ui--art-image)))
-    (let* ((size (image-size image t))
-           (indent (max 0 (/ (- width (car size)) 2))))
-      (insert (make-string indent ?\s))
-      (insert-image image (make-string 1 ?\s))
-      (insert "\n"))))
+             (let* ((size (image-size image t))
+                    (indent (max 0 (/ (- width (car size)) 2))))
+               (insert (make-string indent ?\s))
+               (insert-image image (make-string 1 ?\s))
+               (insert "\n"))))
 
 (defun orpheus-ui--current-p (item)
   "Return non-nil when ITEM is the row playing now."
@@ -297,12 +293,12 @@ The queue is always there, because every backend can queue."
   (let* ((kind (orpheus-item-kind item))
          (current (orpheus-ui--current-p item))
          (face (pcase kind
-                 ('directory 'orpheus-directory-face)
-                 ('album 'orpheus-album-face)
-                 ('playlist 'orpheus-artist-face)
-                 ('artist 'orpheus-artist-face)
-                 ('output 'orpheus-muted-face)
-                 (_ 'orpheus-title-face)))
+                      ('directory 'orpheus-directory-face)
+                      ('album 'orpheus-album-face)
+                      ('playlist 'orpheus-artist-face)
+                      ('artist 'orpheus-artist-face)
+                      ('output 'orpheus-muted-face)
+                      (_ 'orpheus-title-face)))
          (row (orpheus-ui--columns (or (orpheus-item-label item) "")
                                    (or (orpheus-item-detail item) "")
                                    width))
@@ -319,9 +315,9 @@ The queue is always there, because every backend can queue."
 
 (defun orpheus-ui--render ()
   "Draw the buffer from the tabs and rows it holds."
-  (let* ((inhibit-read-only t)
-         (tab (orpheus-ui--current-tab))
-         (width (max 24 (if (get-buffer-window) (window-body-width) 80))))
+  (let ((inhibit-read-only t)
+        (tab (orpheus-ui--current-tab))
+        (width (max 24 (if (get-buffer-window) (window-body-width) 80))))
     (erase-buffer)
     (insert (orpheus-ui--tab-string) "\n")
     (when (orpheus-ui-tab-arg tab)
@@ -332,12 +328,12 @@ The queue is always there, because every backend can queue."
     (insert (propertize (make-string width ?─) 'face 'orpheus-muted-face) "\n")
     (let ((items (orpheus-ui-tab-items tab)))
       (if (null items)
-          (insert (propertize
-                   (if (orpheus-ui-tab-loading tab)
-                       "  loading…"
-                     "  nothing here yet")
-                   'face 'orpheus-muted-face)
-                  "\n")
+        (insert (propertize
+                 (if (orpheus-ui-tab-loading tab)
+                   "  loading…"
+                   "  nothing here yet")
+                 'face 'orpheus-muted-face)
+                "\n")
         (let ((index 0))
           (dolist (item items)
             (orpheus-ui--insert-item item index width)
@@ -375,10 +371,9 @@ which row is highlighted."
   (let* ((tab (orpheus-ui--current-tab))
          (index (if tab (orpheus-ui-tab-index tab) 0))
          (match (progn (goto-char (point-min))
-                       (text-property-search-forward 'orpheus-item index #'eq))))
+                  (text-property-search-forward 'orpheus-item index #'eq))))
     (when match
       (goto-char (prop-match-beginning match)))))
-
 
 ;;; Reading data
 
@@ -401,7 +396,7 @@ which row is highlighted."
                         (orpheus-ui--set-items tab items)
                         (funcall callback))))))
         (if (eq (orpheus-ui-tab-view tab) 'queue)
-            (orpheus-backend-queue backend done)
+          (orpheus-backend-queue backend done)
           (orpheus-backend-browse backend (orpheus-ui-tab-view tab)
                                   (orpheus-ui-tab-arg tab) done))))))
 
@@ -419,17 +414,16 @@ which row is highlighted."
   "Build the tab bar for the backend in use."
   (let* ((backend orpheus-backend-current)
          (capabilities (if backend
-                           (orpheus-backend-capabilities backend)
+                         (orpheus-backend-capabilities backend)
                          '(queue directories))))
     (setq orpheus-ui--tabs
-          (vconcat
-           (mapcar (lambda (pair)
-                     (orpheus-ui-tab-create :kind (car pair) :title (cdr pair)
-                                            :view (car pair)))
-                   (orpheus-ui--tabs-for-capabilities capabilities)))
-          orpheus-ui--backend backend
-          orpheus-ui--tab 0)))
-
+      (vconcat
+       (mapcar (lambda (pair)
+                 (orpheus-ui-tab-create :kind (car pair) :title (cdr pair)
+                                        :view (car pair)))
+               (orpheus-ui--tabs-for-capabilities capabilities)))
+      orpheus-ui--backend backend
+      orpheus-ui--tab 0)))
 
 ;;; Moving
 
@@ -471,7 +465,6 @@ which row is highlighted."
   "Move up one screenful."
   (interactive)
   (orpheus-ui--move (- (max 1 (- (window-body-height) 4)))))
-
 
 ;;; Acting
 
@@ -521,50 +514,50 @@ which row is highlighted."
   (let ((item (orpheus-ui--item-at-point))
         (tab (orpheus-ui--current-tab)))
     (cond
-     ((null item) (message "orpheus: no row here"))
-     ((orpheus-item-browse item)
-      (pcase-let ((`(,kind . ,arg) (orpheus-item-browse item)))
-        (setf (orpheus-ui-tab-stack tab)
-              (cons (list (orpheus-ui-tab-view tab) (orpheus-ui-tab-arg tab))
-                    (orpheus-ui-tab-stack tab)))
-        (setf (orpheus-ui-tab-view tab) kind
-              (orpheus-ui-tab-arg tab) (if (listp arg) arg (list arg))
-              (orpheus-ui-tab-index tab) 0)
-        (orpheus-ui--render)
-        (orpheus-ui-refresh)))
-     ((eq (orpheus-ui-tab-view tab) 'queue)
-      (orpheus-backend-command orpheus-backend-current 'playpos
-                               (alist-get 'pos (orpheus-item-data item))))
-     ((orpheus-item-playable item)
-      (orpheus-backend-play-uri orpheus-backend-current
-                                (alist-get 'uri (orpheus-item-data item)))
-      (orpheus-ui-refresh))
-     (t (message "orpheus: nothing to play here")))))
+      ((null item) (message "orpheus: no row here"))
+      ((orpheus-item-browse item)
+       (pcase-let ((`(,kind . ,arg) (orpheus-item-browse item)))
+         (setf (orpheus-ui-tab-stack tab)
+               (cons (list (orpheus-ui-tab-view tab) (orpheus-ui-tab-arg tab))
+                     (orpheus-ui-tab-stack tab)))
+         (setf (orpheus-ui-tab-view tab) kind
+               (orpheus-ui-tab-arg tab) (if (listp arg) arg (list arg))
+               (orpheus-ui-tab-index tab) 0)
+         (orpheus-ui--render)
+         (orpheus-ui-refresh)))
+      ((eq (orpheus-ui-tab-view tab) 'queue)
+       (orpheus-backend-command orpheus-backend-current 'playpos
+                                (alist-get 'pos (orpheus-item-data item))))
+      ((orpheus-item-playable item)
+       (orpheus-backend-play-uri orpheus-backend-current
+                                 (alist-get 'uri (orpheus-item-data item)))
+       (orpheus-ui-refresh))
+      (t (message "orpheus: nothing to play here")))))
 
 (defun orpheus-ui-up ()
   "Go back up the current tab's hierarchy."
   (interactive)
   (let ((tab (orpheus-ui--current-tab)))
     (if-let* ((parent (car (orpheus-ui-tab-stack tab))))
-        (progn
-          (setf (orpheus-ui-tab-stack tab) (cdr (orpheus-ui-tab-stack tab)))
-          (setf (orpheus-ui-tab-view tab) (car parent)
-                (orpheus-ui-tab-arg tab) (car (cdr parent))
-                (orpheus-ui-tab-index tab) 0)
-          (orpheus-ui--render)
-          (orpheus-ui-refresh))
-      (message "orpheus: already at the top"))))
+             (progn
+               (setf (orpheus-ui-tab-stack tab) (cdr (orpheus-ui-tab-stack tab)))
+               (setf (orpheus-ui-tab-view tab) (car parent)
+                     (orpheus-ui-tab-arg tab) (car (cdr parent))
+                     (orpheus-ui-tab-index tab) 0)
+               (orpheus-ui--render)
+               (orpheus-ui-refresh))
+             (message "orpheus: already at the top"))))
 
 (defun orpheus-ui-add ()
   "Add the row at point to the queue."
   (interactive)
   (let ((item (orpheus-ui--item-at-point)))
     (if (orpheus-item-playable item)
-        (progn
-          (orpheus-backend-add orpheus-backend-current
-                               (alist-get 'uri (orpheus-item-data item)))
-          (message "orpheus: queued %s" (orpheus-item-label item))
-          (orpheus-ui-refresh))
+      (progn
+        (orpheus-backend-add orpheus-backend-current
+                             (alist-get 'uri (orpheus-item-data item)))
+        (message "orpheus: queued %s" (orpheus-item-label item))
+        (orpheus-ui-refresh))
       (message "orpheus: nothing to queue here"))))
 
 (defun orpheus-ui-add-all ()
@@ -575,10 +568,10 @@ which row is highlighted."
                                        (alist-get 'uri (orpheus-item-data item))))
                                 (orpheus-ui--current-items)))))
     (if uris
-        (progn
-          (orpheus-backend-add orpheus-backend-current uris)
-          (message "orpheus: queued %d track(s)" (length uris))
-          (orpheus-ui-refresh))
+      (progn
+        (orpheus-backend-add orpheus-backend-current uris)
+        (message "orpheus: queued %d track(s)" (length uris))
+        (orpheus-ui-refresh))
       (message "orpheus: nothing to queue here"))))
 
 (defun orpheus-ui-delete ()
@@ -587,14 +580,14 @@ which row is highlighted."
   (let ((tab (orpheus-ui--current-tab))
         (item (orpheus-ui--item-at-point)))
     (cond
-     ((null item) (message "orpheus: no row here"))
-     ((not (eq (orpheus-ui-tab-view tab) 'queue))
-      (message "orpheus: only the queue can be edited here"))
-     (t
-      (let ((pos (or (alist-get 'pos (orpheus-item-data item))
-                     (orpheus-ui-tab-index tab))))
-        (orpheus-backend-command orpheus-backend-current 'delete pos)
-        (orpheus-ui-refresh))))))
+      ((null item) (message "orpheus: no row here"))
+      ((not (eq (orpheus-ui-tab-view tab) 'queue))
+       (message "orpheus: only the queue can be edited here"))
+      (t
+        (let ((pos (or (alist-get 'pos (orpheus-item-data item))
+                       (orpheus-ui-tab-index tab))))
+          (orpheus-backend-command orpheus-backend-current 'delete pos)
+          (orpheus-ui-refresh))))))
 
 (defun orpheus-ui-clear ()
   "Empty the queue, after asking."
@@ -621,8 +614,8 @@ which row is highlighted."
   (interactive (list (read-string "Search: ")))
   (when (string-empty-p query)
     (user-error "No search string"))
-  (let* ((index 0)
-         (found nil))
+  (let ((index 0)
+        (found nil))
     (dotimes (i (length (or orpheus-ui--tabs [])))
       (when (eq 'search (orpheus-ui-tab-kind (aref orpheus-ui--tabs i)))
         (setq index i found t)))
@@ -656,7 +649,6 @@ which row is highlighted."
   (interactive "e")
   (orpheus-ui-mouse-select event)
   (orpheus-ui-confirm))
-
 
 ;;; Help
 
@@ -706,7 +698,6 @@ which row is highlighted."
         (special-mode)))
     (display-buffer buffer)))
 
-
 ;;; The mode
 
 (defvar orpheus-ui-mode-map
@@ -728,7 +719,7 @@ which row is highlighted."
     (dotimes (i 7)
       (let ((number (1+ i)))
         (define-key map (vector (+ ?1 i))
-          (lambda () (interactive) (orpheus-ui-select-tab number)))))
+                    (lambda () (interactive) (orpheus-ui-select-tab number)))))
     (define-key map (kbd "C-b") 'orpheus-ui-up)
     (define-key map (kbd "a") 'orpheus-ui-add)
     (define-key map (kbd "A") 'orpheus-ui-add-all)
@@ -772,7 +763,6 @@ which row is highlighted."
   (setq-local orpheus-ui--tabs nil)
   (setq-local orpheus-ui--tab 0)
   (setq-local orpheus-ui--render-key nil))
-
 
 ;;; Opening
 

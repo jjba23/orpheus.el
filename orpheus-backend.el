@@ -1,24 +1,23 @@
 ;;; orpheus-backend.el --- Backend protocol for orpheus -*- lexical-binding: t -*-
 
-;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
+;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-;; SPDX-License-Identifier: MIT
+;;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
 
-;; This file holds what every backend shares: the values that travel through
-;; the player (a track, a status, a browsable item), the protocol a backend
-;; implements, and the registry that maps a symbol to a backend constructor.
-;;
-;; A backend is a `cl-defstruct' that includes `orpheus-backend' and
-;; implements the generics below.  Nothing here talks to the outside world, so
-;; the whole file is pure and can be tested without a server.
+;;; This file holds what every backend shares: the values that travel through
+;;; the player (a track, a status, a browsable item), the protocol a backend
+;;; implements, and the registry that maps a symbol to a backend constructor.
+;;;
+;;; A backend is a `cl-defstruct' that includes `orpheus-backend' and
+;;; implements the generics below.  Nothing here talks to the outside world, so
+;;; the whole file is pure and can be tested without a server.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
-
 
 ;;; The shared group
 
@@ -39,7 +38,6 @@
 (defvar orpheus-backend-disconnected-hook nil
   "Hook run when a backend loses its connection.
 Each function is called with the backend and a description of the event.")
-
 
 ;;; Values
 
@@ -68,7 +66,6 @@ cons of the browse kind and its argument; a row that can be queued carries
 `uri'."
   label detail kind data)
 
-
 ;;; Formatting
 
 (defcustom orpheus-progress-filled-char ?━
@@ -89,10 +86,10 @@ cons of the browse kind and its argument; a row that can be queued carries
   "Return a path in `orpheus-cache-directory' for KEY and NAME.
 KEY is hashed, so a name coming from a tag or a URL cannot climb out of the
 cache directory; NAME only contributes its base name."
-  (let* ((safe (replace-regexp-in-string
-                "[^A-Za-z0-9._-]" "_" (file-name-nondirectory name)))
-         (dir (expand-file-name (secure-hash 'sha1 (or key ""))
-                                orpheus-cache-directory)))
+  (let ((safe (replace-regexp-in-string
+               "[^A-Za-z0-9._-]" "_" (file-name-nondirectory name)))
+        (dir (expand-file-name (secure-hash 'sha1 (or key ""))
+                               orpheus-cache-directory)))
     (make-directory dir t)
     (expand-file-name (if (string-empty-p safe) "file" safe) dir)))
 
@@ -100,17 +97,17 @@ cache directory; NAME only contributes its base name."
   "Return SECONDS as a clock string, or dashes when there is no duration."
   (if (or (null seconds) (not (numberp seconds)) (< seconds 0)
           (> seconds 359999))
-      "-:--"
+    "-:--"
     (let ((total (round seconds)))
       (if (>= total 3600)
-          (format "%d:%02d:%02d" (/ total 3600) (/ (% total 3600) 60)
-                  (% total 60))
+        (format "%d:%02d:%02d" (/ total 3600) (/ (% total 3600) 60)
+                (% total 60))
         (format "%d:%02d" (/ total 60) (% total 60))))))
 
 (defun orpheus-progress-percent (elapsed total)
   "Return how far ELAPSED is into TOTAL, as a clamped percentage."
   (if (or (null elapsed) (null total) (<= total 0))
-      0
+    0
     (max 0 (min 100 (round (* 100 (/ (float elapsed) total)))))))
 
 (defun orpheus-progress-bar (elapsed total width)
@@ -143,7 +140,6 @@ cache directory; NAME only contributes its base name."
   "Return the (KIND . ARG) ITEM descends into, or nil."
   (alist-get 'browse (orpheus-item-data item)))
 
-
 ;;; The registry
 
 (defvar orpheus-backend-registry nil
@@ -170,7 +166,6 @@ Add one with `orpheus-register-backend' rather than by hand.")
     (unless entry
       (error "Orpheus: no backend called %s" name))
     (funcall (car (cdr entry)))))
-
 
 ;;; The protocol
 

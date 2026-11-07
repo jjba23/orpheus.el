@@ -1,24 +1,24 @@
 ;;; orpheus-local.el --- Local files and URLs through mpv -*- lexical-binding: t -*-
 
-;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
+;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-;; SPDX-License-Identifier: MIT
+;;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
 
-;; The backend that needs no daemon: it plays files and URLs with mpv, which
-;; is one program on Linux, macOS and Windows and already knows how to hand a
-;; YouTube link to yt-dlp.  Emacs talks to it over mpv's JSON IPC socket, so
-;; every command is a small JSON line and no playback call blocks the editor.
-;;
-;; Emacs keeps the queue, mpv plays one item at a time, and the end of a file
-;; is what moves the queue forward.  The audio output is mpv's business:
-;; `orpheus-local--audio-args' asks for PipeWire on Linux (falling back to
-;; PulseAudio and ALSA), CoreAudio on macOS and WASAPI on Windows.
-;;
-;; A shortcut worth naming: because Emacs drives the queue, the gap between
-;; two tracks is the time it takes Emacs to load the next file.  Gapless
-;; playback would mean handing the queue to mpv and reading it back.
+;;; The backend that needs no daemon: it plays files and URLs with mpv, which
+;;; is one program on Linux, macOS and Windows and already knows how to hand a
+;;; YouTube link to yt-dlp.  Emacs talks to it over mpv's JSON IPC socket, so
+;;; every command is a small JSON line and no playback call blocks the editor.
+;;;
+;;; Emacs keeps the queue, mpv plays one item at a time, and the end of a file
+;;; is what moves the queue forward.  The audio output is mpv's business:
+;;; `orpheus-local--audio-args' asks for PipeWire on Linux (falling back to
+;;; PulseAudio and ALSA), CoreAudio on macOS and WASAPI on Windows.
+;;;
+;;; A shortcut worth naming: because Emacs drives the queue, the gap between
+;;; two tracks is the time it takes Emacs to load the next file.  Gapless
+;;; playback would mean handing the queue to mpv and reading it back.
 
 ;;; Code:
 
@@ -26,7 +26,6 @@
 (require 'subr-x)
 (require 'json)
 (require 'orpheus-backend)
-
 
 ;;; Settings
 
@@ -66,7 +65,6 @@ The value is what follows `--ao=', for example \"pipewire\" or
   "File extensions the files pane shows."
   :type '(repeat string) :group 'orpheus)
 
-
 ;;; The backend
 
 (cl-defstruct (orpheus-local (:include orpheus-backend)
@@ -97,7 +95,6 @@ The value is what follows `--ao=', for example \"pipewire\" or
 (orpheus-register-backend 'local #'orpheus-local--make
                           "Local files and URLs played by mpv")
 
-
 ;;; Platform
 
 (defun orpheus-local--audio-args ()
@@ -107,21 +104,20 @@ what makes the same default work on a desktop, a laptop and a headless box."
   (list (concat "--ao="
                 (or orpheus-local-audio-driver
                     (pcase system-type
-                      ('gnu/linux "pipewire,pulse,alsa")
-                      ('darwin "coreaudio")
-                      ('windows-nt "wasapi")
-                      (_ "pulse,alsa"))))))
+                           ('gnu/linux "pipewire,pulse,alsa")
+                           ('darwin "coreaudio")
+                           ('windows-nt "wasapi")
+                           (_ "pulse,alsa"))))))
 
 (defun orpheus-local--socket-path ()
   "Return the path of the IPC socket to make mpv listen on."
   (or (when orpheus-local-socket
         (expand-file-name orpheus-local-socket))
       (if (eq system-type 'windows-nt)
-          ;; Windows has no unix sockets; mpv takes a named pipe.
-          "\\\\.\\pipe\\orpheus-emacs"
+        ;; Windows has no unix sockets; mpv takes a named pipe.
+        "\\\\.\\pipe\\orpheus-emacs"
         (expand-file-name (format "orpheus-mpv-%d" (emacs-pid))
                           temporary-file-directory))))
-
 
 ;;; The queue
 
@@ -129,11 +125,11 @@ what makes the same default work on a desktop, a laptop and a headless box."
   "Return the queue index after INDEX of COUNT, or nil at the end.
 REPEAT wraps around; RANDOM picks another entry."
   (cond
-   ((<= count 0) nil)
-   ((>= index (1- count)) (when repeat 0))
-   (random (let ((candidate (random count)))
-             (if (= candidate index) (mod (1+ index) count) candidate)))
-   (t (1+ index))))
+    ((<= count 0) nil)
+    ((>= index (1- count)) (when repeat 0))
+    (random (let ((candidate (random count)))
+              (if (= candidate index) (mod (1+ index) count) candidate)))
+    (t (1+ index))))
 
 (defun orpheus-local--queue-items (local)
   "Return LOCAL's queue as rows."
@@ -141,18 +137,18 @@ REPEAT wraps around; RANDOM picks another entry."
     (mapcar
      (lambda (uri)
        (prog1
-           (orpheus-item-create
-            :label (format "%2d  %s" (1+ index)
-                           (if (string-match-p "\\`[a-z]+://" uri)
-                               uri
-                             (file-name-nondirectory uri)))
-            :detail (if (string-match-p "\\`[a-z]+://" uri)
-                        "stream"
-                      (file-name-nondirectory
-                       (directory-file-name (file-name-directory uri))))
-            :kind 'track
-            :data (list (cons 'uri uri) (cons 'pos index)
-                        (cons 'id (1+ index))))
+         (orpheus-item-create
+          :label (format "%2d  %s" (1+ index)
+                         (if (string-match-p "\\`[a-z]+://" uri)
+                           uri
+                           (file-name-nondirectory uri)))
+          :detail (if (string-match-p "\\`[a-z]+://" uri)
+                    "stream"
+                    (file-name-nondirectory
+                     (directory-file-name (file-name-directory uri))))
+          :kind 'track
+          :data (list (cons 'uri uri) (cons 'pos index)
+                      (cons 'id (1+ index))))
          (setq index (1+ index))))
      (orpheus-local-instance-queue local))))
 
@@ -165,7 +161,7 @@ REPEAT wraps around; RANDOM picks another entry."
       (setf (orpheus-local-instance-track local)
             (orpheus-track-create :uri uri
                                   :title (if (string-match-p "\\`[a-z]+://" uri)
-                                             uri
+                                           uri
                                            (file-name-nondirectory uri))))
       (let ((status (orpheus-local-instance-status local)))
         (setf (orpheus-status-songid status) (1+ index))
@@ -174,7 +170,6 @@ REPEAT wraps around; RANDOM picks another entry."
         (setf (orpheus-status-total status) 0.0))
       (orpheus-local--send local (list "loadfile" uri "replace"))
       (orpheus-local--send local (list "set_property" "pause" :false)))))
-
 
 ;;; Talking mpv
 
@@ -203,30 +198,30 @@ CALLBACK is called with the error string, or nil, and the data."
   (let ((event (alist-get 'event message))
         (request (alist-get 'request_id message)))
     (cond
-     (event
-      (pcase event
-        ("end-file"
-         (when (equal (alist-get 'reason message) "eof")
-           (let ((next (orpheus-local--advance
-                        (length (orpheus-local-instance-queue local))
-                        (orpheus-local-instance-index local)
-                        (orpheus-local-instance-repeat local)
-                        (orpheus-local-instance-random local))))
-             (if next
-                 (orpheus-local--play-index local next)
-               (setf (orpheus-status-state
-                      (orpheus-local-instance-status local))
-                     'stop)))))
-        ("file-loaded" (orpheus-local--poll-metadata local))))
-     (request
-      (let ((callback (gethash request
-                               (orpheus-local-instance-requests local))))
-        (when callback
-          (remhash request (orpheus-local-instance-requests local))
-          (let ((error (alist-get 'error message)))
-            (funcall callback
-                     (unless (equal error "success") error)
-                     (alist-get 'data message)))))))))
+      (event
+        (pcase event
+               ("end-file"
+                (when (equal (alist-get 'reason message) "eof")
+                  (let ((next (orpheus-local--advance
+                               (length (orpheus-local-instance-queue local))
+                               (orpheus-local-instance-index local)
+                               (orpheus-local-instance-repeat local)
+                               (orpheus-local-instance-random local))))
+                    (if next
+                      (orpheus-local--play-index local next)
+                      (setf (orpheus-status-state
+                             (orpheus-local-instance-status local))
+                            'stop)))))
+               ("file-loaded" (orpheus-local--poll-metadata local))))
+      (request
+        (let ((callback (gethash request
+                                 (orpheus-local-instance-requests local))))
+          (when callback
+            (remhash request (orpheus-local-instance-requests local))
+            (let ((error (alist-get 'error message)))
+              (funcall callback
+                       (unless (equal error "success") error)
+                       (alist-get 'data message)))))))))
 
 (defun orpheus-local--filter (local chunk)
   "Feed CHUNK, as it arrives, to LOCAL's JSON parser."
@@ -239,12 +234,11 @@ CALLBACK is called with the error string, or nil, and the data."
             (substring accum (match-end 0)))
       (unless (string-empty-p line)
         (condition-case err
-            (orpheus-local--dispatch
-             local (json-parse-string line :object-type 'alist
-                                      :null-object nil
-                                      :false-object nil))
+          (orpheus-local--dispatch
+            local (json-parse-string line :object-type 'alist
+                                     :null-object nil
+                                     :false-object nil))
           (error (message "orpheus: mpv sent something unreadable: %S" err)))))))
-
 
 ;;; Reading mpv's properties
 
@@ -253,11 +247,11 @@ CALLBACK is called with the error string, or nil, and the data."
   (unless error
     (let ((status (orpheus-local-instance-status local)))
       (pcase field
-        ('elapsed (setf (orpheus-status-elapsed status) (or data 0.0)))
-        ('total (setf (orpheus-status-total status) (or data 0.0)))
-        ('pause (setf (orpheus-status-state status) (if data 'pause 'play)))
-        ('volume (setf (orpheus-status-volume status)
-                       (round (or data 0))))))))
+             ('elapsed (setf (orpheus-status-elapsed status) (or data 0.0)))
+             ('total (setf (orpheus-status-total status) (or data 0.0)))
+             ('pause (setf (orpheus-status-state status) (if data 'pause 'play)))
+             ('volume (setf (orpheus-status-volume status)
+                            (round (or data 0))))))))
 
 (defun orpheus-local--poll-field (local property field)
   "Ask LOCAL's mpv for PROPERTY and store it in FIELD."
@@ -271,18 +265,18 @@ CALLBACK is called with the error string, or nil, and the data."
     (let ((track (orpheus-local-instance-track local)))
       (when track
         (when-let* ((title (alist-get 'title metadata)))
-          (setf (orpheus-track-title track) title))
+                   (setf (orpheus-track-title track) title))
         (when-let* ((artist (alist-get 'artist metadata)))
-          (setf (orpheus-track-artist track) artist))
+                   (setf (orpheus-track-artist track) artist))
         (when-let* ((album (alist-get 'album metadata)))
-          (setf (orpheus-track-album track) album))
+                   (setf (orpheus-track-album track) album))
         (when-let* ((genre (alist-get 'genre metadata)))
-          (setf (orpheus-track-genre track) genre))
+                   (setf (orpheus-track-genre track) genre))
         (when-let* ((year (alist-get 'date metadata)))
-          (setf (orpheus-track-year track) year))
+                   (setf (orpheus-track-year track) year))
         (when-let* ((trackno (alist-get 'track metadata)))
-          (setf (orpheus-track-trackno track)
-                (string-to-number (if (listp trackno) (car trackno) trackno))))))))
+                   (setf (orpheus-track-trackno track)
+                         (string-to-number (if (listp trackno) (car trackno) trackno))))))))
 
 (defun orpheus-local--poll-metadata (local)
   "Refresh LOCAL's track tags and duration."
@@ -305,7 +299,6 @@ CALLBACK is called with the error string, or nil, and the data."
                            (setf (orpheus-status-state
                                   (orpheus-local-instance-status local))
                                  'stop)))))
-
 
 ;;; Starting mpv
 
@@ -334,14 +327,14 @@ CALLBACK is called with the error string, or nil, and the data."
     (when (eq system-type 'windows-nt) (ignore-errors (delete-file socket)))
     (setf (orpheus-local-instance-process local)
           (condition-case err
-              (make-process :name "orpheus-mpv" :command command
-                            :buffer nil :noquery t
-                            ;; mpv's own complaints stay readable here.
-                            :stderr (get-buffer-create "*orpheus mpv*")
-                            :sentinel #'orpheus-local--process-sentinel)
+            (make-process :name "orpheus-mpv" :command command
+              :buffer nil :noquery t
+              ;; mpv's own complaints stay readable here.
+              :stderr (get-buffer-create "*orpheus mpv*")
+              :sentinel #'orpheus-local--process-sentinel)
             (error (message "orpheus: cannot start mpv: %s"
                             (error-message-string err))
-                   nil)))
+              nil)))
     (setf (orpheus-local-instance-attempts local) 0)
     (orpheus-local--try-connect local)))
 
@@ -360,39 +353,39 @@ CALLBACK is called with the error string, or nil, and the data."
                              (process-live-p
                               (orpheus-local-instance-process local))))
                 (condition-case nil
-                    (make-network-process
-                     :name "orpheus-mpv-ipc"
-                     :family 'local
-                     :service socket
-                     :coding 'utf-8-unix
-                     :noquery t
-                     :filter (lambda (_process chunk)
-                               (orpheus-local--filter local chunk))
-                     :sentinel (lambda (_process event)
-                                 (orpheus-local--ipc-sentinel local event)))
+                  (make-network-process
+                    :name "orpheus-mpv-ipc"
+                    :family 'local
+                    :service socket
+                    :coding 'utf-8-unix
+                    :noquery t
+                    :filter (lambda (_process chunk)
+                              (orpheus-local--filter local chunk))
+                    :sentinel (lambda (_process event)
+                                (orpheus-local--ipc-sentinel local event)))
                   ;; The socket is not there yet: mpv is still starting.
                   (error nil)))))
     (if ipc
-        (progn
-          (setf (orpheus-local-instance-ipc local) ipc
-                (orpheus-local-instance-connecting local) nil
-                (orpheus-local-instance-attempts local) 0)
-          (let ((waiting (orpheus-local-instance-waiting local)))
-            (setf (orpheus-local-instance-waiting local) nil)
-            (dolist (callback waiting)
-              (ignore-errors (funcall callback local))))
-          (when (orpheus-local-instance-queue local)
-            (orpheus-local--poll local)))
+      (progn
+        (setf (orpheus-local-instance-ipc local) ipc
+              (orpheus-local-instance-connecting local) nil
+              (orpheus-local-instance-attempts local) 0)
+        (let ((waiting (orpheus-local-instance-waiting local)))
+          (setf (orpheus-local-instance-waiting local) nil)
+          (dolist (callback waiting)
+            (ignore-errors (funcall callback local))))
+        (when (orpheus-local-instance-queue local)
+          (orpheus-local--poll local)))
       (let ((attempts (1+ (orpheus-local-instance-attempts local))))
         (setf (orpheus-local-instance-attempts local) attempts)
         (if (> attempts 100)
-            (progn
-              (setf (orpheus-local-instance-connecting local) nil)
-              (message "orpheus: mpv never opened its IPC socket")
-              (let ((waiting (orpheus-local-instance-waiting local)))
-                (setf (orpheus-local-instance-waiting local) nil)
-                (dolist (callback waiting)
-                  (ignore-errors (funcall callback nil)))))
+          (progn
+            (setf (orpheus-local-instance-connecting local) nil)
+            (message "orpheus: mpv never opened its IPC socket")
+            (let ((waiting (orpheus-local-instance-waiting local)))
+              (setf (orpheus-local-instance-waiting local) nil)
+              (dolist (callback waiting)
+                (ignore-errors (funcall callback nil)))))
           (run-with-timer 0.05 nil #'orpheus-local--try-connect local))))))
 
 (defun orpheus-local--ipc-sentinel (local event)
@@ -404,14 +397,14 @@ CALLBACK is called with the error string, or nil, and the data."
 (defun orpheus-local--ensure (local callback)
   "Make sure LOCAL is running, then call CALLBACK with it, or nil."
   (cond
-   ((orpheus-local--ready-p local) (funcall callback local))
-   ((orpheus-local-instance-connecting local)
-    (setf (orpheus-local-instance-waiting local)
-          (append (orpheus-local-instance-waiting local) (list callback))))
-   (t
-    (setf (orpheus-local-instance-connecting local) t)
-    (setf (orpheus-local-instance-waiting local) (list callback))
-    (orpheus-local--spawn local))))
+    ((orpheus-local--ready-p local) (funcall callback local))
+    ((orpheus-local-instance-connecting local)
+     (setf (orpheus-local-instance-waiting local)
+           (append (orpheus-local-instance-waiting local) (list callback))))
+    (t
+      (setf (orpheus-local-instance-connecting local) t)
+      (setf (orpheus-local-instance-waiting local) (list callback))
+      (orpheus-local--spawn local))))
 
 (defun orpheus-local--kill (local)
   "Stop LOCAL's mpv and forget the queue's playback."
@@ -423,7 +416,6 @@ CALLBACK is called with the error string, or nil, and the data."
     (when (process-live-p ipc) (ignore-errors (delete-process ipc)))
     (when (process-live-p process) (ignore-errors (delete-process process)))))
 
-
 ;;; Album art
 
 (defun orpheus-local--extract-art (uri callback)
@@ -431,18 +423,18 @@ CALLBACK is called with the error string, or nil, and the data."
   (let ((ffmpeg (executable-find "ffmpeg"))
         (output (orpheus-cache-file uri "cover.jpg")))
     (cond
-     ((file-readable-p output) (funcall callback output))
-     ((null ffmpeg) (funcall callback nil))
-     (t
-      (make-process
-       :name "orpheus-cover"
-       :command (list ffmpeg "-v" "error" "-y" "-i" uri
-                      "-map" "0:v" "-frames:v" "1" "-f" "image2" output)
-       :buffer nil :noquery t
-       :sentinel (lambda (process _event)
-                   (when (memq (process-status process) '(exit signal))
-                     (funcall callback
-                              (and (file-readable-p output) output)))))))))
+      ((file-readable-p output) (funcall callback output))
+      ((null ffmpeg) (funcall callback nil))
+      (t
+        (make-process
+         :name "orpheus-cover"
+         :command (list ffmpeg "-v" "error" "-y" "-i" uri
+                        "-map" "0:v" "-frames:v" "1" "-f" "image2" output)
+         :buffer nil :noquery t
+         :sentinel (lambda (process _event)
+                     (when (memq (process-status process) '(exit signal))
+                       (funcall callback
+                                (and (file-readable-p output) output)))))))))
 
 (cl-defmethod orpheus-backend-album-art ((_local orpheus-local) track callback)
   "Find cover art for TRACK next to the file or inside it, then call CALLBACK."
@@ -453,11 +445,10 @@ CALLBACK is called with the error string, or nil, and the data."
                            orpheus-local-cover-names)))
          (found (cl-find-if #'file-readable-p covers)))
     (cond
-     (found (funcall callback found))
-     ((and uri (file-regular-p uri))
-      (orpheus-local--extract-art uri callback))
-     (t (funcall callback nil)))))
-
+      (found (funcall callback found))
+      ((and uri (file-regular-p uri))
+       (orpheus-local--extract-art uri callback))
+      (t (funcall callback nil)))))
 
 ;;; Browsing files
 
@@ -472,7 +463,7 @@ CALLBACK is called with the error string, or nil, and the data."
   (let* ((dir (file-name-as-directory (expand-file-name (or dir "~"))))
          (parent (file-name-directory (directory-file-name dir)))
          (entries (condition-case nil
-                      (directory-files dir t "\\`[^.]")
+                    (directory-files dir t "\\`[^.]")
                     (error nil))))
     (append
      (when (and parent (not (equal parent dir)) (file-directory-p parent))
@@ -483,23 +474,22 @@ CALLBACK is called with the error string, or nil, and the data."
            (mapcar
             (lambda (path)
               (cond
-               ((file-directory-p path)
-                (orpheus-item-create
-                 :label (concat (file-name-nondirectory
-                                 (directory-file-name path))
-                                "/")
-                 :kind 'directory
-                 :data (list (cons 'browse (cons 'directories (list path)))
-                             (cons 'uri path))))
-               ((orpheus-local--media-file-p path)
-                (orpheus-item-create
-                 :label (file-name-nondirectory path)
-                 :detail (file-size-human-readable
-                          (or (file-attribute-size (file-attributes path)) 0))
-                 :kind 'track
-                 :data (list (cons 'uri path))))))
+                ((file-directory-p path)
+                 (orpheus-item-create
+                  :label (concat (file-name-nondirectory
+                                  (directory-file-name path))
+                                 "/")
+                  :kind 'directory
+                  :data (list (cons 'browse (cons 'directories (list path)))
+                              (cons 'uri path))))
+                ((orpheus-local--media-file-p path)
+                 (orpheus-item-create
+                  :label (file-name-nondirectory path)
+                  :detail (file-size-human-readable
+                           (or (file-attribute-size (file-attributes path)) 0))
+                  :kind 'track
+                  :data (list (cons 'uri path))))))
             entries)))))
-
 
 ;;; Backend methods
 
@@ -534,7 +524,7 @@ CALLBACK is called with the error string, or nil, and the data."
 
 (cl-defmethod orpheus-backend-add ((local orpheus-local) uris)
   "Append URIS to LOCAL's queue and start playing when idle."
-  (let ((uris (if (listp uris) uris (list uris))))
+  (let* ((uris (if (listp uris) uris (list uris))))
     (setf (orpheus-local-instance-queue local)
           (append (orpheus-local-instance-queue local) uris))
     (orpheus-local--ensure
@@ -554,7 +544,7 @@ CALLBACK is called with the error string, or nil, and the data."
          (index (or (cl-position uri queue :test #'equal)
                     (progn (setf (orpheus-local-instance-queue local)
                                  (append queue (list uri)))
-                           (length queue)))))
+                      (length queue)))))
     (orpheus-local--ensure
      local
      (lambda (running)
@@ -565,63 +555,63 @@ CALLBACK is called with the error string, or nil, and the data."
   (let ((send (lambda (command &optional args)
                 (orpheus-local--send local (append (list command) args)))))
     (pcase action
-      ('play
-       (if (orpheus-local-instance-track local)
-           (funcall send "set_property" (list "pause" :false))
-         (orpheus-local--play-index local (orpheus-local-instance-index local))))
-      ('playpos (orpheus-local--play-index local (or value 0)))
-      ('pause (funcall send "set_property" (list "pause" :true)))
-      ('resume (funcall send "set_property" (list "pause" :false)))
-      ('toggle
-       (setf (orpheus-status-state (orpheus-local-instance-status local))
-             (if (eq (orpheus-status-state
-                      (orpheus-local-instance-status local))
-                     'pause)
-                 'play 'pause))
-       (funcall send "cycle" '("pause")))
-      ('stop
-       (funcall send "stop")
-       (setf (orpheus-status-state (orpheus-local-instance-status local))
-             'stop))
-      ('next
-       (let ((next (orpheus-local--advance
-                    (length (orpheus-local-instance-queue local))
-                    (orpheus-local-instance-index local) t nil)))
-         (if next (orpheus-local--play-index local next)
-           (message "orpheus: no next track"))))
-      ('previous
-       (let ((index (1- (orpheus-local-instance-index local))))
-         (orpheus-local--play-index local (if (< index 0) 0 index))))
-      ('seek (funcall send "seek" (list (or value 0))))
-      ('volume
-       (setf (orpheus-local-instance-volume local)
-             (max 0 (min 100 (round value))))
-       (funcall send "set_property"
-                (list "volume" (orpheus-local-instance-volume local))))
-      ('repeat (setf (orpheus-local-instance-repeat local) (and value t)))
-      ('random (setf (orpheus-local-instance-random local) (and value t)))
-      ('delete
-       (let* ((queue (orpheus-local-instance-queue local))
-              (pos (or value 0))
-              (rest (append (cl-subseq queue 0 (min pos (length queue)))
-                            (nthcdr (1+ pos) queue))))
-         (setf (orpheus-local-instance-queue local) rest)
-         (when (and (>= (orpheus-local-instance-index local) (length rest))
-                    rest)
-           (setf (orpheus-local-instance-index local) 0))))
-      ('clear
-       (setf (orpheus-local-instance-queue local) nil
-             (orpheus-local-instance-index local) 0
-             (orpheus-local-instance-track local) nil)
-       (funcall send "stop"))
-      ('shuffle
-       (setf (orpheus-local-instance-queue local)
-             (orpheus-local--shuffle (orpheus-local-instance-queue local))))
-      ((or 'single 'consume)
-       (message "orpheus: mpv does not do %s; MPD does" action))
-      ((or 'update 'rescan 'save 'playid 'load)
-       (message "orpheus: mpv has no library to %s" action))
-      (_ (message "orpheus: mpv cannot %s" action)))))
+           ('play
+            (if (orpheus-local-instance-track local)
+              (funcall send "set_property" (list "pause" :false))
+              (orpheus-local--play-index local (orpheus-local-instance-index local))))
+           ('playpos (orpheus-local--play-index local (or value 0)))
+           ('pause (funcall send "set_property" (list "pause" :true)))
+           ('resume (funcall send "set_property" (list "pause" :false)))
+           ('toggle
+            (setf (orpheus-status-state (orpheus-local-instance-status local))
+                  (if (eq (orpheus-status-state
+                           (orpheus-local-instance-status local))
+                          'pause)
+                    'play 'pause))
+            (funcall send "cycle" '("pause")))
+           ('stop
+            (funcall send "stop")
+            (setf (orpheus-status-state (orpheus-local-instance-status local))
+                  'stop))
+           ('next
+            (let ((next (orpheus-local--advance
+                         (length (orpheus-local-instance-queue local))
+                         (orpheus-local-instance-index local) t nil)))
+              (if next (orpheus-local--play-index local next)
+                (message "orpheus: no next track"))))
+           ('previous
+            (let ((index (1- (orpheus-local-instance-index local))))
+              (orpheus-local--play-index local (if (< index 0) 0 index))))
+           ('seek (funcall send "seek" (list (or value 0))))
+           ('volume
+            (setf (orpheus-local-instance-volume local)
+                  (max 0 (min 100 (round value))))
+            (funcall send "set_property"
+                     (list "volume" (orpheus-local-instance-volume local))))
+           ('repeat (setf (orpheus-local-instance-repeat local) (and value t)))
+           ('random (setf (orpheus-local-instance-random local) (and value t)))
+           ('delete
+            (let* ((queue (orpheus-local-instance-queue local))
+                   (pos (or value 0))
+                   (rest (append (cl-subseq queue 0 (min pos (length queue)))
+                                 (nthcdr (1+ pos) queue))))
+              (setf (orpheus-local-instance-queue local) rest)
+              (when (and (>= (orpheus-local-instance-index local) (length rest))
+                         rest)
+                (setf (orpheus-local-instance-index local) 0))))
+           ('clear
+            (setf (orpheus-local-instance-queue local) nil
+                  (orpheus-local-instance-index local) 0
+                  (orpheus-local-instance-track local) nil)
+            (funcall send "stop"))
+           ('shuffle
+            (setf (orpheus-local-instance-queue local)
+                  (orpheus-local--shuffle (orpheus-local-instance-queue local))))
+           ((or 'single 'consume)
+            (message "orpheus: mpv does not do %s; MPD does" action))
+           ((or 'update 'rescan 'save 'playid 'load)
+            (message "orpheus: mpv has no library to %s" action))
+           (_ (message "orpheus: mpv cannot %s" action)))))
 
 (defun orpheus-local--shuffle (list)
   "Return LIST in random order."
@@ -633,12 +623,12 @@ CALLBACK is called with the error string, or nil, and the data."
 (cl-defmethod orpheus-backend-browse ((local orpheus-local) kind arg callback)
   "Browse KIND on LOCAL, with ARG as the path down the hierarchy."
   (pcase kind
-    ('queue (funcall callback (orpheus-local--queue-items local)))
-    ('directories
-     (funcall callback
-              (orpheus-local--directory-items (or (car arg)
-                                                 orpheus-local-directory))))
-    (_ (funcall callback nil))))
+         ('queue (funcall callback (orpheus-local--queue-items local)))
+         ('directories
+          (funcall callback
+                   (orpheus-local--directory-items (or (car arg)
+                                                       orpheus-local-directory))))
+         (_ (funcall callback nil))))
 
 (cl-defmethod orpheus-backend-capabilities ((_local orpheus-local))
   "Return what mpv can browse.

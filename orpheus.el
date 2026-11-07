@@ -14,35 +14,35 @@
 
 ;;; Commentary:
 
-;; orpheus plays music without leaving Emacs.  It is, at heart, an MPD client
-;; in the shape of rmpc: the same queue, the same tabs for directories,
-;; artists, album artists, albums, playlists and search, the same transport
-;; keys, cover art and a spectrum visualizer.  Unlike rmpc it does not assume
-;; MPD is the player: a backend is a small object that implements a handful
-;; of generics, and two of them ship here.
-;;
-;; - `mpd' talks to a Music Player Daemon over TCP or a unix socket.  The
-;;   daemon owns the audio output, so PipeWire, PulseAudio, ALSA and CoreAudio
-;;   all work without this package knowing about them.
-;; - `local' plays files and URLs with mpv over its JSON IPC socket.  mpv uses
-;;   PipeWire on Linux, CoreAudio on macOS and WASAPI on Windows, and hands
-;;   YouTube links to yt-dlp.
-;;
-;; Everything is asynchronous: replies arrive in process filters, and the
-;; status is read on a timer, so a slow server or a starting player never
-;; blocks the editor.  The interface is text, so it works in a terminal and
-;; over SSH; in a graphical frame it adds cover art and an SVG visualizer and
-;; loses nothing when those are unavailable.
-;;
-;; Start with:
-;;
-;;   (require 'orpheus)
-;;   (setq orpheus-backend 'mpd)     ; or 'local
-;;   (setq orpheus-mpd-host "localhost")
-;;   (orpheus)
-;;
-;; Bind `orpheus' to a key, and `orpheus-mode-line-mode' if you want the
-;; current track in the mode line.
+;;; orpheus plays music without leaving Emacs.  It is, at heart, an MPD client
+;;; in the shape of rmpc: the same queue, the same tabs for directories,
+;;; artists, album artists, albums, playlists and search, the same transport
+;;; keys, cover art and a spectrum visualizer.  Unlike rmpc it does not assume
+;;; MPD is the player: a backend is a small object that implements a handful
+;;; of generics, and two of them ship here.
+;;;
+;;; - `mpd' talks to a Music Player Daemon over TCP or a unix socket.  The
+;;; daemon owns the audio output, so PipeWire, PulseAudio, ALSA and CoreAudio
+;;; all work without this package knowing about them.
+;;; - `local' plays files and URLs with mpv over its JSON IPC socket.  mpv uses
+;;; PipeWire on Linux, CoreAudio on macOS and WASAPI on Windows, and hands
+;;; YouTube links to yt-dlp.
+;;;
+;;; Everything is asynchronous: replies arrive in process filters, and the
+;;; status is read on a timer, so a slow server or a starting player never
+;;; blocks the editor.  The interface is text, so it works in a terminal and
+;;; over SSH; in a graphical frame it adds cover art and an SVG visualizer and
+;;; loses nothing when those are unavailable.
+;;;
+;;; Start with:
+;;;
+;;; (require 'orpheus)
+;;; (setq orpheus-backend 'mpd)     ; or 'local
+;;; (setq orpheus-mpd-host "localhost")
+;;; (orpheus)
+;;;
+;;; Bind `orpheus' to a key, and `orpheus-mode-line-mode' if you want the
+;;; current track in the mode line.
 
 ;;; Code:
 
@@ -56,7 +56,6 @@
 
 (declare-function notifications-notify "notifications" (&rest args))
 (declare-function dired-file-name-at-point "dired" ())
-
 
 ;;; Settings
 
@@ -99,7 +98,6 @@ Register another with `orpheus-register-backend'."
 (defvar orpheus--retry-at 0
   "Time before which no new connection is attempted.")
 
-
 ;;; The session
 
 (defun orpheus--ensure-backend ()
@@ -110,16 +108,16 @@ Register another with `orpheus-register-backend'."
     (when orpheus-backend-current
       (ignore-errors (orpheus-backend-disconnect orpheus-backend-current)))
     (setq orpheus-backend-current (orpheus-make-backend orpheus-backend)
-          orpheus--songid nil
-          orpheus-status-current nil
-          orpheus-track-current nil)))
+      orpheus--songid nil
+      orpheus-status-current nil
+      orpheus-track-current nil)))
 
 (defun orpheus-start ()
   "Start reading the player's status on a timer."
   (interactive)
   (unless (timerp orpheus--timer)
     (setq orpheus--timer
-          (run-with-timer 0 orpheus-refresh-interval #'orpheus--tick))))
+      (run-with-timer 0 orpheus-refresh-interval #'orpheus--tick))))
 
 (defun orpheus-quit ()
   "Stop reading the status and close the player."
@@ -139,15 +137,15 @@ Register another with `orpheus-register-backend'."
    orpheus-backend-current
    (lambda (backend)
      (if backend
-         (progn (orpheus--tick)
-                (when callback (funcall callback backend)))
+       (progn (orpheus--tick)
+         (when callback (funcall callback backend)))
        (message "orpheus: cannot connect to %s" orpheus-backend)))))
 
 (defun orpheus--offline ()
   "Slow down while the backend is not answering."
   (setq orpheus--failures (1+ orpheus--failures))
   (setq orpheus--retry-at
-        (+ (float-time) (min 30 (expt 2 (min orpheus--failures 5)))))
+    (+ (float-time) (min 30 (expt 2 (min orpheus--failures 5)))))
   (when (= orpheus--failures 1)
     (message "orpheus: %s is not answering; retrying in the background"
              orpheus-backend))
@@ -161,10 +159,10 @@ Register another with `orpheus-register-backend'."
        backend
        (lambda (status)
          (if (null status)
-             (orpheus--offline)
+           (orpheus--offline)
            (setq orpheus--failures 0
-                 orpheus--retry-at 0
-                 orpheus-status-current status)
+             orpheus--retry-at 0
+             orpheus-status-current status)
            (orpheus--maybe-song-changed status)
            (force-mode-line-update t)
            (orpheus-ui-refresh)))))))
@@ -179,7 +177,7 @@ Register another with `orpheus-register-backend'."
        (lambda (track)
          (unless (equal songid orpheus--songid)
            (setq orpheus--songid songid
-                 orpheus-track-current track)
+             orpheus-track-current track)
            (orpheus--song-changed track)))))))
 
 (defun orpheus--song-changed (track)
@@ -201,17 +199,16 @@ Register another with `orpheus-register-backend'."
                              :timeout 4000)
                        (when art (list :app-icon art))))))))
 
-
 ;;; Transport
 
 (defun orpheus--command (action &optional value)
   "Send ACTION, with VALUE, to the backend in use."
   (let ((backend orpheus-backend-current))
     (cond
-     ((null backend) (message "orpheus: no backend yet; run M-x orpheus"))
-     ((not (orpheus-backend-connected-p backend))
-      (message "orpheus: %s is not connected" orpheus-backend))
-     (t (orpheus-backend-command backend action value)
+      ((null backend) (message "orpheus: no backend yet; run M-x orpheus"))
+      ((not (orpheus-backend-connected-p backend))
+       (message "orpheus: %s is not connected" orpheus-backend))
+      (t (orpheus-backend-command backend action value)
         (orpheus--tick)))))
 
 (defun orpheus--volume ()
@@ -276,10 +273,10 @@ Register another with `orpheus-register-backend'."
   "Flip the status FIELD on the backend."
   (orpheus--command
    (pcase field
-     ('repeat 'repeat)
-     ('random 'random)
-     ('single 'single)
-     ('consume 'consume))
+          ('repeat 'repeat)
+          ('random 'random)
+          ('single 'single)
+          ('consume 'consume))
    (not (and orpheus-status-current
              (funcall (intern (format "orpheus-status-%s" field))
                       orpheus-status-current)))))
@@ -320,7 +317,6 @@ Register another with `orpheus-register-backend'."
   (orpheus--tick)
   (orpheus-ui-refresh))
 
-
 ;;; Playing files and URLs
 
 (defun orpheus--playable-path ()
@@ -337,11 +333,11 @@ This needs a backend that plays paths, which is `local'."
   (interactive (list (orpheus--playable-path)))
   (orpheus--ensure-backend)
   (if (memq 'paths (orpheus-backend-capabilities orpheus-backend-current))
-      (progn
-        (orpheus-backend-play-uri orpheus-backend-current file)
-        (setq orpheus--retry-at 0)
-        (orpheus-start)
-        (message "orpheus: %s" (file-name-nondirectory file)))
+    (progn
+      (orpheus-backend-play-uri orpheus-backend-current file)
+      (setq orpheus--retry-at 0)
+      (orpheus-start)
+      (message "orpheus: %s" (file-name-nondirectory file)))
     (user-error "orpheus: %s plays its own library, not paths; play %s from the files tab or use the local backend"
                 orpheus-backend (file-name-nondirectory file))))
 
@@ -350,29 +346,28 @@ This needs a backend that plays paths, which is `local'."
   (interactive (list (orpheus--playable-path)))
   (orpheus--ensure-backend)
   (if (memq 'paths (orpheus-backend-capabilities orpheus-backend-current))
-      (progn
-        (orpheus-backend-add orpheus-backend-current file)
-        (orpheus-start)
-        (message "orpheus: queued %s" (file-name-nondirectory file)))
+    (progn
+      (orpheus-backend-add orpheus-backend-current file)
+      (orpheus-start)
+      (message "orpheus: queued %s" (file-name-nondirectory file)))
     (user-error "orpheus: %s plays its own library, not paths"
                 orpheus-backend)))
 
 (defun orpheus-play-url (url)
   "Play URL, which mpv hands to yt-dlp when it is a video page."
   (interactive
-   (list (read-string "Play URL: "
-                      (if (and (car kill-ring)
-                               (string-match-p "\\`https?://" (car kill-ring)))
-                          (car kill-ring)
-                        ""))))
+    (list (read-string "Play URL: "
+                       (if (and (car kill-ring)
+                                (string-match-p "\\`https?://" (car kill-ring)))
+                         (car kill-ring)
+                         ""))))
   (orpheus--ensure-backend)
   (if (memq 'paths (orpheus-backend-capabilities orpheus-backend-current))
-      (progn
-        (orpheus-backend-play-uri orpheus-backend-current url)
-        (orpheus-start)
-        (message "orpheus: %s" url))
+    (progn
+      (orpheus-backend-play-uri orpheus-backend-current url)
+      (orpheus-start)
+      (message "orpheus: %s" url))
     (user-error "orpheus: %s cannot play URLs" orpheus-backend)))
-
 
 ;;; The mode line
 
@@ -394,14 +389,13 @@ This needs a backend that plays paths, which is `local'."
   :global t
   :group 'orpheus
   (if orpheus-mode-line-mode
-      (add-to-list 'global-mode-string '(:eval (orpheus-mode-line-string)) t)
+    (add-to-list 'global-mode-string '(:eval (orpheus-mode-line-string)) t)
     (setq global-mode-string
-          (delete '(:eval (orpheus-mode-line-string)) global-mode-string))))
-
+      (delete '(:eval (orpheus-mode-line-string)) global-mode-string))))
 
 ;;; Entry point
 
-;;;###autoload
+;;; ###autoload
 (defun orpheus ()
   "Open the orpheus player."
   (interactive)

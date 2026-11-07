@@ -1,22 +1,22 @@
 ;;; orpheus-vis.el --- A spectrum visualizer for orpheus -*- lexical-binding: t -*-
 
-;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
+;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-;; SPDX-License-Identifier: MIT
+;;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
 
-;; cava listens to what the machine is playing and prints one frame of bar
-;; heights per line; this file runs it, reads those frames as they arrive and
-;; draws them.  In a terminal the bars are block characters, which every font
-;; has; in a graphical frame they are an SVG bar graph with a little rounding
-;; and a colour ramp, which is the fanciest thing here and costs nothing when
-;; it is not available.
-;;
-;; Where cava listens is the platform's business: PipeWire on Linux (which is
-;; what makes it work with any player, MPD and mpv alike), PortAudio on macOS
-;; (where a loopback device such as BlackHole is needed to hear the system
-;; output), WASAPI on Windows.
+;;; cava listens to what the machine is playing and prints one frame of bar
+;;; heights per line; this file runs it, reads those frames as they arrive and
+;;; draws them.  In a terminal the bars are block characters, which every font
+;;; has; in a graphical frame they are an SVG bar graph with a little rounding
+;;; and a colour ramp, which is the fanciest thing here and costs nothing when
+;;; it is not available.
+;;;
+;;; Where cava listens is the platform's business: PipeWire on Linux (which is
+;;; what makes it work with any player, MPD and mpv alike), PortAudio on macOS
+;;; (where a loopback device such as BlackHole is needed to hear the system
+;;; output), WASAPI on Windows.
 
 ;;; Code:
 
@@ -27,7 +27,6 @@
 (declare-function svg-image "svg" (svg &rest args))
 (declare-function svg-rectangle "svg" (svg x y width height &rest args))
 (declare-function svg-create "svg" (width height &rest args))
-
 
 ;;; Settings
 
@@ -83,17 +82,16 @@ The value is a cava input method: `pipewire', `pulse', `alsa',
 (defvar orpheus-vis--accum ""
   "What is left of a frame that has not arrived whole.")
 
-
 ;;; Platform and configuration
 
 (defun orpheus-vis--input ()
   "Return the cava input method to use."
   (or orpheus-vis-input
       (pcase system-type
-        ('gnu/linux 'pipewire)
-        ('darwin 'portaudio)
-        ('windows-nt 'wasapi)
-        (_ 'pulse))))
+             ('gnu/linux 'pipewire)
+             ('darwin 'portaudio)
+             ('windows-nt 'wasapi)
+             (_ 'pulse))))
 
 (defun orpheus-vis--config-string (input bars framerate)
   "Return a cava configuration reading INPUT into BARS at FRAMERATE."
@@ -115,7 +113,6 @@ channels = mono
 "
           bars framerate input))
 
-
 ;;; Reading frames
 
 (defun orpheus-vis--levels (accum chunk)
@@ -124,7 +121,7 @@ The car is the list of bar heights, or nil while no frame is complete."
   (let* ((text (concat accum chunk))
          (newline (string-match "\n" text)))
     (if (null newline)
-        (cons nil text)
+      (cons nil text)
       ;; The match data must be read before anything else parses a string.
       (let ((frame (substring text 0 newline))
             (rest (substring text (match-end 0))))
@@ -143,7 +140,7 @@ The car is the list of bar heights, or nil while no frame is complete."
 (defun orpheus-vis--text (levels width height)
   "Return LEVELS as a block-character graph WIDTH by HEIGHT."
   (let* ((levels (if (and levels (> (length levels) 0))
-                     levels (make-list (max 1 width) 0)))
+                   levels (make-list (max 1 width) 0)))
          (bars (mapcar (lambda (level) (orpheus-vis--text-bar level height))
                        (seq-take levels (max 1 width))))
          (rows nil))
@@ -182,7 +179,6 @@ The car is the list of bar heights, or nil while no frame is complete."
   (require 'svg)
   (svg-image (orpheus-vis--svg levels width height) :ascent 'center))
 
-
 ;;; Running cava
 
 (defun orpheus-vis--filter (_process chunk)
@@ -204,33 +200,33 @@ The car is the list of bar heights, or nil while no frame is complete."
   (interactive)
   (unless (process-live-p orpheus-vis--process)
     (orpheus-vis-stop)
-    (let* ((program (or (executable-find orpheus-vis-program)
-                        orpheus-vis-program))
-           (config (orpheus-cache-file "cava-config" "config")))
+    (let ((program (or (executable-find orpheus-vis-program)
+                       orpheus-vis-program))
+          (config (orpheus-cache-file "cava-config" "config")))
       (with-temp-file config
         (insert (orpheus-vis--config-string
                  (orpheus-vis--input) orpheus-vis-bars
                  orpheus-vis-framerate)))
       (setq orpheus-vis--accum ""
-            orpheus-vis--data nil
-            orpheus-vis--process
-            (condition-case err
-                (make-process :name "orpheus-cava"
-                              :command (list program "-p" config)
-                              :coding 'binary
-                              :buffer nil
-                              :noquery t
-                              ;; cava explains a missing device here.
-                              :stderr (get-buffer-create "*orpheus cava*")
-                              :filter #'orpheus-vis--filter
-                              :sentinel #'orpheus-vis--sentinel)
-              (error (message "orpheus: cannot start cava: %s"
-                              (error-message-string err))
-                     nil)))
+        orpheus-vis--data nil
+        orpheus-vis--process
+        (condition-case err
+          (make-process :name "orpheus-cava"
+            :command (list program "-p" config)
+            :coding 'binary
+            :buffer nil
+            :noquery t
+            ;; cava explains a missing device here.
+            :stderr (get-buffer-create "*orpheus cava*")
+            :filter #'orpheus-vis--filter
+            :sentinel #'orpheus-vis--sentinel)
+          (error (message "orpheus: cannot start cava: %s"
+                          (error-message-string err))
+            nil)))
       (when orpheus-vis--process
         (setq orpheus-vis--timer
-              (run-with-timer 0 (/ 1.0 (max 1 orpheus-vis-framerate))
-                              #'orpheus-vis--render))))))
+          (run-with-timer 0 (/ 1.0 (max 1 orpheus-vis-framerate))
+                          #'orpheus-vis--render))))))
 
 (defun orpheus-vis-stop ()
   "Stop cava and its redrawing."
@@ -242,7 +238,6 @@ The car is the list of bar heights, or nil while no frame is complete."
     (setq orpheus-vis--process nil)
     (when (process-live-p process)
       (ignore-errors (delete-process process)))))
-
 
 ;;; Drawing
 
@@ -257,13 +252,13 @@ The car is the list of bar heights, or nil while no frame is complete."
                (height (max 4 (if window (- (window-body-height window) 2) 12)))
                (levels (if (and orpheus-vis--data
                                 (> (length orpheus-vis--data) 0))
-                           orpheus-vis--data
+                         orpheus-vis--data
                          (make-list orpheus-vis-bars 0))))
           (erase-buffer)
           (if (and orpheus-vis-graphical (display-graphic-p))
-              (insert-image (orpheus-vis--svg-image (seq-take levels width)
-                                                   (* 8 width) (* 8 height))
-                            " ")
+            (insert-image (orpheus-vis--svg-image (seq-take levels width)
+                                                  (* 8 width) (* 8 height))
+                          " ")
             (insert (orpheus-vis--text levels width height)))
           (insert "\n")
           (insert (propertize
