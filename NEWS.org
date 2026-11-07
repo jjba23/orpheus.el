@@ -11,8 +11,18 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 * Unreleased
 
-** Fixed
+* 0.2.1 (2026-11-07)
 
+The 0.2.0 tag went up without a section of its own, so this one also carries
+the changes since 0.1.0 that it already had.
+
+*** Fixed
+
+- `a' and `A' do nothing on the Queue tab.  Queuing a queue row appended the
+  whole queue to itself, so one keystroke doubled it and a few of them filled
+  the queue with copies of itself.  Every other tab still queues.
+- `orpheus-version' said 0.1.0 while the file header had moved on, so the
+  suite's consistency check failed on every run.
 - An MPD that is not there is reported as a sentence that says where it looked
   and what went wrong — "cannot reach MPD at localhost:6600: Connection
   refused.  Is mpd running?" — instead of the raw `make-network-process' error.
@@ -26,12 +36,23 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   own refusal is shown once, and the retry message says the daemon is there but
   refusing, which is the case a status read alone could not tell apart.
 
-** Changed
+*** Changed
 
 - The README says where the MPD password belongs: `~/.authinfo.gpg', read by
   `auth-source' through GPG, with `MPD_PASSWORD' kept for a single session.
   The recipe prompts for the secret instead of piping from `pass', which wrote
   a passwordless entry whenever `pass' was not installed.
+- The README names the host and port the entry is looked up under, which are
+  `orpheus-mpd-host' and `orpheus-mpd-port' even when the connection goes
+  through a socket, and gives the GPG recipe in those two values instead of
+  hardcoded ones.  It also says what a `pass' store needs: `auth-source-pass'
+  switched on.
+- The README says why the Queue tab can be full on the first start: MPD keeps
+  the queue in its `state_file' and restores it, and orpheus adds nothing.
+
+*** Version
+
+- 0.2.1, the release after 0.1.0.
 
 * 0.1.0 (2026-11-07)
 
