@@ -196,34 +196,69 @@ For MPD over the network, leave the socket nil and set the host and port:
 #+end_src
 
 The password goes nowhere near this repository, and it does not need to go in
-your init either: `orpheus-mpd-password' nil means "read `MPD_PASSWORD'", and
-after that "ask `auth-source'".  `auth-source' reads `~/.authinfo.gpg', so GPG
-holds the secret and gpg-agent asks for its passphrase once per session:
+your init either.  `orpheus-mpd-password' nil means "read `MPD_PASSWORD'",
+then "ask `auth-source'", and `auth-source' reads `~/.authinfo.gpg' by
+default, so GPG can hold the secret and gpg-agent asks for its passphrase once
+per session.
+
+The entry is found by `machine` and `port`, and those two words are
+`orpheus-mpd-host' and `orpheus-mpd-port` — `localhost` and `6600` unless you
+changed them.  That holds for a socket connection too: the socket says where to
+connect, the host and port say which entry belongs to it.  So a daemon on
+another machine needs
+
+#+begin_src emacs-lisp
+(setq orpheus-mpd-host "music.example.org")
+(setq orpheus-mpd-port 6600)
+#+end_src
+
+and an entry that spells the same host and port:
 
 #+begin_src shell
-read -r -s -p 'MPD password: ' secret && echo
+machine music.example.org port 6600 password ...
+#+end_src
+
+Written from the values your init sets, with the secret read without echo:
+
+#+begin_src shell
+host=music.example.org port=6600      # what orpheus-mpd-host and -port say
+read -r -s -p "MPD password for $host:$port: " secret && echo
 umask 077
-printf 'machine localhost port 6600 password %s\n' "$secret" |
-  gpg --quiet --encrypt --recipient you@example.org > ~/.authinfo.gpg
+printf 'machine %s port %s password %s\n' "$host" "$port" "$secret" |
+  gpg --batch --yes --quiet --encrypt --default-recipient-self \
+    > ~/.authinfo.gpg
 unset secret
 #+end_src
 
-A secret manager that already has it pipes it in instead, `pass show
-music/mpd` for one.  Either way, read the line back: an entry that stops at
-`password` counts as having no password at all, and MPD then refuses every
-command it is given.
+`--default-recipient-self' seals it for your own key; `--recipient
+you@example.org' seals it for another one.  `--batch --yes' lets the same
+recipe run a second time without stopping at a prompt.
+
+Read it back, and read the line rather than the exit status: an entry that
+stops at `password', or one written for a host the daemon no longer has, is not
+a password, and MPD then refuses every command it is given.
 
 #+begin_src shell
 gpg --quiet --decrypt ~/.authinfo.gpg
 #+end_src
 
-The entry is looked up under `orpheus-mpd-host' and `orpheus-mpd-port', so a
-daemon elsewhere is `machine music.example.org port 6600`.  A `pass' store
-works the same way, its secret asked for only when a connection needs it, and
-the password leaves the connection once MPD has it.
+A password that is found is sent, so keep the store to the daemons it
+describes.  A daemon with no password answers `ACK ... incorrect password' to
+one it never asked for, and the session then fails to log in instead of
+starting without it.
+
+A `pass' store works instead, once Emacs is told about it.  Its secret is asked
+for only when a connection needs it, and the password leaves the connection
+once MPD has it.
+
+#+begin_src emacs-lisp
+(require 'auth-source-pass)
+(auth-source-pass-enable)
+#+end_src
 
 For a session rather than an installation the environment is enough, though
-every process of your user can read it:
+every process of your user can read it.  `MPD_PASSWORD' wins over
+`auth-source', so it overrides the store:
 
 #+begin_src shell
 export MPD_PASSWORD='...'
@@ -243,6 +278,21 @@ or, from anywhere:
 (orpheus-play-file "~/Music/album/01.flac")
 (orpheus-play-url "https://www.youtube.com/watch?v=...")
 #+end_src
+
+** Why MPD's queue is already full at the start
+:PROPERTIES:
+:CUSTOM_ID: why-mpds-queue-is-already-full
+:END:
+
+The queue is the daemon's, not the player's: orpheus sends `add', `delete' and
+`clear' and reads `playlistinfo' back, so the Queue tab shows what MPD holds.
+MPD writes that queue into its `state_file' when it stops and reads it back
+when it starts, which is why the first Queue tab of the day can be full while
+nothing was added to it.  orpheus adds nothing on start.
+
+`D' empties the queue, and an `mpd.conf' without a `state_file' makes the
+daemon forget it at shutdown.  The local backend is the other way round: Emacs
+keeps that queue, so it starts empty in every session.
 
 * Keys
 :PROPERTIES:

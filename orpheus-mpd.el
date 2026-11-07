@@ -50,7 +50,9 @@ a remote server is reached over TCP."
   "Password for MPD, or nil to take it from the environment.
 When nil, `MPD_PASSWORD' is read, then `auth-source' is asked, and
 `auth-source' reads an encrypted ~/.authinfo.gpg, so the secret lives in GPG and
-nothing enters this file or your init."
+nothing enters this file or your init.  The entry is found under
+`orpheus-mpd-host' and `orpheus-mpd-port', also when `orpheus-mpd-socket' is
+what the connection uses, and whatever is found is sent."
   :type '(choice (const :tag "Ask the environment" nil) string)
   :group 'orpheus)
 
