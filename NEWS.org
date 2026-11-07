@@ -9,7 +9,9 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
-* Unreleased
+* 0.1.0 (2026-11-07)
+
+The first release.
 
 *** Added
 
@@ -50,3 +52,7 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   gapless; MPD's queue is gapless because the daemon owns it.
 - The Windows named-pipe path in the local backend is written and compiled but
   has not been run.
+
+*** Version
+
+- 0.1.0, the first published version.
