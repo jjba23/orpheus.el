@@ -491,14 +491,32 @@ words before them are a reason, so the rest is dropped."
   (mapcar (lambda (song) (orpheus-mpd--item-from-song song queue-p))
           (orpheus-mpd--songs lines)))
 
+(defvar orpheus-mpd--last-refusal nil
+  "The last refusal MPD gave, so the timer does not repeat it every second.")
+
+(defun orpheus-mpd--ack-text (error)
+  "Return ERROR, an MPD `ACK' message, without the position MPD prefixes to it."
+  (if (string-match "\\`\\[[^]]*\\] *{[^}]*} *\\(.*\\)\\'" error)
+      (match-string 1 error)
+    error))
+
 (defun orpheus-mpd--status-request (mpd callback)
   "Ask MPD for a status, then call CALLBACK with an `orpheus-status'."
   (orpheus-mpd--send-command
    mpd "status" nil
    (lambda (reply)
-     (funcall callback
-              (when (plist-get reply :ok)
-                (orpheus-mpd--status-from-lines (plist-get reply :lines)))))))
+     (if (plist-get reply :ok)
+       (progn
+         (setq orpheus-mpd--last-refusal nil)
+         (funcall callback
+                  (orpheus-mpd--status-from-lines (plist-get reply :lines))))
+       ;; MPD answered and said no, which is not the same as a daemon that
+       ;; never answered: its own words say what to fix.
+       (let ((refusal (orpheus-mpd--ack-text (plist-get reply :error))))
+         (unless (equal refusal orpheus-mpd--last-refusal)
+           (setq orpheus-mpd--last-refusal refusal)
+           (message "orpheus: MPD refused the status request: %s" refusal)))
+       (funcall callback nil)))))
 
 (defun orpheus-mpd--track-request (mpd callback)
   "Ask MPD for the current song, then call CALLBACK with a track or nil."

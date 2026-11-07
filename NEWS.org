@@ -21,11 +21,17 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   `*Messages*' on every attempt.
 - The MPD password leaves the connection as soon as it has been sent, so a
   printed connection or a backtrace cannot repeat it.
+- An MPD that answers and refuses — a wrong password, or none where one is
+  required — is no longer reported as a daemon that is not answering.  MPD's
+  own refusal is shown once, and the retry message says the daemon is there but
+  refusing, which is the case a status read alone could not tell apart.
 
 ** Changed
 
 - The README says where the MPD password belongs: `~/.authinfo.gpg', read by
   `auth-source' through GPG, with `MPD_PASSWORD' kept for a single session.
+  The recipe prompts for the secret instead of piping from `pass', which wrote
+  a passwordless entry whenever `pass' was not installed.
 
 * 0.1.0 (2026-11-07)
 

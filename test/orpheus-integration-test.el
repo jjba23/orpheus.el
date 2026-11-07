@@ -23,6 +23,9 @@
 
 (require 'ert)
 (require 'cl-lib)
+;; Loaded so `auth-sources' below is a special variable, and because the suite
+;; proves it is what `orpheus-mpd--credential' would have consulted.
+(require 'auth-source)
 (require 'orpheus)
 
 (defconst orpheus-integration--dir
@@ -137,6 +140,10 @@ audio_output {
   (let* ((socket (orpheus-integration--start-mpd))
          (orpheus-cache-directory (expand-file-name "cache/"
                                                     orpheus-integration--dir))
+         ;; The daemon this test starts has no password, so the developer's
+         ;; own credential store must not be read for it, let alone sent.
+         (auth-sources nil)
+         (process-environment (cons "MPD_PASSWORD=" process-environment))
          (mpd (make-orpheus-mpd :name 'mpd :socket socket))
          (orpheus-backend-current mpd)
          (connected nil)

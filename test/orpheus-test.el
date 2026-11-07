@@ -479,6 +479,69 @@ and the password with it."
                     (make-orpheus-mpd :host "music.example.org" :port 6601))
                    "from-gpg"))))
 
+(ert-deftest orpheus-test/mpd-ack-is-reported-once ()
+  "A refusal MPD spells out reaches the user, but only once per tick storm."
+  (orpheus-test--with-fake-mpd
+      (lambda (_line) "ACK [5@0] {} you don't have permission for \"status\"\n")
+    (let ((mpd (orpheus-test--mpd-client))
+          (orpheus-mpd--last-refusal nil)
+          (messages nil))
+      (unwind-protect
+          (progn
+            (orpheus-backend-connect mpd (lambda (_backend) nil))
+            (should (orpheus-test--wait (lambda () (orpheus-backend-connected-p mpd))))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (format &rest args)
+                         (push (apply #'format format args) messages))))
+              (dotimes (_ 3) (orpheus-mpd--status-request mpd #'ignore))
+              ;; Three reads, one report.
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (< (length messages) 1) (< (float-time) deadline))
+                  (accept-process-output nil 0.02))
+                (accept-process-output nil 0.3)))
+            (should (= (length messages) 1))
+            (should (string-match-p "you don't have permission"
+                                    (car messages)))
+            ;; The position MPD prefixes to an ACK means nothing to a reader.
+            (should (string-match-p
+                     "\\`orpheus: MPD refused the status request: you don't have permission"
+                     (car messages))))
+        (orpheus-backend-disconnect mpd)))))
+
+(ert-deftest orpheus-test/offline-message-blames-the-refusal ()
+  "A daemon that answers and refuses is not reported as silent."
+  (orpheus-test--with-fake-mpd (lambda (_line) "OK\n")
+    (let* ((mpd (orpheus-test--mpd-client))
+           (orpheus-backend-current mpd)
+           (orpheus--failures 0)
+           (orpheus--retry-at 0)
+           (messages nil))
+      (unwind-protect
+          (progn
+            (orpheus-backend-connect mpd (lambda (_backend) nil))
+            (should (orpheus-test--wait (lambda () (orpheus-backend-connected-p mpd))))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (format &rest args)
+                         (push (apply #'format format args) messages))))
+              (orpheus--offline))
+            (should (= (length messages) 1))
+            (should (string-match-p "refus" (car messages)))
+            (should-not (string-match-p "not answering" (car messages))))
+        (orpheus-backend-disconnect mpd)))))
+
+(ert-deftest orpheus-test/offline-message-still-reports-silence ()
+  "A backend that is not there at all is still reported as not answering."
+  (let ((orpheus-backend-current (make-orpheus-mpd :host "localhost" :port 6601))
+        (orpheus--failures 0)
+        (orpheus--retry-at 0)
+        (messages nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest args)
+                 (push (apply #'format format args) messages))))
+      (orpheus--offline))
+    (should (= (length messages) 1))
+    (should (string-match-p "not answering" (car messages)))))
+
 (ert-deftest orpheus-test/mpd-album-art-binary ()
   "Binary album art survives the trip, byte for byte."
   (orpheus-test--with-fake-mpd

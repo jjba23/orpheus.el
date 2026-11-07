@@ -201,8 +201,20 @@ after that "ask `auth-source'".  `auth-source' reads `~/.authinfo.gpg', so GPG
 holds the secret and gpg-agent asks for its passphrase once per session:
 
 #+begin_src shell
-printf 'machine localhost port 6600 password %s\n' "$(pass show music/mpd)" |
-  gpg --encrypt --recipient you@example.org > ~/.authinfo.gpg
+read -r -s -p 'MPD password: ' secret && echo
+umask 077
+printf 'machine localhost port 6600 password %s\n' "$secret" |
+  gpg --quiet --encrypt --recipient you@example.org > ~/.authinfo.gpg
+unset secret
+#+end_src
+
+A secret manager that already has it pipes it in instead, `pass show
+music/mpd` for one.  Either way, read the line back: an entry that stops at
+`password` counts as having no password at all, and MPD then refuses every
+command it is given.
+
+#+begin_src shell
+gpg --quiet --decrypt ~/.authinfo.gpg
 #+end_src
 
 The entry is looked up under `orpheus-mpd-host' and `orpheus-mpd-port', so a

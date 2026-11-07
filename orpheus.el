@@ -147,8 +147,14 @@ Register another with `orpheus-register-backend'."
   (setq orpheus--retry-at
     (+ (float-time) (min 30 (expt 2 (min orpheus--failures 5)))))
   (when (= orpheus--failures 1)
-    (message "orpheus: %s is not answering; retrying in the background"
-             orpheus-backend))
+    ;; A backend that still holds a connection answered and refused, which
+    ;; asks for a different fix than a daemon that is simply not there.
+    (message "orpheus: %s %s" orpheus-backend
+             (if (and orpheus-backend-current
+                      (ignore-errors
+                        (orpheus-backend-connected-p orpheus-backend-current)))
+                 "is there but refuses the request; check its password and permissions"
+               "is not answering; retrying in the background")))
   (force-mode-line-update t))
 
 (defun orpheus--tick ()
