@@ -2,7 +2,7 @@
 
 ;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-;;; Version: 0.1.0
+;;; Version: 0.2.0
 ;;; Author: Josep Bigorra <jjbigorra@gmail.com>
 ;;; Maintainer: Josep Bigorra <jjbigorra@gmail.com>
 ;;; URL: https://github.com/jjba23/orpheus.el
@@ -153,7 +153,7 @@ Register another with `orpheus-register-backend'."
              (if (and orpheus-backend-current
                       (ignore-errors
                         (orpheus-backend-connected-p orpheus-backend-current)))
-                 "is there but refuses the request; check its password and permissions"
+               "is there but refuses the request; check its password and permissions"
                "is not answering; retrying in the background")))
   (force-mode-line-update t))
 
