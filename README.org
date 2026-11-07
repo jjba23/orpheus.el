@@ -195,9 +195,23 @@ For MPD over the network, leave the socket nil and set the host and port:
 (setq orpheus-mpd-port 6600)
 #+end_src
 
-The password never goes in a file in this repository, and it does not need to
-go in your init either: `orpheus-mpd-password' nil means "read `MPD_PASSWORD'",
-and after that "ask `auth-source'".
+The password goes nowhere near this repository, and it does not need to go in
+your init either: `orpheus-mpd-password' nil means "read `MPD_PASSWORD'", and
+after that "ask `auth-source'".  `auth-source' reads `~/.authinfo.gpg', so GPG
+holds the secret and gpg-agent asks for its passphrase once per session:
+
+#+begin_src shell
+printf 'machine localhost port 6600 password %s\n' "$(pass show music/mpd)" |
+  gpg --encrypt --recipient you@example.org > ~/.authinfo.gpg
+#+end_src
+
+The entry is looked up under `orpheus-mpd-host' and `orpheus-mpd-port', so a
+daemon elsewhere is `machine music.example.org port 6600`.  A `pass' store
+works the same way, its secret asked for only when a connection needs it, and
+the password leaves the connection once MPD has it.
+
+For a session rather than an installation the environment is enough, though
+every process of your user can read it:
 
 #+begin_src shell
 export MPD_PASSWORD='...'

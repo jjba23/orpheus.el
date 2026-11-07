@@ -9,6 +9,24 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+** Fixed
+
+- An MPD that is not there is reported as a sentence that says where it looked
+  and what went wrong — "cannot reach MPD at localhost:6600: Connection
+  refused.  Is mpd running?" — instead of the raw `make-network-process' error.
+  That error carried the arguments the process was made with, closures and all,
+  so the message printed the connection, and the password inside it, into
+  `*Messages*' on every attempt.
+- The MPD password leaves the connection as soon as it has been sent, so a
+  printed connection or a backtrace cannot repeat it.
+
+** Changed
+
+- The README says where the MPD password belongs: `~/.authinfo.gpg', read by
+  `auth-source' through GPG, with `MPD_PASSWORD' kept for a single session.
+
 * 0.1.0 (2026-11-07)
 
 The first release.

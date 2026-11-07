@@ -48,8 +48,9 @@ a remote server is reached over TCP."
 
 (defcustom orpheus-mpd-password nil
   "Password for MPD, or nil to take it from the environment.
-When nil, `MPD_PASSWORD' is read, then `auth-source' is asked; a password
-belongs nowhere in this file."
+When nil, `MPD_PASSWORD' is read, then `auth-source' is asked, and
+`auth-source' reads an encrypted ~/.authinfo.gpg, so the secret lives in GPG and
+nothing enters this file or your init."
   :type '(choice (const :tag "Ask the environment" nil) string)
   :group 'orpheus)
 
@@ -220,6 +221,9 @@ key, which is how MPD reports a few bare messages."
   (let ((password (orpheus-mpd-connection-password conn)))
     (if (and password (not (string-empty-p password)))
       (progn
+        ;; The secret is dropped from CONN as soon as it is written, so no
+        ;; message, backtrace or printed structure can repeat it.
+        (setf (orpheus-mpd-connection-password conn) nil)
         ;; The password's own reply is queued like any other, so commands
         ;; issued meanwhile wait their turn instead of racing it.
         (setf (orpheus-mpd-connection-queue conn)
@@ -250,7 +254,8 @@ key, which is how MPD reports a few bare messages."
 (defun orpheus-mpd--credential (mpd)
   "Return MPD's password from the environment or auth-source, if any.
 MPD is the backend the password is wanted for, and gives auth-source the
-host and port to look up."
+host and port to look up.  An encrypted ~/.authinfo.gpg keeps the password
+without the environment or this file ever seeing it."
   (or (getenv "MPD_PASSWORD")
       (when (require 'auth-source nil t)
         (let ((entry (car (auth-source-search
@@ -261,6 +266,29 @@ host and port to look up."
           (when entry
             (let ((secret (plist-get entry :secret)))
               (if (functionp secret) (funcall secret) secret)))))))
+
+(defun orpheus-mpd--endpoint (mpd)
+  "Return where MPD is, as the short string a message can name."
+  (let ((socket (orpheus-mpd-instance-socket mpd)))
+    (if socket
+      (expand-file-name socket)
+      (format "%s:%s" (or (orpheus-mpd-instance-host mpd) "localhost")
+              (or (orpheus-mpd-instance-port mpd) 6600)))))
+
+(defun orpheus-mpd--reason (err)
+  "Return ERR, a failed connection, as the clause that explains it.
+`make-network-process' reports its failure with the arguments it was given,
+whose filters and sentinels capture the connection and its password; only the
+words before them are a reason, so the rest is dropped."
+  (let* ((end (or (cl-position-if #'keywordp err) (length err)))
+         (text (error-message-string (cons (car err) (cl-subseq err 1 end)))))
+    (string-remove-prefix "make client process failed: " text)))
+
+(defun orpheus-mpd--unreachable-message (mpd err)
+  "Return a sentence about MPD being out of reach, with ERR as the reason."
+  (format "orpheus: cannot reach MPD at %s: %s.  Is mpd running?"
+          (orpheus-mpd--endpoint mpd)
+          (orpheus-mpd--reason err)))
 
 (defun orpheus-mpd--lost (conn event)
   "Forget CONN's process after EVENT and tell the session."
@@ -315,8 +343,8 @@ host and port to look up."
                                          "localhost")
                                :service (or (orpheus-mpd-instance-port mpd)
                                             6600)))))
-                    (error (message "orpheus: cannot reach MPD: %s"
-                                    (error-message-string err))
+                    (error (message "%s"
+                                    (orpheus-mpd--unreachable-message mpd err))
                       nil))))
     (if process
       (progn

@@ -405,6 +405,80 @@ Return PREDICATE's last value, so a test can assert on it."
                            "password \"sekrit\"")))
         (orpheus-backend-disconnect mpd)))))
 
+(ert-deftest orpheus-test/mpd-password-is-not-kept ()
+  "The secret leaves the connection once MPD has accepted it."
+  (orpheus-test--with-fake-mpd
+      (lambda (line)
+        (cond ((string-prefix-p "password" line) "OK\n")
+              ((string-prefix-p "status" line) "state: play\nOK\n")
+              (t "OK\n")))
+    (let ((mpd (orpheus-test--mpd-client))
+          (result nil))
+      (setf (orpheus-mpd-instance-password mpd) "sekrit")
+      (unwind-protect
+          (progn
+            (orpheus-mpd--status-request mpd
+                                         (lambda (status)
+                                           (setq result status)))
+            (should (orpheus-test--wait (lambda () result)))
+            (should-not (orpheus-mpd-connection-password
+                         (orpheus-mpd-instance-connection mpd))))
+        (orpheus-backend-disconnect mpd)))))
+
+(ert-deftest orpheus-test/mpd-unreachable-message-is-friendly ()
+  "A dead daemon is reported with where it is and why, and nothing else."
+  (let ((tcp (orpheus-mpd--unreachable-message
+              (make-orpheus-mpd :host "music.example.org" :port 6601)
+              (list 'file-error "make client process failed"
+                    "Connection refused" :name "orpheus-mpd" :service 6601)))
+        (unix (orpheus-mpd--unreachable-message
+               (make-orpheus-mpd :socket "/run/user/1000/mpd/socket")
+               (list 'file-error "make client process failed"
+                     "No such file or directory" :family 'local))))
+    (should (string-match-p "music\\.example\\.org:6601" tcp))
+    (should (string-match-p "Connection refused" tcp))
+    (should-not (string-match-p ":name" tcp))
+    (should (string-match-p "/run/user/1000/mpd/socket" unix))
+    (should (string-match-p "No such file or directory" unix))))
+
+(ert-deftest orpheus-test/mpd-unreachable-message-hides-the-password ()
+  "The failure is reported without the connection the raw error carries.
+`make-network-process' puts the arguments it was given into its error, with
+the filters and sentinels among them; those closures capture the connection,
+and the password with it."
+  (let ((secret "sekrit-4471")
+        (messages nil))
+    (cl-letf (((symbol-function 'make-network-process)
+               (lambda (&rest args)
+                 (signal 'file-error
+                         (append (list "make client process failed"
+                                       "Connection refused")
+                                 args))))
+              ((symbol-function 'message)
+               (lambda (format &rest args)
+                 (push (apply #'format format args) messages))))
+      (should-not (orpheus-mpd--open
+                   (make-orpheus-mpd :host "localhost" :port 6601
+                                     :password secret)
+                   #'ignore)))
+    (should messages)
+    (should-not (string-match-p secret (mapconcat #'identity messages "\n")))))
+
+(ert-deftest orpheus-test/mpd-credential-comes-from-auth-source ()
+  "A secret kept as a function is asked for it, as `pass' does."
+  ;; Loading `auth-source' inside the call would put its own definition back.
+  (require 'auth-source)
+  (cl-letf (((symbol-function 'getenv) (lambda (_name) nil))
+            ((symbol-function 'auth-source-search)
+             (lambda (&rest spec)
+               (should (equal (plist-get spec :host) "music.example.org"))
+               (should (equal (plist-get spec :port) "6601"))
+               (list (list :host "music.example.org"
+                           :secret (lambda () "from-gpg"))))))
+    (should (equal (orpheus-mpd--credential
+                    (make-orpheus-mpd :host "music.example.org" :port 6601))
+                   "from-gpg"))))
+
 (ert-deftest orpheus-test/mpd-album-art-binary ()
   "Binary album art survives the trip, byte for byte."
   (orpheus-test--with-fake-mpd
