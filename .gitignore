@@ -1,0 +1,14 @@
+# Byte-compiled files
+*.elc
+*.eln
+
+# Native compilation cache
+eln-cache/
+*~
+
+# maak's downloaded skills and other reports
+reports/
+
+# Editor and OS droppings
+.DS_Store
+.#*

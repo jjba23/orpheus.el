@@ -1,0 +1,52 @@
+#+title: Changelog and News 📰
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+options: toc:nil
+
+All notable changes to this project are documented in this file.  Changes are
+listed per release, and within each release under additions, changes, fixes and
+removals.
+
+This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
+
+* Unreleased
+
+*** Added
+
+- =orpheus.el=, the player itself: the customization group, the backend
+  selection, the status timer, the transport commands, the mode-line indicator,
+  song-change notifications, and the entry points `orpheus',
+  `orpheus-play-file', `orpheus-add-file' and `orpheus-play-url'.
+- =orpheus-backend.el=, the protocol every backend implements: the
+  `orpheus-track', `orpheus-status' and `orpheus-item' values, the registry
+  behind `orpheus-register-backend', and the formatting helpers the interface
+  draws with.
+- =orpheus-mpd.el=, an MPD client written directly on `make-network-process':
+  TCP and unix sockets, password from the environment or `auth-source',
+  commands and replies serialized per connection, `ACK` errors handed to the
+  caller, and the binary `albumart`/`readpicture` payloads written to the
+  cache.  Status, current song, queue, directories, artists, album artists,
+  albums, playlists, search, outputs, and the transport.
+- =orpheus-local.el=, an mpv backend over the JSON IPC socket: a queue kept in
+  Emacs, tags from mpv's `metadata`, cover art next to the file or extracted
+  with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).  The audio output
+  follows the platform: PipeWire with PulseAudio and ALSA as fallbacks on
+  Linux, CoreAudio on macOS, WASAPI on Windows.
+- =orpheus-ui.el=, the interface: seven tabs in rmpc's order, a status line in
+  the header line, a progress bar, cover art in a graphical frame, faces, the
+  keymap modelled on Emacs and rmpc, mouse selection, and a help buffer.
+- =orpheus-vis.el=, the visualizer: cava over PipeWire, PortAudio or WASAPI,
+  read by a process filter and drawn as block characters in a terminal or as an
+  SVG bar graph in a graphical frame.
+- A unit suite that needs nothing but Emacs, including a fake MPD server on a
+  loopback port, and an integration suite that plays through a real MPD and a
+  real mpv and skips itself when the programs are missing.
+- =maak.scm= with =compile=, =lint=, =test=, =integration=, =check=, =clean=,
+  =repl= and the generated =AGENTS.md=.
+
+*** Notes
+
+- The local backend plays one file at a time, so consecutive tracks are not
+  gapless; MPD's queue is gapless because the daemon owns it.
+- The Windows named-pipe path in the local backend is written and compiled but
+  has not been run.
