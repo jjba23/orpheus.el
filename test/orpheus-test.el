@@ -857,6 +857,44 @@ and the password with it."
       (should (string-match-p "Two" (buffer-string)))
       (should (text-property-not-all (point-min) (point-max) 'face nil)))))
 
+(ert-deftest orpheus-test/ui-queue-is-not-a-source ()
+  "The queue tab cannot be queued into, and every other tab still can.
+Adding a queue row to the queue appends the whole queue to itself, so one
+keystroke doubles it and a few of them fill it with copies."
+  (let ((added nil))
+    (cl-letf (((symbol-function 'orpheus-backend-add)
+               (lambda (_backend uris) (push uris added))))
+      (with-temp-buffer
+        (orpheus-ui-mode)
+        (setq orpheus-ui--tabs
+              (vector (orpheus-ui-tab-create
+                       :kind 'queue :title "Queue"
+                       :items (list (orpheus-item-create
+                                     :label "One" :kind 'track
+                                     :data '((uri . "a.mp3") (pos . 0)))
+                                    (orpheus-item-create
+                                     :label "Two" :kind 'track
+                                     :data '((uri . "b.mp3") (pos . 1)))))
+                      (orpheus-ui-tab-create
+                       :kind 'directories :title "Directories"
+                       :items (list (orpheus-item-create
+                                     :label "Solo" :kind 'track
+                                     :data '((uri . "c.mp3")))))))
+        (setq orpheus-ui--tab 0)
+        (orpheus-ui--render)
+        (orpheus-ui--place-point)
+        (orpheus-ui-add)
+        (should-not added)
+        (orpheus-ui-add-all)
+        (should-not added)
+        (setq orpheus-ui--tab 1)
+        (orpheus-ui--render)
+        (orpheus-ui--place-point)
+        (orpheus-ui-add)
+        (orpheus-ui-add-all)
+        ;; A row arrives as one URI, the whole tab as a list of them.
+        (should (equal added '(("c.mp3") "c.mp3")))))))
+
 
 ;;; Helpers shared by the UI and the backends
 

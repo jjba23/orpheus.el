@@ -549,30 +549,41 @@ which row is highlighted."
              (message "orpheus: already at the top"))))
 
 (defun orpheus-ui-add ()
-  "Add the row at point to the queue."
+  "Add the row at point to the queue.
+The queue tab is not a source: a queue row added to the queue appends the
+whole queue to itself."
   (interactive)
-  (let ((item (orpheus-ui--item-at-point)))
-    (if (orpheus-item-playable item)
-      (progn
-        (orpheus-backend-add orpheus-backend-current
-                             (alist-get 'uri (orpheus-item-data item)))
-        (message "orpheus: queued %s" (orpheus-item-label item))
-        (orpheus-ui-refresh))
-      (message "orpheus: nothing to queue here"))))
+  (let ((item (orpheus-ui--item-at-point))
+        (tab (orpheus-ui--current-tab)))
+    (cond
+      ((eq (orpheus-ui-tab-kind tab) 'queue)
+       (message "orpheus: this is the queue already; nothing to add"))
+      ((orpheus-item-playable item)
+       (progn
+         (orpheus-backend-add orpheus-backend-current
+                              (alist-get 'uri (orpheus-item-data item)))
+         (message "orpheus: queued %s" (orpheus-item-label item))
+         (orpheus-ui-refresh)))
+      (t (message "orpheus: nothing to queue here")))))
 
 (defun orpheus-ui-add-all ()
-  "Add every playable row of this tab to the queue."
+  "Add every playable row of this tab to the queue.
+Like `orpheus-ui-add', this does nothing on the queue tab, where every row
+is a copy of a row that is there already."
   (interactive)
   (let ((uris (delq nil (mapcar (lambda (item)
                                   (and (orpheus-item-playable item)
                                        (alist-get 'uri (orpheus-item-data item))))
-                                (orpheus-ui--current-items)))))
-    (if uris
-      (progn
+                                (orpheus-ui--current-items))))
+        (tab (orpheus-ui--current-tab)))
+    (cond
+      ((eq (orpheus-ui-tab-kind tab) 'queue)
+       (message "orpheus: this is the queue already; nothing to add"))
+      (uris
         (orpheus-backend-add orpheus-backend-current uris)
         (message "orpheus: queued %d track(s)" (length uris))
         (orpheus-ui-refresh))
-      (message "orpheus: nothing to queue here"))))
+      (t (message "orpheus: nothing to queue here")))))
 
 (defun orpheus-ui-delete ()
   "Remove the row at point from the queue."
