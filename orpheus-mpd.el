@@ -393,6 +393,23 @@ words before them are a reason, so the rest is dropped."
                              (orpheus-mpd--command-line command args)
                              (or callback #'ignore))))))
 
+(defun orpheus-mpd--send-commands (mpd lines &optional callback)
+  "Send LINES to MPD as one command list, then call CALLBACK with the reply.
+One round trip for a whole album is what keeps a queue of files from locking
+the editor while each is added."
+  (orpheus-mpd--with-connection
+   mpd
+   (lambda (conn)
+     (if (null conn)
+       (when callback
+         (funcall callback (list :ok nil :error "MPD is not reachable"
+                                 :lines nil :binary nil)))
+       (orpheus-mpd--request conn
+                             (concat "command_list_begin\n"
+                                     (mapconcat #'identity lines "\n")
+                                     "\ncommand_list_end")
+                             (or callback #'ignore))))))
+
 ;;; Reading replies
 
 (defun orpheus-mpd--status-from-lines (lines)
@@ -545,12 +562,7 @@ words before them are a reason, so the rest is dropped."
 
 (cl-defmethod orpheus-backend-disconnect ((mpd orpheus-mpd))
   "Close the connection to MPD."
-  (let ((conn (orpheus-mpd-instance-connection mpd)))
-    (when conn
-      (setf (orpheus-mpd-instance-connection mpd) nil)
-      (setf (orpheus-mpd-connection-state conn) 'closed)
-      (let ((process (orpheus-mpd-connection-process conn)))
-        (when (process-live-p process) (delete-process process))))))
+  (orpheus-mpd--close mpd))
 
 (cl-defmethod orpheus-backend-status ((mpd orpheus-mpd) callback)
   "Ask MPD for its status, then call CALLBACK with it."
@@ -571,8 +583,22 @@ words before them are a reason, so the rest is dropped."
 
 (cl-defmethod orpheus-backend-add ((mpd orpheus-mpd) uris)
   "Append URIS to MPD's queue."
-  (dolist (uri (if (listp uris) uris (list uris)))
-    (orpheus-mpd--send-command mpd "add" (list (orpheus-mpd--quote uri)))))
+  (let ((uris (if (listp uris) uris (list uris))))
+    (when uris
+      (orpheus-mpd--send-commands
+       mpd (mapcar (lambda (uri)
+                     (format "add %s" (orpheus-mpd--quote uri)))
+                   uris)))))
+
+(defun orpheus-mpd--close (mpd)
+  "Drop MPD's connection, if it still has one."
+  (let ((conn (orpheus-mpd-instance-connection mpd)))
+    (when conn
+      (setf (orpheus-mpd-instance-connection mpd) nil)
+      (setf (orpheus-mpd-connection-state conn) 'closed)
+      (let ((process (orpheus-mpd-connection-process conn)))
+        (when (process-live-p process)
+          (ignore-errors (delete-process process)))))))
 
 (cl-defmethod orpheus-backend-play-uri ((mpd orpheus-mpd) uri)
   "Append URI to MPD's queue and start it."

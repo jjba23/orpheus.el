@@ -82,6 +82,15 @@ The value is a cava input method: `pipewire', `pulse', `alsa',
 (defvar orpheus-vis--accum ""
   "What is left of a frame that has not arrived whole.")
 
+(defvar orpheus-vis--dirty nil
+  "Whether a frame arrived that has not been drawn yet.")
+
+(defvar orpheus-vis--image nil
+  "The image of the last frame drawn, reused when the next one looks the same.")
+
+(defvar orpheus-vis--image-key nil
+  "What `orpheus-vis--image' was built from.")
+
 ;;; Platform and configuration
 
 (defun orpheus-vis--input ()
@@ -179,6 +188,22 @@ The car is the list of bar heights, or nil while no frame is complete."
   (require 'svg)
   (svg-image (orpheus-vis--svg levels width height) :ascent 'center))
 
+(defun orpheus-vis--image (levels width height)
+  "Return LEVELS as an image WIDTH by HEIGHT, reusing the last one when it fits.
+Frames differ by a percent or two without looking different, and rebuilding
+the SVG and its image for each of them is what costs the frame rate.
+
+shortcut: a bar may lag a real change under 4% until the next bucket; revisit
+if the bars look steppy."
+  (let ((key (list width height
+                   (mapcar (lambda (level)
+                             (min 25 (/ (max 0 (min 100 (or level 0))) 4)))
+                           levels))))
+    (unless (equal key orpheus-vis--image-key)
+      (setq orpheus-vis--image-key key
+            orpheus-vis--image (orpheus-vis--svg-image levels width height)))
+    orpheus-vis--image))
+
 ;;; Running cava
 
 (defun orpheus-vis--filter (_process chunk)
@@ -186,7 +211,8 @@ The car is the list of bar heights, or nil while no frame is complete."
   (let ((parsed (orpheus-vis--levels orpheus-vis--accum chunk)))
     (setq orpheus-vis--accum (cdr parsed))
     (when (car parsed)
-      (setq orpheus-vis--data (car parsed)))))
+      (setq orpheus-vis--data (car parsed)
+            orpheus-vis--dirty t))))
 
 (defun orpheus-vis--sentinel (process _event)
   "Forget the cava PROCESS that ended, and say where cava complained."
@@ -209,6 +235,9 @@ The car is the list of bar heights, or nil while no frame is complete."
                  orpheus-vis-framerate)))
       (setq orpheus-vis--accum ""
         orpheus-vis--data nil
+        orpheus-vis--dirty t
+        orpheus-vis--image nil
+        orpheus-vis--image-key nil
         orpheus-vis--process
         (condition-case err
           (make-process :name "orpheus-cava"
@@ -224,8 +253,11 @@ The car is the list of bar heights, or nil while no frame is complete."
                           (error-message-string err))
             nil)))
       (when orpheus-vis--process
+        ;; Two checks per frame: a timer that fires only at the frame rate
+        ;; itself misses every other frame whenever the phases drift, and a
+        ;; check costs nothing until a frame has actually arrived.
         (setq orpheus-vis--timer
-          (run-with-timer 0 (/ 1.0 (max 1 orpheus-vis-framerate))
+          (run-with-timer 0 (/ 0.5 (max 1 orpheus-vis-framerate))
                           #'orpheus-vis--render))))))
 
 (defun orpheus-vis-stop ()
@@ -241,10 +273,17 @@ The car is the list of bar heights, or nil while no frame is complete."
 
 ;;; Drawing
 
-(defun orpheus-vis--render ()
-  "Draw the last frame in the visualizer's buffer."
+(defun orpheus-vis--render (&optional force)
+  "Draw the last frame in the visualizer's buffer.
+FORCE draws even when the buffer is not shown and even when no new frame
+arrived.  Otherwise a frame is drawn once: cava's frames arrive at its own
+pace, and rebuilding an image the reader cannot tell apart is what makes the
+visualizer feel slow."
   (let ((buffer (get-buffer orpheus-vis-buffer-name)))
-    (when (buffer-live-p buffer)
+    (when (and (buffer-live-p buffer)
+               (or force
+                   (and (get-buffer-window buffer) orpheus-vis--dirty)))
+      (setq orpheus-vis--dirty nil)
       (with-current-buffer buffer
         (let* ((inhibit-read-only t)
                (window (get-buffer-window buffer))
@@ -256,8 +295,8 @@ The car is the list of bar heights, or nil while no frame is complete."
                          (make-list orpheus-vis-bars 0))))
           (erase-buffer)
           (if (and orpheus-vis-graphical (display-graphic-p))
-            (insert-image (orpheus-vis--svg-image (seq-take levels width)
-                                                  (* 8 width) (* 8 height))
+            (insert-image (orpheus-vis--image (seq-take levels width)
+                                              (* 8 width) (* 8 height))
                           " ")
             (insert (orpheus-vis--text levels width height)))
           (insert "\n")
@@ -277,8 +316,10 @@ The car is the list of bar heights, or nil while no frame is complete."
         (special-mode))
       (setq-local mode-line-format " orpheus visualizer")
       (add-hook 'kill-buffer-hook #'orpheus-vis-stop nil t)
-      (orpheus-vis--render))
-    (display-buffer buffer)))
+      (orpheus-vis--render t))
+    (display-buffer buffer)
+    (with-current-buffer buffer
+      (orpheus-vis--render t))))
 
 (provide 'orpheus-vis)
 

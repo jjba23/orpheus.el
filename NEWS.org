@@ -11,6 +11,46 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 * Unreleased
 
+*** Added
+
+- A clickable mode line: `orpheus-mode-line-mode' now shows the track even
+  when nothing is playing, and the entry answers the mouse — left opens the
+  player, middle plays or pauses, right opens a transport menu.  The width of
+  the title is `orpheus-mode-line-width'.
+- The SSH backend, =orpheus-ssh.el=: a remote daemon reached through
+  `ssh -N -L', with the whole MPD client — queue, library, cover art,
+  transport — behind it.  Configured by `orpheus-ssh-host',
+  `orpheus-ssh-mpd-port', `orpheus-ssh-local-port', `orpheus-ssh-program' and
+  `orpheus-ssh-extra-args'.
+- Dired keys and marks in the player: `^' leaves a directory, `m', `u', `U'
+  and `t' mark and unmark rows, `a' and `d' act on the marked rows, and every
+  row carries a glyph for its kind.  `orpheus-ui-icons' turns the glyphs off
+  and `orpheus-ui-plain-ascii' turns them into letters.
+- Directory tabs get their `../' row from the interface itself, so the way out
+  of a directory is the same on every backend.
+
+*** Changed
+
+- `u' and `U' now unmark rows, as they do in Dired; updating and rescanning
+  the library moved to `M-u' and `M-U'.  `^' backs out of a directory, as in
+  Dired, beside `C-b'.
+- The status timer no longer reads the current tab every second.  Rows are
+  read when a command, a track change or `g' invalidates them, and a tick
+  redraws the tab that is already there; a queue of thousands is fetched
+  once, not once a second.
+- Adding several files to MPD is one command list, one round trip.
+- A status or track read that is still in flight is not sent again, so a slow
+  daemon is waited for instead of piling requests on top of each other.
+
+*** Fixed
+
+- Cover art no longer makes the list jump: the area keeps its size while a
+  cover is fetched, a cover is remembered by URI, a redraw puts the window
+  start back, and a terminal that cannot draw a picture extracts none.
+- The visualizer draws a frame once and reuses the image while the bars look
+  the same, instead of rebuilding the SVG for every timer tick.  A buried
+  visualizer does not redraw at all.
+
 * 0.2.1 (2026-11-07)
 
 The 0.2.0 tag went up without a section of its own, so this one also carries

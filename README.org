@@ -14,15 +14,18 @@ music daemon, or mpv, from inside Emacs.
 the same tabs over the library, the same transport, cover art and a spectrum
 visualizer, with the keys Emacs fingers already know.  The difference is what
 plays the music: a backend is a small object that implements a handful of
-generic functions, and two of them ship here — one talks to a Music Player
-Daemon, the other hands files and URLs to mpv.  Anything else that can be
-driven from the command line can become a third.
+generic functions, and three of them ship here — one talks to a Music Player
+Daemon, one hands files and URLs to mpv, and one reaches a daemon on another
+machine through ssh.  Anything else that can be driven from the command line
+can become a fourth.
 
 Everything is asynchronous: replies arrive in process filters and the status is
 read on a timer, so a slow server, a starting player or a hanging stream never
-blocks the editor.  The interface is text, so it is the same in a terminal, in
-a graphical frame and over SSH; in a frame that can draw, it adds cover art and
-an SVG visualizer, and in one that cannot, nothing breaks.
+blocks the editor.  The list is read when something changed, not on every tick,
+so a queue of thousands costs nothing while it plays.  The interface is text, so
+it is the same in a terminal, in a graphical frame and over SSH; in a frame
+that can draw, it adds cover art and an SVG visualizer, and in one that cannot,
+nothing breaks.
 
 #+begin_src text
  1 Queue    2 Directories    3 Artists    4 Album Artists    5 Albums    6 Playlists    7 Search
@@ -44,8 +47,8 @@ single, consume).
 Music players in Emacs tend to be one of two things: a set of transport
 functions around a single daemon, or a full application that only speaks one
 protocol.  orpheus is the third option — an interface written once over a
-protocol small enough to read, with the protocol implemented twice to prove it
-is real.
+protocol small enough to read, with the protocol implemented more than once to
+prove it is real.
 
 - *The backend is the seam.* :: The queue, the tabs, the keys and the drawing
   know nothing about MPD or mpv. They call `orpheus-backend-status',
@@ -53,8 +56,9 @@ is real.
   implements those and appears in the same interface, unchanged.
 - *Nothing blocks.* :: No synchronously read socket and no
   `shell-command-to-string' in the path of the interface. MPD replies are
-  parsed as they arrive, mpv speaks JSON over its IPC socket, and cava's frames
-  are read by a filter while you keep typing.
+  parsed as they arrive, mpv speaks JSON over its IPC socket, the ssh backend's
+  tunnel is a process with a sentinel, and cava's frames are read by a filter
+  while you keep typing.
 - *One interface, two worlds.* :: Plain text, faces and a keymap. A terminal
   loses pictures and nothing else, and `orpheus-ui-plain-ascii' loses the
   Unicode for fonts that do not have it.
@@ -83,8 +87,11 @@ is real.
   Albums, Playlists and Search, numbered 1 to 7, each keeping its own place in
   the hierarchy while you move between them.
 - *A queue you can edit.* :: Play a row, queue a row or everything on the tab,
-  delete a row, clear the queue, jump to what is playing, save the queue as a
-  playlist.
+  mark rows the way Dired does, queue or delete just the marked ones, clear the
+  queue, jump to what is playing, save the queue as a playlist.
+- *Dired fingers and icons.* :: `RET' enters a directory, `^' leaves it, `m',
+  `u', `U' and `t' mark rows, and every row starts with a glyph for what it is
+  — a folder, a track, an album, an artist, a playlist.
 - *The transport, all of it.* :: Play, pause, stop, next, previous, seek
   forward and back, volume up and down, and the four MPD flags — repeat,
   random, single, consume.
@@ -96,8 +103,10 @@ is real.
   frame.
 - *Song change notifications.* :: Through `notifications-notify', with the cover
   as the icon, on by default and one flag away.
-- *A mode line, if you want it.* :: `orpheus-mode-line-mode' puts the playing
-  track in the mode line of every buffer.
+- *A mode line you can click.* :: `orpheus-mode-line-mode' puts the playing
+  track in the mode line of every buffer; `mouse-1' opens the player,
+  `mouse-2' plays or pauses, and `mouse-3' opens the transport menu, so the
+  mode line controls the music without changing the buffer you are in.
 - *Dired and URLs.* :: `orpheus-play-file' and `orpheus-add-file' take the file
   at point; `orpheus-play-url' takes a link, and mpv hands a video page to
   yt-dlp when it is installed.
@@ -172,7 +181,8 @@ itself, because the daemon owns the whole queue.
 
 The programs to install alongside it are the ones each backend uses: `mpd' for
 the MPD backend, `mpv' (and `ffmpeg' for cover art extraction, `yt-dlp` for
-video links) for the local one, and `cava' for the visualizer.
+video links) for the local one, `ssh' for the remote one, and `cava' for the
+visualizer.
 
 * Getting started
 :PROPERTIES:
@@ -279,6 +289,24 @@ or, from anywhere:
 (orpheus-play-url "https://www.youtube.com/watch?v=...")
 #+end_src
 
+Music on another machine is the MPD player with a tunnel in front of it:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'ssh)
+(setq orpheus-ssh-host "music.example.org")   ; or "me@music.example.org"
+(orpheus)
+#+end_src
+
+The daemon there must listen on its loopback interface, which is MPD's default,
+and your key must already let you in: the tunnel has no terminal in which to ask
+for a passphrase.  A host whose key is not in `~/.ssh/known_hosts' needs one
+`ssh music.example.org' from a terminal first, or
+`(setq orpheus-ssh-extra-args '("-o" "StrictHostKeyChecking=accept-new"))' once.
+A password on the far side is looked up under `orpheus-ssh-host' and
+`orpheus-ssh-mpd-port' through `MPD_PASSWORD' or `auth-source', exactly as a
+local daemon's password is.  The audio comes out of the remote machine, which
+is the point.
+
 ** Why MPD's queue is already full at the start
 :PROPERTIES:
 :CUSTOM_ID: why-mpds-queue-is-already-full
@@ -312,9 +340,11 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `M-<`, `M->`           | first row, last row                                      |
 | `TAB`, `S-TAB`         | next tab, previous tab                                   |
 | `1` … `7`              | queue, directories, artists, album artists, albums, playlists, search |
-| `C-b`                  | back up one level in the tab                             |
-| `a`, `A`               | queue this row, queue everything on this tab             |
-| `d`, `C-k`             | delete the row (on the queue tab, from the queue)        |
+| `^`, `C-b`             | back up one level in the tab                             |
+| `m`, `u`               | mark the row, unmark it                                  |
+| `U`, `t`               | unmark everything, invert the marks                      |
+| `a`, `A`               | queue the marked rows (or this one), queue everything here |
+| `d`, `C-k`             | delete the marked rows (or this one) from the queue      |
 | `D`                    | clear the queue                                          |
 | `/`, `C-s`             | search                                                   |
 | `C`                    | jump to the playing row                                  |
@@ -324,7 +354,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `f`, `b`               | seek forward, seek back                                  |
 | `M-<up>`, `M-<down>`   | volume up, volume down (also `+` and `-`)                |
 | `z`, `x`, `c`, `v`     | repeat, random, consume, single                          |
-| `u`, `U`               | update the library, rescan it                            |
+| `M-u`, `M-U`           | update the library, rescan it                            |
 | `C-x C-s`              | save the queue as a playlist                             |
 | `g`                    | refresh the status and the current tab                   |
 | `V`                    | the spectrum visualizer                                  |
@@ -367,6 +397,7 @@ RET orpheus` shows the same list.
 | `orpheus-volume-step`      | `2`     | volume change of the volume commands           |
 | `orpheus-seek-step`        | `5`     | seconds of the seek commands                   |
 | `orpheus-notifications`    | `t`     | notify on track change                         |
+| `orpheus-mode-line-width`  | `40`    | columns the mode-line track is given           |
 | `orpheus-cache-directory`  | `$XDG_CACHE_HOME/orpheus/` | cover art and generated files |
 
 ** The MPD backend
@@ -401,6 +432,19 @@ RET orpheus` shows the same list.
 specific device: `"pipewire"`, `"coreaudio/1"`, `"wasapi"`, `"alsa/hw:1,0"`.
 Left nil, the platform decides (see [[#platforms][Platforms]]).
 
+** The SSH backend
+:PROPERTIES:
+:CUSTOM_ID: the-ssh-backend
+:END:
+
+| Option                    | Default | Meaning                                        |
+|---------------------------+---------+------------------------------------------------|
+| `orpheus-ssh-host`        | `nil`   | `host` or `user@host`; nil means not configured |
+| `orpheus-ssh-mpd-port`    | `6600`  | the daemon's port on the far side              |
+| `orpheus-ssh-local-port`  | `nil`   | loopback port of the tunnel, or nil for a free one |
+| `orpheus-ssh-program`     | `"ssh"` | the ssh program                                |
+| `orpheus-ssh-extra-args`  | `nil`   | more ssh arguments, as a list                  |
+
 ** The interface and the visualizer
 :PROPERTIES:
 :CUSTOM_ID: the-interface-and-the-visualizer
@@ -410,6 +454,7 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 |-----------------------------+-----------+------------------------------------------|
 | `orpheus-ui-buffer-name`    | `"*orpheus*"` | the player's buffer                  |
 | `orpheus-ui-plain-ascii`    | `nil`     | ASCII glyphs instead of Unicode          |
+| `orpheus-ui-icons`          | `t`       | a glyph for each row's kind              |
 | `orpheus-ui-show-art`       | `t`       | draw cover art in a graphical frame      |
 | `orpheus-ui-art-size`       | `220`     | longest side of the art, in pixels       |
 | `orpheus-ui-progress-width` | `16`      | columns of the progress bar              |
@@ -456,7 +501,7 @@ backend claims.  A row is an `orpheus-item` with a label, a detail column, a
 kind, and an alist whose `uri` makes it playable and whose `browse` is a
 `(KIND . ARG)` to descend into.
 
-Two backends are shipped and are the reference implementations:
+Three backends are shipped and are the reference implementations:
 
 - =orpheus-mpd.el= — a complete MPD client on `make-network-process`: TCP or a
   unix socket, password, serialized replies, `ACK` errors, and the `albumart`
@@ -464,6 +509,9 @@ Two backends are shipped and are the reference implementations:
 - =orpheus-local.el= — mpv over its JSON IPC socket, with the queue kept in
   Emacs, tags read from mpv's `metadata` property, cover art found next to the
   file or extracted with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).
+- =orpheus-ssh.el= — the MPD backend behind `ssh -N -L', so a daemon on another
+  machine looks local on a loopback port.  Everything but the connection is the
+  MPD client, unchanged, and the audio comes out of the far machine.
 
 ** Adding one
 :PROPERTIES:

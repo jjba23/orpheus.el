@@ -19,14 +19,16 @@
 ;;; artists, album artists, albums, playlists and search, the same transport
 ;;; keys, cover art and a spectrum visualizer.  Unlike rmpc it does not assume
 ;;; MPD is the player: a backend is a small object that implements a handful
-;;; of generics, and two of them ship here.
+;;; of generics, and three of them ship here.
 ;;;
 ;;; - `mpd' talks to a Music Player Daemon over TCP or a unix socket.  The
 ;;; daemon owns the audio output, so PipeWire, PulseAudio, ALSA and CoreAudio
-;;; all work without this package knowing about them.
-;;; - `local' plays files and URLs with mpv over its JSON IPC socket.  mpv uses
-;;; PipeWire on Linux, CoreAudio on macOS and WASAPI on Windows, and hands
-;;; YouTube links to yt-dlp.
+;;; all work without this package knowing about them.;;; - `local' plays files and URLs with mpv over its JSON IPC socket.  mpv uses
+;;;   PipeWire on Linux, CoreAudio on macOS and WASAPI on Windows, and hands
+;;;   YouTube links to yt-dlp.
+;;; - `ssh' reaches a Music Player Daemon on another machine through an
+;;;   `ssh -N -L' tunnel; the connection is the only part that differs from
+;;;   the `mpd' backend.
 ;;;
 ;;; Everything is asynchronous: replies arrive in process filters, and the
 ;;; status is read on a timer, so a slow server or a starting player never
@@ -37,7 +39,7 @@
 ;;; Start with:
 ;;;
 ;;; (require 'orpheus)
-;;; (setq orpheus-backend 'mpd)     ; or 'local
+;;; (setq orpheus-backend 'mpd)     ; or 'local, or 'ssh
 ;;; (setq orpheus-mpd-host "localhost")
 ;;; (orpheus)
 ;;;
@@ -51,6 +53,7 @@
 (require 'orpheus-backend)
 (require 'orpheus-mpd)
 (require 'orpheus-local)
+(require 'orpheus-ssh)
 (require 'orpheus-ui)
 (require 'orpheus-vis)
 
@@ -63,10 +66,11 @@
   "Version of orpheus.")
 
 (defcustom orpheus-backend 'mpd
-  "Backend to play with: `mpd' or `local', or any registered one.
+  "Backend to play with: `mpd', `local' or `ssh', or any registered one.
 Register another with `orpheus-register-backend'."
   :type '(choice (const :tag "Music Player Daemon" mpd)
                  (const :tag "Local files and URLs through mpv" local)
+                 (const :tag "A daemon on another machine, over ssh" ssh)
                  (symbol :tag "Another registered backend"))
   :group 'orpheus)
 
@@ -98,6 +102,18 @@ Register another with `orpheus-register-backend'."
 (defvar orpheus--retry-at 0
   "Time before which no new connection is attempted.")
 
+(defvar orpheus--status-pending nil
+  "Whether a status read is in flight, so ticks do not pile up behind it.")
+
+(defvar orpheus--status-at 0
+  "When the status read in flight was sent, as a float time.")
+
+(defvar orpheus--track-pending nil
+  "Whether a read of the current track is in flight.")
+
+(defvar orpheus--track-at 0
+  "When the track read in flight was sent, as a float time.")
+
 ;;; The session
 
 (defun orpheus--ensure-backend ()
@@ -124,7 +140,9 @@ Register another with `orpheus-register-backend'."
   (interactive)
   (when (timerp orpheus--timer)
     (cancel-timer orpheus--timer))
-  (setq orpheus--timer nil)
+  (setq orpheus--timer nil
+        orpheus--status-pending nil
+        orpheus--track-pending nil)
   (let ((backend orpheus-backend-current))
     (when backend
       (ignore-errors (orpheus-backend-disconnect backend)))))
@@ -158,12 +176,22 @@ Register another with `orpheus-register-backend'."
   (force-mode-line-update t))
 
 (defun orpheus--tick ()
-  "Read the backend's status and pass it on."
-  (let ((backend orpheus-backend-current))
-    (when (and backend (>= (float-time) orpheus--retry-at))
+  "Read the backend's status and pass it on.
+A read already in flight is not sent twice: a daemon slower than the timer
+would otherwise be asked again every second, and the answers would queue up
+until the editor felt them."
+  (let ((backend orpheus-backend-current)
+        (now (float-time)))
+    (when (and backend
+               (>= now orpheus--retry-at)
+               (or (not orpheus--status-pending)
+                   (> (- now orpheus--status-at) 5)))
+      (setq orpheus--status-pending t
+            orpheus--status-at now)
       (orpheus-backend-status
        backend
        (lambda (status)
+         (setq orpheus--status-pending nil)
          (if (null status)
            (orpheus--offline)
            (setq orpheus--failures 0
@@ -171,16 +199,22 @@ Register another with `orpheus-register-backend'."
              orpheus-status-current status)
            (orpheus--maybe-song-changed status)
            (force-mode-line-update t)
-           (orpheus-ui-refresh)))))))
+           (orpheus-ui-tick)))))))
 
 (defun orpheus--maybe-song-changed (status)
   "Ask for the track when STATUS reports a different song."
-  (let ((songid (orpheus-status-songid status)))
-    (when (or (null orpheus-track-current)
-              (not (equal songid orpheus--songid)))
+  (let ((songid (orpheus-status-songid status))
+        (now (float-time)))
+    (when (and (or (null orpheus-track-current)
+                   (not (equal songid orpheus--songid)))
+               (or (not orpheus--track-pending)
+                   (> (- now orpheus--track-at) 5)))
+      (setq orpheus--track-pending t
+            orpheus--track-at now)
       (orpheus-backend-track
        orpheus-backend-current
        (lambda (track)
+         (setq orpheus--track-pending nil)
          (unless (equal songid orpheus--songid)
            (setq orpheus--songid songid
              orpheus-track-current track)
@@ -189,6 +223,9 @@ Register another with `orpheus-register-backend'."
 (defun orpheus--song-changed (track)
   "Announce TRACK to whoever wants to know."
   (force-mode-line-update t)
+  ;; What is playing decides the highlighted row, and with `consume' the
+  ;; queue itself has moved on, so the tab is worth reading again.
+  (orpheus-ui-invalidate)
   (when track
     (orpheus-ui--update-art track)
     (when orpheus-notifications
@@ -215,6 +252,7 @@ Register another with `orpheus-register-backend'."
       ((not (orpheus-backend-connected-p backend))
        (message "orpheus: %s is not connected" orpheus-backend))
       (t (orpheus-backend-command backend action value)
+        (orpheus-ui-invalidate)
         (orpheus--tick)))))
 
 (defun orpheus--volume ()
@@ -320,8 +358,9 @@ Register another with `orpheus-register-backend'."
 (defun orpheus-refresh ()
   "Read the status and the current tab again."
   (interactive)
+  (orpheus-ui-invalidate)
   (orpheus--tick)
-  (orpheus-ui-refresh))
+  (orpheus-ui-refresh t))
 
 ;;; Playing files and URLs
 
@@ -341,6 +380,7 @@ This needs a backend that plays paths, which is `local'."
   (if (memq 'paths (orpheus-backend-capabilities orpheus-backend-current))
     (progn
       (orpheus-backend-play-uri orpheus-backend-current file)
+      (orpheus-ui-invalidate)
       (setq orpheus--retry-at 0)
       (orpheus-start)
       (message "orpheus: %s" (file-name-nondirectory file)))
@@ -354,6 +394,7 @@ This needs a backend that plays paths, which is `local'."
   (if (memq 'paths (orpheus-backend-capabilities orpheus-backend-current))
     (progn
       (orpheus-backend-add orpheus-backend-current file)
+      (orpheus-ui-invalidate)
       (orpheus-start)
       (message "orpheus: queued %s" (file-name-nondirectory file)))
     (user-error "orpheus: %s plays its own library, not paths"
@@ -371,33 +412,81 @@ This needs a backend that plays paths, which is `local'."
   (if (memq 'paths (orpheus-backend-capabilities orpheus-backend-current))
     (progn
       (orpheus-backend-play-uri orpheus-backend-current url)
+      (orpheus-ui-invalidate)
       (orpheus-start)
       (message "orpheus: %s" url))
     (user-error "orpheus: %s cannot play URLs" orpheus-backend)))
 
 ;;; The mode line
 
+(defcustom orpheus-mode-line-width 40
+  "Columns the track is given in the mode line."
+  :type 'integer :group 'orpheus)
+
+(defvar orpheus-mode-line-menu
+  (let ((map (make-sparse-keymap "Orpheus")))
+    (define-key-after map [play-pause]
+      '(menu-item "Play or pause" orpheus-play-pause))
+    (define-key-after map [next] '(menu-item "Next track" orpheus-next))
+    (define-key-after map [previous]
+      '(menu-item "Previous track" orpheus-previous))
+    (define-key-after map [stop] '(menu-item "Stop" orpheus-stop))
+    (define-key-after map [volume-up]
+      '(menu-item "Volume up" orpheus-volume-up))
+    (define-key-after map [volume-down]
+      '(menu-item "Volume down" orpheus-volume-down))
+    (define-key-after map [open] '(menu-item "Open the player" orpheus))
+    (define-key-after map [visualizer]
+      '(menu-item "Visualizer" orpheus-visualizer))
+    map)
+  "Menu opened by a right click on the mode-line track.")
+
+(defvar orpheus-mode-line-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mode-line mouse-1] #'orpheus)
+    (define-key map [mode-line mouse-2] #'orpheus-play-pause)
+    (define-key map [mode-line mouse-3] #'orpheus-mode-line-menu)
+    map)
+  "Keymap of the orpheus entry in the mode line.")
+
+(defun orpheus-mode-line-menu (event)
+  "Open the transport menu for EVENT, a click on the mode line."
+  (interactive "e")
+  (popup-menu orpheus-mode-line-menu (event-start event)))
+
 (defun orpheus-mode-line-string ()
-  "Return the current track for the mode line, or nil."
-  (when (and orpheus-track-current
-             (not (string-empty-p (orpheus-track-label orpheus-track-current))))
-    (concat
-     " "
-     (propertize (orpheus-status-glyph orpheus-status-current)
-                 'face 'orpheus-status-face)
-     " "
-     (propertize (orpheus-ui--elide (orpheus-track-label orpheus-track-current)
-                                    40)
-                 'face 'orpheus-title-face))))
+  "Return the current track for the mode line, or nil.
+The string answers the mouse, so the track that is shown can be played,
+paused and opened without leaving the buffer it is shown in."
+  (let ((label (if (and orpheus-track-current
+                        (not (string-empty-p
+                              (orpheus-track-label orpheus-track-current))))
+                   (orpheus-ui--elide
+                    (orpheus-track-label orpheus-track-current)
+                    orpheus-mode-line-width)
+                 "orpheus")))
+    (propertize
+     (concat " " (orpheus-status-glyph orpheus-status-current) " " label)
+     'face 'orpheus-title-face
+     'help-echo
+     "mouse-1: open orpheus, mouse-2: play or pause, mouse-3: more"
+     'local-map orpheus-mode-line-map
+     'mouse-face 'mode-line-highlight)))
+
+(defconst orpheus-mode-line-entry '(:eval (orpheus-mode-line-string))
+  "Entry `orpheus-mode-line-mode' keeps in `global-mode-string'.")
 
 (define-minor-mode orpheus-mode-line-mode
-  "Show what orpheus is playing in the mode line."
+  "Show what orpheus is playing in the mode line.
+Clicking the track opens the player, plays or pauses, or opens a menu of the
+transport commands, so the mode line is a control and not only a label."
   :global t
   :group 'orpheus
   (if orpheus-mode-line-mode
-    (add-to-list 'global-mode-string '(:eval (orpheus-mode-line-string)) t)
+      (add-to-list 'global-mode-string orpheus-mode-line-entry t)
     (setq global-mode-string
-      (delete '(:eval (orpheus-mode-line-string)) global-mode-string))))
+          (delete orpheus-mode-line-entry global-mode-string)))
+  (force-mode-line-update t))
 
 ;;; Entry point
 

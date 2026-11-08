@@ -459,37 +459,33 @@ CALLBACK is called with the error string, or nil, and the data."
                orpheus-local-extensions)))
 
 (defun orpheus-local--directory-items (dir)
-  "Return the rows of DIR, one per directory and playable file."
+  "Return the rows of DIR, one per directory and playable file.
+The row that leaves DIR is added by the interface, as it is for every
+backend, so a parent row here would show the way up twice."
   (let* ((dir (file-name-as-directory (expand-file-name (or dir "~"))))
-         (parent (file-name-directory (directory-file-name dir)))
          (entries (condition-case nil
                     (directory-files dir t "\\`[^.]")
                     (error nil))))
-    (append
-     (when (and parent (not (equal parent dir)) (file-directory-p parent))
-       (list (orpheus-item-create
-              :label "../" :kind 'directory
-              :data (list (cons 'browse (cons 'directories (list parent)))))))
-     (delq nil
-           (mapcar
-            (lambda (path)
-              (cond
-                ((file-directory-p path)
-                 (orpheus-item-create
-                  :label (concat (file-name-nondirectory
-                                  (directory-file-name path))
-                                 "/")
-                  :kind 'directory
-                  :data (list (cons 'browse (cons 'directories (list path)))
-                              (cons 'uri path))))
-                ((orpheus-local--media-file-p path)
-                 (orpheus-item-create
-                  :label (file-name-nondirectory path)
-                  :detail (file-size-human-readable
-                           (or (file-attribute-size (file-attributes path)) 0))
-                  :kind 'track
-                  :data (list (cons 'uri path))))))
-            entries)))))
+    (delq nil
+          (mapcar
+           (lambda (path)
+             (cond
+               ((file-directory-p path)
+                (orpheus-item-create
+                 :label (concat (file-name-nondirectory
+                                 (directory-file-name path))
+                                "/")
+                 :kind 'directory
+                 :data (list (cons 'browse (cons 'directories (list path)))
+                             (cons 'uri path))))
+               ((orpheus-local--media-file-p path)
+                (orpheus-item-create
+                 :label (file-name-nondirectory path)
+                 :detail (file-size-human-readable
+                          (or (file-attribute-size (file-attributes path)) 0))
+                 :kind 'track
+                 :data (list (cons 'uri path))))))
+           entries))))
 
 ;;; Backend methods
 

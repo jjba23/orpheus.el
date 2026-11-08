@@ -953,4 +953,332 @@ so they are allowed by name."
                       (memq symbol types))))))
     (should (> checked 30))))
 
+;;; Marks, icons and the parent row
+
+(ert-deftest orpheus-test/ui-icons ()
+  "Icons follow the mode: Unicode, ASCII, or none at all."
+  (let ((orpheus-ui-icons t)
+        (orpheus-ui-plain-ascii nil))
+    (should (equal (orpheus-ui--icon 'directory) "📁"))
+    (should (equal (orpheus-ui--icon 'track) "🎵"))
+    (should-not (orpheus-ui--icon 'unknown-kind)))
+  (let ((orpheus-ui-icons t)
+        (orpheus-ui-plain-ascii t))
+    (should (equal (orpheus-ui--icon 'directory) "d"))
+    (should (equal (orpheus-ui--icon 'track) "m")))
+  (let ((orpheus-ui-icons nil)
+        (orpheus-ui-plain-ascii nil))
+    (should-not (orpheus-ui--icon 'track))))
+
+(ert-deftest orpheus-test/ui-row-has-an-icon-and-a-mark-column ()
+  "A row starts with the mark column and the icon, then the label."
+  (let ((orpheus-ui-icons t)
+        (orpheus-ui-plain-ascii t))
+    (with-temp-buffer
+      (orpheus-ui--insert-item
+       (orpheus-item-create :label "Song" :detail "1:00" :kind 'track
+                            :data '((uri . "a.mp3")))
+       0 30)
+      (should (string-prefix-p " m Song" (buffer-string))))))
+
+(ert-deftest orpheus-test/ui-marks-drive-the-actions ()
+  "Marked rows are what `a' queues, not the row under point."
+  (let ((added nil))
+    (cl-letf (((symbol-function 'orpheus-backend-add)
+               (lambda (_backend uris) (setq added uris))))
+      (with-temp-buffer
+        (orpheus-ui-mode)
+        (setq orpheus-ui--tabs
+              (vector (orpheus-ui-tab-create
+                       :kind 'albums :title "Albums"
+                       :items (list (orpheus-item-create
+                                     :label "One" :kind 'track
+                                     :data '((uri . "a.mp3")))
+                                    (orpheus-item-create
+                                     :label "Two" :kind 'track
+                                     :data '((uri . "b.mp3")))
+                                    (orpheus-item-create
+                                     :label "Three" :kind 'track
+                                     :data '((uri . "c.mp3")))))))
+        (setq orpheus-ui--tab 0)
+        (orpheus-ui--render)
+        (orpheus-ui--place-point)
+        (orpheus-ui-mark)
+        (orpheus-ui-mark)
+        (orpheus-ui-add)
+        (should (equal added '("a.mp3" "b.mp3")))
+        (should (equal (sort (copy-sequence
+                              (orpheus-ui-tab-marks (orpheus-ui--current-tab)))
+                             #'string<)
+                       '("a.mp3" "b.mp3")))
+        (orpheus-ui-unmark-all)
+        (should-not (orpheus-ui-tab-marks (orpheus-ui--current-tab)))))))
+
+(ert-deftest orpheus-test/ui-toggle-marks ()
+  "`t' inverts the marks, as it does in Dired."
+  (with-temp-buffer
+    (orpheus-ui-mode)
+    (setq orpheus-ui--tabs
+          (vector (orpheus-ui-tab-create
+                   :kind 'albums :title "Albums"
+                   :items (list (orpheus-item-create
+                                 :label "One" :kind 'track
+                                 :data '((uri . "a.mp3")))
+                                (orpheus-item-create
+                                 :label "Two" :kind 'track
+                                 :data '((uri . "b.mp3"))))
+                   :marks '("a.mp3"))))
+    (setq orpheus-ui--tab 0)
+    (orpheus-ui-toggle-marks)
+    (should (equal (orpheus-ui-tab-marks (orpheus-ui--current-tab))
+                   '("b.mp3")))))
+
+(ert-deftest orpheus-test/ui-parent-row ()
+  "A directory list can leave the directory, as Dired's `..' does."
+  (let ((item (orpheus-ui--parent-item
+               (orpheus-ui-tab-create :kind 'directories :view 'directories
+                                      :arg (list "/home/me/Music")))))
+    (should (equal (orpheus-item-label item) "../"))
+    (should (equal (orpheus-item-browse item) '(directories "/home/me/"))))
+  (should (equal (orpheus-item-browse
+                  (orpheus-ui--parent-item
+                   (orpheus-ui-tab-create :kind 'directories :view 'directories
+                                          :arg (list "Rock/Live"))))
+                 '(directories "Rock/")))
+  (should-not (orpheus-ui--parent-item
+               (orpheus-ui-tab-create :kind 'directories :view 'directories)))
+  (should-not (orpheus-ui--parent-item
+               (orpheus-ui-tab-create :kind 'queue :view 'queue))))
+
+
+;;; Reading only when something changed
+
+(ert-deftest orpheus-test/ui-tick-does-not-read-a-clean-tab ()
+  "The one-second timer must not ask the backend for the queue again."
+  (let ((orpheus-ui-buffer-name "*orpheus-test-tick*")
+        (refreshes 0)
+        (redraws 0)
+        (orpheus-ui--needs-refresh nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+            (orpheus-ui-mode))
+          (cl-letf (((symbol-function 'orpheus-ui-refresh)
+                     (lambda (&optional _force)
+                       (setq refreshes (1+ refreshes))))
+                    ((symbol-function 'orpheus-ui--redraw)
+                     (lambda () (setq redraws (1+ redraws)))))
+            (dotimes (_ 5) (orpheus-ui-tick))
+            (should (= refreshes 0))
+            (should (= redraws 5))
+            (orpheus-ui-invalidate)
+            (orpheus-ui-tick)
+            (should (= refreshes 1))))
+      (kill-buffer orpheus-ui-buffer-name))))
+
+(ert-deftest orpheus-test/ui-refresh-clears-the-invalidation ()
+  "A read that happens clears the flag, so the next tick is quiet again."
+  (let ((orpheus-ui-buffer-name "*orpheus-test-dirty*")
+        (orpheus-ui--needs-refresh t))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+            (orpheus-ui-mode)
+            (setq orpheus-ui--tabs
+                  (vector (orpheus-ui-tab-create :kind 'queue
+                                                 :title "Queue")))
+            (setq orpheus-ui--tab 0))
+          (cl-letf (((symbol-function 'orpheus-ui--load-tab)
+                     (lambda (_tab callback) (funcall callback))))
+            (orpheus-ui-refresh))
+          (should-not orpheus-ui--needs-refresh))
+      (kill-buffer orpheus-ui-buffer-name))))
+
+
+;;; Cover art
+
+(ert-deftest orpheus-test/ui-art-is-remembered ()
+  "A cover already fetched is shown again without asking the backend."
+  (let ((orpheus-ui-show-art t)
+        (orpheus-ui--art nil)
+        (orpheus-ui--art-cache (make-hash-table :test #'equal))
+        (calls 0)
+        (orpheus-backend-current (orpheus-make-backend 'local)))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _frame) t))
+              ((symbol-function 'orpheus-ui--redraw) (lambda () nil))
+              ((symbol-function 'orpheus-backend-album-art)
+               (lambda (_backend _track callback)
+                 (setq calls (1+ calls))
+                 (funcall callback "/tmp/cover.png"))))
+      (let ((track (orpheus-track-create :uri "a/b.mp3")))
+        (orpheus-ui--update-art track)
+        (should (= calls 1))
+        (should (equal (plist-get orpheus-ui--art :file) "/tmp/cover.png"))
+        (setq orpheus-ui--art nil)
+        (orpheus-ui--update-art track)
+        (should (= calls 1))
+        (should (equal (plist-get orpheus-ui--art :file) "/tmp/cover.png"))))))
+
+(ert-deftest orpheus-test/ui-art-keeps-its-place-while-loading ()
+  "While the cover is on its way the area is reserved, so the list stays put."
+  (let ((orpheus-ui-show-art t)
+        (orpheus-ui--art nil)
+        (orpheus-ui--art-cache (make-hash-table :test #'equal))
+        (orpheus-backend-current (orpheus-make-backend 'local)))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _frame) t))
+              ((symbol-function 'orpheus-ui--redraw) (lambda () nil))
+              ((symbol-function 'orpheus-backend-album-art)
+               (lambda (_backend _track _callback) nil)))
+      (orpheus-ui--update-art (orpheus-track-create :uri "a/c.mp3"))
+      (should (plist-get orpheus-ui--art :loading))
+      (with-temp-buffer
+        (orpheus-ui--insert-art 80)
+        (should (string-match-p "\n" (buffer-string)))))))
+
+
+;;; The mode line
+
+(ert-deftest orpheus-test/mode-line-controls ()
+  "The track in the mode line answers clicks and survives silence."
+  (should (eq (lookup-key orpheus-mode-line-map [mode-line mouse-1]) 'orpheus))
+  (should (eq (lookup-key orpheus-mode-line-map [mode-line mouse-2])
+              'orpheus-play-pause))
+  (should (commandp (lookup-key orpheus-mode-line-map [mode-line mouse-3])))
+  (let ((orpheus-status-current
+         (orpheus-status-create :state 'play :volume 50))
+        (orpheus-track-current
+         (orpheus-track-create :title "Song" :artist "Band"))
+        (orpheus-ui-plain-ascii t))
+    (let ((string (orpheus-mode-line-string)))
+      (should (string-match-p "Band – Song" string))
+      (should (eq (get-text-property 0 'local-map string)
+                  orpheus-mode-line-map))
+      (should (get-text-property 0 'help-echo string))))
+  ;; With nothing playing there is still something to click.
+  (let ((orpheus-status-current nil)
+        (orpheus-track-current nil)
+        (orpheus-ui-plain-ascii t))
+    (should (stringp (orpheus-mode-line-string)))))
+
+
+;;; The visualizer redraws a frame once
+
+(ert-deftest orpheus-test/vis-image-is-reused ()
+  "A frame that looks the same reuses the image of the frame before it."
+  (let ((orpheus-vis--image nil)
+        (orpheus-vis--image-key nil))
+    (let ((first (orpheus-vis--image '(10 20 30 40) 120 40))
+          (same (orpheus-vis--image '(11 21 30 41) 120 40))
+          (other (orpheus-vis--image '(90 20 30 40) 120 40)))
+      (should (imagep first))
+      (should (eq first same))
+      (should-not (eq first other)))))
+
+(ert-deftest orpheus-test/vis-filter-marks-a-new-frame ()
+  "Each complete frame marks the buffer for a redraw."
+  (let ((orpheus-vis--accum "")
+        (orpheus-vis--data nil)
+        (orpheus-vis--dirty nil))
+    (orpheus-vis--filter nil "1;2;3\n")
+    (should (equal orpheus-vis--data '(1 2 3)))
+    (should orpheus-vis--dirty)))
+
+
+;;; One command list for a whole album
+
+(ert-deftest orpheus-test/mpd-add-sends-one-command-list ()
+  "Adding many files is one round trip, not one per file."
+  (orpheus-test--with-fake-mpd
+      (lambda (line)
+        (if (string-prefix-p "command_list_end" line)
+            "OK\n"
+          nil))
+    (let ((mpd (orpheus-test--mpd-client)))
+      (unwind-protect
+          (progn
+            (orpheus-backend-add mpd '("a.mp3" "b.mp3"))
+            (should (orpheus-test--wait
+                     (lambda ()
+                       (member "command_list_end"
+                               orpheus-test--mpd-requests))))
+            (should (equal (nreverse (cl-copy-list orpheus-test--mpd-requests))
+                           '("command_list_begin" "add \"a.mp3\""
+                             "add \"b.mp3\"" "command_list_end"))))
+        (orpheus-backend-disconnect mpd)))))
+
+
+;;; The SSH backend
+
+(ert-deftest orpheus-test/ssh-backend-is-mpd ()
+  "The SSH backend is an MPD client behind a tunnel, and says so."
+  (should (orpheus-backend-exists-p 'ssh))
+  (let ((ssh (orpheus-make-backend 'ssh)))
+    (should (orpheus-mpd-p ssh))
+    (should (equal (orpheus-backend-capabilities ssh)
+                   (orpheus-backend-capabilities
+                    (orpheus-make-backend 'mpd))))))
+
+(ert-deftest orpheus-test/ssh-tunnel-args ()
+  "The tunnel forwards a loopback port to the daemon's port on the far side."
+  (should (equal (orpheus-ssh--tunnel-args "music.example.org" 16600 6600)
+                 '("-N" "-o" "ExitOnForwardFailure=yes"
+                   "-L" "127.0.0.1:16600:localhost:6600"
+                   "music.example.org"))))
+
+(ert-deftest orpheus-test/ssh-free-port-is-a-port ()
+  "A port nothing is listening on is found rather than guessed."
+  (let ((port (orpheus-ssh--free-port)))
+    (should (integerp port))
+    (should (> port 1023))))
+
+(ert-deftest orpheus-test/ssh-without-a-host-says-so ()
+  "Without `orpheus-ssh-host' the tunnel is not even attempted."
+  (let ((orpheus-ssh-host nil)
+        (reached 'none)
+        (messages nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest args)
+                 (push (apply #'format format args) messages))))
+      (orpheus-backend-connect (orpheus-make-backend 'ssh)
+                               (lambda (backend) (setq reached backend)))
+      (should-not reached)
+      (should (cl-some (lambda (text)
+                         (string-match-p "orpheus-ssh-host" text))
+                       messages)))))
+
+(ert-deftest orpheus-test/ssh-tunnel-reaches-the-daemon ()
+  "The tunnel is started, and the MPD behind it answers through it."
+  (orpheus-test--with-fake-mpd
+      (lambda (line)
+        (if (string-prefix-p "status" line)
+            "state: play\nvolume: 40\nOK\n"
+          "OK\n"))
+    (let* ((process-environment (cons "MPD_PASSWORD=fake" process-environment))
+           (orpheus-ssh-program (expand-file-name invocation-name
+                                                   invocation-directory))
+           (orpheus-ssh-extra-args
+            (list "-Q" "--batch" "-l"
+                  (expand-file-name
+                   "test/orpheus-fake-ssh.el"
+                   (file-name-directory orpheus-test--source))
+                  "--"))
+           (orpheus-ssh-host "fake.invalid")
+           (orpheus-ssh-mpd-port orpheus-test--mpd-port)
+           (orpheus-ssh-local-port nil)
+           (ssh (orpheus-make-backend 'ssh))
+           (connected nil)
+           (status nil))
+      (unwind-protect
+          (progn
+            (orpheus-backend-connect ssh
+                                     (lambda (backend)
+                                       (setq connected backend)))
+            (should (eq (orpheus-test--wait (lambda () connected) 20) ssh))
+            (should (orpheus-backend-connected-p ssh))
+            (orpheus-backend-status ssh (lambda (result) (setq status result)))
+            (should (orpheus-test--wait (lambda () status) 10))
+            (should (eq (orpheus-status-state status) 'play))
+            (should (= (orpheus-status-volume status) 40)))
+        (orpheus-backend-disconnect ssh)))))
+
 ;;; orpheus-test.el ends here
