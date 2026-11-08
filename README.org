@@ -5,8 +5,6 @@
 #+language: en
 #+options: toc:nil num:nil
 
-* orpheus.el
-
 [[https://jointhefreeworld.org/ggg/dist/emacs-lisp.svg]] [[https://jointhefreeworld.org/ggg/dist/license-mit.svg]]
 
 /orpheus/ is the singer who could charm stones and rivers; this one charms a
