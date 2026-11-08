@@ -10,18 +10,14 @@
 /orpheus/ is the singer who could charm stones and rivers; this one charms a
 music daemon, or mpv, from inside Emacs.
 
-*orpheus.el is a music player for Emacs* in the shape of [[https://github.com/mierak/rmpc][rmpc]]: the same queue,
-the same tabs over the library, the same transport, cover art and a spectrum
-visualizer, with the keys Emacs fingers already know.  The difference is what
-plays the music: a backend is a small object that implements a handful of
-generic functions, and three of them ship here — one talks to a Music Player
-Daemon, one hands files and URLs to mpv, and one copies files from another machine over
-ssh.  Anything else that can be driven from the command line can become a
-fourth.
+[[./screenshots/visualizer.png]]
 
-Everything is asynchronous: replies arrive in process filters and the status is
+*orpheus.el is a flexible music player for Emacs* : a queue, a couple tabs, a library, playlists,, cover art and a spectrum
+visualizer, with the keys Emacs fingers already know.  Many backends exist for orpheus.
+
+Everything orpheus does is asynchronous and focuses on good UI/UX. also its replies arrive in process filters and the status is
 read on a timer, so a slow server, a starting player or a hanging stream never
-blocks the editor.  SSH downloads stream straight to disk, run a small queue
+blocks the editor.  SSH backend does downloads stream straight to disk, run a small queue
 with background prefetch and keep recent tracks cached, so a slow link does not
 stop the interface.  The list is read when something changed, not on every
 tick, so a queue of thousands costs nothing while it plays.  The interface is
@@ -190,8 +186,6 @@ them: block characters in a terminal, an SVG bar graph with a colour ramp in a
 graphical frame, redrawn `orpheus-vis-framerate' times a second.  cava listens
 to the system, not to one player, so it draws the same bars for MPD, for mpv
 and for anything else the machine is playing.
-
-[[./screenshots/visualizer.png]]
 
 #+begin_quote
 The image is the package's own `orpheus-vis--svg' fed a sample frame and
