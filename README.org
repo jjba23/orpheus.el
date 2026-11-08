@@ -52,16 +52,16 @@ protocol small enough to read, with the protocol implemented more than once to
 prove it is real.
 
 - *The backend is the seam.* :: The queue, the tabs, the keys and the drawing
-  know nothing about MPD or mpv. They call `orpheus-backend-status',
-  `orpheus-backend-browse' and `orpheus-backend-command'; a new backend
+  know nothing about MPD or mpv. They call ~orpheus-backend-status~,
+  ~orpheus-backend-browse~ and ~orpheus-backend-command~; a new backend
   implements those and appears in the same interface, unchanged.
 - *Nothing blocks.* :: No synchronously read socket and no
-  `shell-command-to-string' in the path of the interface. MPD replies are
+  ~shell-command-to-string~ in the path of the interface. MPD replies are
   parsed as they arrive, mpv speaks JSON over its IPC socket, the ssh backend's
   listings and downloads are processes with sentinels, and cava's frames are
   read by a filter while you keep typing.
 - *One interface, two worlds.* :: Plain text, faces and a keymap. A terminal
-  loses pictures and nothing else, and `orpheus-ui-plain-ascii' loses the
+  loses pictures and nothing else, and ~orpheus-ui-plain-ascii~ loses the
   Unicode for fonts that do not have it.
 - *Platforms are the player's problem.* :: MPD owns its audio output, and mpv
   picks PipeWire, CoreAudio or WASAPI. orpheus asks for the right one and stays
@@ -90,53 +90,53 @@ prove it is real.
   Directories, Playlists and Search, and one with file transfers adds Downloads
   after Queue.
 - *A visible transfer queue.* :: SSH downloads run in the background, up to
-  `orpheus-ssh-concurrency' at once.  A play request jumps ahead of prefetches,
-  the next `orpheus-ssh-prefetch' queue entries arrive before you need them,
+  ~orpheus-ssh-concurrency~ at once.  A play request jumps ahead of prefetches,
+  the next ~orpheus-ssh-prefetch~ queue entries arrive before you need them,
   and the Downloads tab shows every transfer's state, completion, rolling
-  speed, ETA and bytes.  The file streams with `cat'; a separate `ls -l'
+  speed, ETA and bytes.  The file streams with ~cat~; a separate ~ls -l~
   probe supplies its size for progress when the host allows it, so a host that
-  cannot report a size still downloads and shows `--%'.  When the shell
-  rejects `cat', the transfer goes over `sftp' instead.  A one-time check on
+  cannot report a size still downloads and shows ~--%~.  When the shell
+  rejects ~cat~, the transfer goes over ~sftp~ instead.  A one-time check on
   connect reports which remote commands and shell features work, and
-  `M-x orpheus-ssh-diagnose` shows the same table on demand.  The header line
+  ~M-x orpheus-ssh-diagnose~ shows the same table on demand.  The header line
   counts active and queued transfers and shows their aggregate throughput.
-  `d' cancels one and `RET' plays a finished copy or retries a failure.
+  ~d~ cancels one and ~RET~ plays a finished copy or retries a failure.
 - *Search close to home.* :: MPD searches its library, the local backend runs
-  `find' below `orpheus-local-directory', and SSH runs `find' below
-  `orpheus-ssh-directory'; when the host has no `find', SSH falls back to a
-  recursive `ls`.  All three answer asynchronously and put the results in the
+  ~find~ below ~orpheus-local-directory~, and SSH runs ~find~ below
+  ~orpheus-ssh-directory~; when the host has no ~find~, SSH falls back to a
+  recursive ~ls~.  All three answer asynchronously and put the results in the
   same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
-  artist and album, and a coloured progress bar.  `orpheus-ui-show-now-playing'
+  artist and album, and a coloured progress bar.  ~orpheus-ui-show-now-playing~
   turns it off when the header line is enough.
 - *A queue you can edit.* :: Play a row, queue a row or everything on the tab,
   mark rows the way Dired does, queue or delete just the marked ones, clear the
   queue, jump to what is playing, save the queue as a portable M3U8 playlist.
-- *Dired fingers and icons.* :: `RET' enters a directory, `^' leaves it, `m',
-  `u', `U' and `t' mark rows, and every row starts with a glyph for what it is
+- *Dired fingers and icons.* :: ~RET~ enters a directory, ~^~ leaves it, ~m~,
+  ~u~, ~U~ and ~t~ mark rows, and every row starts with a glyph for what it is
   — a folder, a track, an album, an artist, a playlist.
 - *The transport, all of it.* :: Play, pause, stop, next, previous, seek
   forward and back, volume up and down, and the four MPD flags — repeat,
   random, single, consume.
 - *A status line that does not steal the screen.* :: It lives in
-  `header-line-format', so it redraws every second while the list, the point and
+  ~header-line-format~, so it redraws every second while the list, the point and
   the scroll position stay exactly where you left them.
 - *Cover art.* :: For the current track and for the album folder being browsed.
-  Local and SSH look for `cover.jpg`, `Cover.PNG`, `cover.webp`, `folder.*`,
-  `front.*`, `album.*` and `artwork.*` regardless of case; SSH copies a remote
-  cover into the cache.  MPD uses its embedded `albumart` or `readpicture`.
-  Cached under `orpheus-cache-directory`, drawn at `orpheus-ui-art-size` in a
+  Local and SSH look for ~cover.jpg~, ~Cover.PNG~, ~cover.webp~, ~folder.*~,
+  ~front.*~, ~album.*~ and ~artwork.*~ regardless of case; SSH copies a remote
+  cover into the cache.  MPD uses its embedded ~albumart~ or ~readpicture~.
+  Cached under ~orpheus-cache-directory~, drawn at ~orpheus-ui-art-size~ in a
   graphical frame, and skipped without a fetch in a terminal.
-- *Song change notifications.* :: Through `notifications-notify', with the cover
+- *Song change notifications.* :: Through ~notifications-notify~, with the cover
   as the icon, on by default and one flag away.
 - *A Greek palette.* :: Gold, marble, Aegean blue, iris and olive, chosen for a
   dark or light frame, with a visualizer ramp that runs from deep sea to gold.
-- *A mode line you can click.* :: `orpheus-mode-line-mode' puts the playing
-  track in the mode line of every buffer; `mouse-1' opens the player,
-  `mouse-2' plays or pauses, and `mouse-3' opens the transport menu, so the
+- *A mode line you can click.* :: ~orpheus-mode-line-mode~ puts the playing
+  track in the mode line of every buffer; ~mouse-1~ opens the player,
+  ~mouse-2~ plays or pauses, and ~mouse-3~ opens the transport menu, so the
   mode line controls the music without changing the buffer you are in.
-- *Dired and URLs.* :: `orpheus-play-file' and `orpheus-add-file' take the file
-  at point; `orpheus-play-url' takes a link, and mpv hands a video page to
+- *Dired and URLs.* :: ~orpheus-play-file~ and ~orpheus-add-file~ take the file
+  at point; ~orpheus-play-url~ takes a link, and mpv hands a video page to
   yt-dlp when it is installed.
 
 *** Portable playlists
@@ -144,36 +144,36 @@ prove it is real.
 :CUSTOM_ID: portable-playlists
 :END:
 
-A playlist is an M3U8 file, not an object owned by a backend.  `C-x C-s` writes
-the current queue to `orpheus-playlist-directory` (by default
-`$XDG_DATA_HOME/orpheus/playlists`, or `~/.local/share/orpheus/playlists`), and
+A playlist is an M3U8 file, not an object owned by a backend.  ~C-x C-s~ writes
+the current queue to ~orpheus-playlist-directory~ (by default
+~$XDG_DATA_HOME/orpheus/playlists~, or =~/.local/share/orpheus/playlists=), and
 the Playlists tab lists every playlist there: RET replaces the queue with it,
-`a` appends its tracks, `e` opens it in an editor buffer, and `d` deletes the
+~a~ appends its tracks, ~e~ opens it in an editor buffer, and ~d~ deletes the
 file after asking.  MPD's own server playlists appear in the same tab, after
 the portable ones, and still open and play as they did before.  MPD's
-backend-level `save' and `load' command actions remain for server-playlist
+backend-level ~save~ and ~load~ command actions remain for server-playlist
 compatibility; the player never uses them, so the queue is always written as a
 portable file.
 
 Reading accepts M3U and PLS as well as M3U8, so a playlist exported by another
 player can be dropped into the directory.  Writing is always UTF-8 M3U8 with
-`#EXTM3U` and `#EXTINF` labels.
+~#EXTM3U~ and ~#EXTINF~ labels.
 
 The editor keeps the parsed tracks, not the M3U8 text, so moving a row with
-`M-<up>` or `M-<down>` and removing one with `d` preserve its tags; `C-x C-s`
-writes the file back.  `i` inserts the player's marked tracks, or its current
+~M-<up>~ or ~M-<down>~ and removing one with ~d~ preserve its tags; ~C-x C-s~
+writes the file back.  ~i~ inserts the player's marked tracks, or its current
 row, above the editor row at point, so a playlist can be assembled from the
 queue or any browsing tab without retyping a path.  The editor also supports
 mouse-1 selection and a mouse-3 menu for insert, reorder, remove and save.  It
 edits M3U and M3U8 files.  PLS is read-only there, because writing an M3U8 body
-under a `.pls` name would make the file unreadable next time; export it as M3U8
+under a ~.pls~ name would make the file unreadable next time; export it as M3U8
 first.
 
 A portable playlist stores library-relative paths whenever the queue names a
-file below a backend's root.  Saving strips `orpheus-local-directory` for the
-local backend, `orpheus-ssh-directory` for SSH, and the same local root for
+file below a backend's root.  Saving strips ~orpheus-local-directory~ for the
+local backend, ~orpheus-ssh-directory~ for SSH, and the same local root for
 MPD; playing expands a relative path through the active backend.  A playlist
-saved from `local` therefore plays through `mpd` or `ssh` when those libraries
+saved from ~local~ therefore plays through ~mpd~ or ~ssh~ when those libraries
 mirror it, and one saved from either of those plays locally.  An absolute path
 outside the configured roots is still passed through unchanged, because no
 format can know where another machine keeps it.
@@ -183,14 +183,14 @@ format can know where another machine keeps it.
 :CUSTOM_ID: the-visualizer
 :END:
 
-`orpheus-visualizer' runs [[https://github.com/karlstav/cava][cava]], reads its frames as they arrive and draws
+~orpheus-visualizer~ runs [[https://github.com/karlstav/cava][cava]], reads its frames as they arrive and draws
 them: block characters in a terminal, an SVG bar graph with a colour ramp in a
-graphical frame, redrawn `orpheus-vis-framerate' times a second.  cava listens
+graphical frame, redrawn ~orpheus-vis-framerate~ times a second.  cava listens
 to the system, not to one player, so it draws the same bars for MPD, for mpv
 and for anything else the machine is playing.
 
 #+begin_quote
-The image is the package's own `orpheus-vis--svg' fed a sample frame and
+The image is the package's own ~orpheus-vis--svg~ fed a sample frame and
 exported with Inkscape — no screenshot of a separate application.
 #+end_quote
 
@@ -244,10 +244,10 @@ itself, because the daemon owns the whole queue.
   (orpheus-mode-line-mode 1))
 #+end_src
 
-The programs to install alongside it are the ones each backend uses: `mpd' for
-the MPD backend, `mpv' (and `ffmpeg' for cover art extraction, `yt-dlp` for
-video links) for the local one, `ssh' (and `sftp' when the remote shell cannot
-run `cat') for the remote one, and `cava' for the visualizer.
+The programs to install alongside it are the ones each backend uses: ~mpd~ for
+the MPD backend, ~mpv~ (and ~ffmpeg~ for cover art extraction, ~yt-dlp~ for
+video links) for the local one, ~ssh~ (and ~sftp~ when the remote shell cannot
+run ~cat~) for the remote one, and ~cava~ for the visualizer.
 
 ** Getting started
 :PROPERTIES:
@@ -271,13 +271,13 @@ For MPD over the network, leave the socket nil and set the host and port:
 #+end_src
 
 The password goes nowhere near this repository, and it does not need to go in
-your init either.  `orpheus-mpd-password' nil means "read `MPD_PASSWORD'",
-then "ask `auth-source'", and `auth-source' reads `~/.authinfo.gpg' by
+your init either.  ~orpheus-mpd-password~ nil means "read ~MPD_PASSWORD~",
+then "ask ~auth-source~", and ~auth-source~ reads =~/.authinfo.gpg= by
 default, so GPG can hold the secret and gpg-agent asks for its passphrase once
 per session.
 
-The entry is found by `machine` and `port`, and those two words are
-`orpheus-mpd-host' and `orpheus-mpd-port` — `localhost` and `6600` unless you
+The entry is found by ~machine~ and ~port~, and those two words are
+~orpheus-mpd-host~ and ~orpheus-mpd-port~ — ~localhost~ and ~6600~ unless you
 changed them.  That holds for a socket connection too: the socket says where to
 connect, the host and port say which entry belongs to it.  So a daemon on
 another machine needs
@@ -305,12 +305,12 @@ printf 'machine %s port %s password %s\n' "$host" "$port" "$secret" |
 unset secret
 #+end_src
 
-`--default-recipient-self' seals it for your own key; `--recipient
-you@example.org' seals it for another one.  `--batch --yes' lets the same
+~--default-recipient-self~ seals it for your own key; ~--recipient
+you@example.org~ seals it for another one.  ~--batch --yes~ lets the same
 recipe run a second time without stopping at a prompt.
 
 Read it back, and read the line rather than the exit status: an entry that
-stops at `password', or one written for a host the daemon no longer has, is not
+stops at ~password~, or one written for a host the daemon no longer has, is not
 a password, and MPD then refuses every command it is given.
 
 #+begin_src shell
@@ -318,11 +318,11 @@ gpg --quiet --decrypt ~/.authinfo.gpg
 #+end_src
 
 A password that is found is sent, so keep the store to the daemons it
-describes.  A daemon with no password answers `ACK ... incorrect password' to
+describes.  A daemon with no password answers ~ACK ... incorrect password~ to
 one it never asked for, and the session then fails to log in instead of
 starting without it.
 
-A `pass' store works instead, once Emacs is told about it.  Its secret is asked
+A ~pass~ store works instead, once Emacs is told about it.  Its secret is asked
 for only when a connection needs it, and the password leaves the connection
 once MPD has it.
 
@@ -332,8 +332,8 @@ once MPD has it.
 #+end_src
 
 For a session rather than an installation the environment is enough, though
-every process of your user can read it.  `MPD_PASSWORD' wins over
-`auth-source', so it overrides the store:
+every process of your user can read it.  ~MPD_PASSWORD~ wins over
+~auth-source~, so it overrides the store:
 
 #+begin_src shell
 export MPD_PASSWORD='...'
@@ -363,29 +363,29 @@ Music on another machine is copied over ssh and played by mpv here:
 (orpheus)
 #+end_src
 
-There is no daemon on the far side: `ls -1p` fills the files tab, a remote
-`find` fills Search, falling back to a recursive `ls` when the host has no
-`find`, and RET starts a transfer.  Bytes go straight to a private
+There is no daemon on the far side: ~ls -1p~ fills the files tab, a remote
+~find~ fills Search, falling back to a recursive ~ls~ when the host has no
+~find~, and RET starts a transfer.  Bytes go straight to a private
 cache file as they arrive, so another download never freezes Emacs; the
-Downloads tab shows what is queued and what is moving, and `d' cancels a row.
-When the remote shell rejects `cat`, the transfer uses `sftp` instead;
-`orpheus-ssh-sftp-program` names the program (which must be installed here),
-and `orpheus-ssh-sftp-extra-args` carries its options, such as `-P 2222`.  A
+Downloads tab shows what is queued and what is moving, and ~d~ cancels a row.
+When the remote shell rejects ~cat~, the transfer uses ~sftp~ instead;
+~orpheus-ssh-sftp-program~ names the program (which must be installed here),
+and ~orpheus-ssh-sftp-extra-args~ carries its options, such as ~-P 2222~.  A
 one-time check when the backend connects reports which remote commands and
-shell features work, and `M-x orpheus-ssh-diagnose` shows the same table on
+shell features work, and ~M-x orpheus-ssh-diagnose~ shows the same table on
 demand.  Playback begins once the copy is complete, so a large track spends its
 transfer time downloading rather than playing.  While the current track plays, the next
-`orpheus-ssh-prefetch' queue entries are fetched in the background, and the last
-`orpheus-ssh-cache-count' completed tracks stay on disk, so replaying one or
+~orpheus-ssh-prefetch~ queue entries are fetched in the background, and the last
+~orpheus-ssh-cache-count~ completed tracks stay on disk, so replaying one or
 moving to the next needs no second transfer.  A play request always goes ahead
 of a prefetch.  The cache lives in a private temporary directory, which is
 deleted when the backend disconnects and when Emacs exits.  Your key
 must already let you in, because ssh has no terminal in which to ask for a
-passphrase.  A host whose key is not in `~/.ssh/known_hosts' needs one
-`ssh music.example.org' from a terminal first, or
-`(setq orpheus-ssh-extra-args '("-o" "StrictHostKeyChecking=accept-new"))' once.
+passphrase.  A host whose key is not in =~/.ssh/known_hosts= needs one
+~ssh music.example.org~ from a terminal first, or
+~(setq orpheus-ssh-extra-args '("-o" "StrictHostKeyChecking=accept-new"))~ once.
 mpv must be installed here, and the audio comes out of this machine.  The start
-directory is relative to the login home or absolute; a leading `~` is not
+directory is relative to the login home or absolute; a leading =~= is not
 expanded, because the path is quoted for the remote shell.
 
 *** Why MPD's queue is already full at the start
@@ -393,13 +393,13 @@ expanded, because the path is quoted for the remote shell.
 :CUSTOM_ID: why-mpds-queue-is-already-full
 :END:
 
-The queue is the daemon's, not the player's: orpheus sends `add', `delete' and
-`clear' and reads `playlistinfo' back, so the Queue tab shows what MPD holds.
-MPD writes that queue into its `state_file' when it stops and reads it back
+The queue is the daemon's, not the player's: orpheus sends ~add~, ~delete~ and
+~clear~ and reads ~playlistinfo~ back, so the Queue tab shows what MPD holds.
+MPD writes that queue into its ~state_file~ when it stops and reads it back
 when it starts, which is why the first Queue tab of the day can be full while
 nothing was added to it.  orpheus adds nothing on start.
 
-`D' empties the queue, and an `mpd.conf' without a `state_file' makes the
+~D~ empties the queue, and an ~mpd.conf~ without a ~state_file~ makes the
 daemon forget it at shutdown.  The local backend is the other way round: Emacs
 keeps that queue, so it starts empty in every session.
 
@@ -409,82 +409,82 @@ keeps that queue, so it starts empty in every session.
 :END:
 
 The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
-`C-n' and `C-p' move, `C-v' and `M-v' page, `C-s' searches, `C-x C-s' saves,
-`q' buries the player.  `?` lists the same table in a buffer.  The mouse
+~C-n~ and ~C-p~ move, ~C-v~ and ~M-v~ page, ~C-s~ searches, ~C-x C-s~ saves,
+~q~ buries the player.  ~?~ lists the same table in a buffer.  The mouse
 follows the same actions: mouse-1 selects a row or tab, mouse-2 plays a row,
 and mouse-3 opens the context menu for a row, a tab or a playlist editor row.
 
 | Key                    | Meaning                                                  |
 |------------------------+----------------------------------------------------------|
-| `RET`                  | play the row or portable playlist, or open the album, artist or directory |
-| `n`, `C-n`, `j`        | next row                                                 |
-| `p`, `C-p`, `k`        | previous row                                             |
-| `C-v`, `M-v`           | one screen down, one screen up                           |
-| `M-<`, `M->`           | first row, last row                                      |
-| `TAB`, `S-TAB`         | next tab, previous tab                                   |
-| `1` … `7`              | the tabs, in the order shown; SSH adds Downloads after Queue |
-| `^`, `C-b`             | back up one level in the tab                             |
-| `m`, `u`               | mark the row, unmark it                                  |
-| `U`, `t`               | unmark everything, invert the marks                      |
-| `a`, `A`               | queue the marked rows (or this one), queue everything here |
-| `e`                    | edit the portable playlist at point (Playlists tab)       |
-| `i`                    | insert the player's tracks in the playlist editor        |
-| `d`, `C-k`             | delete from the queue, or cancel a download               |
-| `D`                    | clear the queue                                          |
-| `/`, `C-s`             | search                                                   |
-| `C`                    | jump to the playing row                                  |
-| `SPC`                  | play or pause                                            |
-| `s`                    | stop                                                     |
-| `>`, `<`               | next track, previous track                               |
-| `f`, `b`               | seek forward, seek back                                  |
-| `M-<up>`, `M-<down>`   | volume up, volume down (also `+` and `-`)                |
-| `z`, `x`, `c`, `v`     | repeat, random, consume, single                          |
-| `M-u`, `M-U`           | update the library, rescan it                            |
-| `C-x C-s`              | save the queue as a portable M3U8 playlist               |
-| `g`                    | refresh the status and the current tab                   |
-| `V`                    | the spectrum visualizer                                  |
-| `?`                    | the key map in a buffer                                  |
-| `q`                    | bury the player                                          |
-| `mouse-1`, `mouse-2`   | select a row, play it                                    |
-| `mouse-3`              | open the row, tab or playlist editor menu                |
+| ~RET~                  | play the row or portable playlist, or open the album, artist or directory |
+| ~n~, ~C-n~, ~j~        | next row                                                 |
+| ~p~, ~C-p~, ~k~        | previous row                                             |
+| ~C-v~, ~M-v~           | one screen down, one screen up                           |
+| ~M-<~, ~M->~           | first row, last row                                      |
+| ~TAB~, ~S-TAB~         | next tab, previous tab                                   |
+| ~1~ … ~7~              | the tabs, in the order shown; SSH adds Downloads after Queue |
+| ~^~, ~C-b~             | back up one level in the tab                             |
+| ~m~, ~u~               | mark the row, unmark it                                  |
+| ~U~, ~t~               | unmark everything, invert the marks                      |
+| ~a~, ~A~               | queue the marked rows (or this one), queue everything here |
+| ~e~                    | edit the portable playlist at point (Playlists tab)       |
+| ~i~                    | insert the player's tracks in the playlist editor        |
+| ~d~, ~C-k~             | delete from the queue, or cancel a download               |
+| ~D~                    | clear the queue                                          |
+| ~/~, ~C-s~             | search                                                   |
+| ~C~                    | jump to the playing row                                  |
+| ~SPC~                  | play or pause                                            |
+| ~s~                    | stop                                                     |
+| ~>~, ~<~               | next track, previous track                               |
+| ~f~, ~b~               | seek forward, seek back                                  |
+| ~M-<up>~, ~M-<down>~   | volume up, volume down (also ~+~ and ~-~)                |
+| ~z~, ~x~, ~c~, ~v~     | repeat, random, consume, single                          |
+| ~M-u~, ~M-U~           | update the library, rescan it                            |
+| ~C-x C-s~              | save the queue as a portable M3U8 playlist               |
+| ~g~                    | refresh the status and the current tab                   |
+| ~V~                    | the spectrum visualizer                                  |
+| ~?~                    | the key map in a buffer                                  |
+| ~q~                    | bury the player                                          |
+| ~mouse-1~, ~mouse-2~   | select a row, play it                                    |
+| ~mouse-3~              | open the row, tab or playlist editor menu                |
 
 On the Downloads tab, RET plays a finished copy, retries a failed transfer, or
-waits for one that is still moving; `d` cancels the selected transfer.  The
+waits for one that is still moving; ~d~ cancels the selected transfer.  The
 header line counts active and queued transfers and shows their aggregate
-throughput while they run.  On the Playlists tab, `a` appends a portable
-playlist's tracks, `d` deletes the portable playlist file, and `e` opens its
+throughput while they run.  On the Playlists tab, ~a~ appends a portable
+playlist's tracks, ~d~ deletes the portable playlist file, and ~e~ opens its
 editor; RET loads it in place of the queue.
 
-Queueing is guarded: `A` (and `a` with many marks) asks before adding more than
-`orpheus-ui-add-confirm-threshold` rows, and a queue over
-`orpheus-ui-queue-warning-size` says how to clear it.  MPD also refuses a
-directory URI, because its `add` would expand the whole tree.  Connecting never
+Queueing is guarded: ~A~ (and ~a~ with many marks) asks before adding more than
+~orpheus-ui-add-confirm-threshold~ rows, and a queue over
+~orpheus-ui-queue-warning-size~ says how to clear it.  MPD also refuses a
+directory URI, because its ~add~ would expand the whole tree.  Connecting never
 queues anything; a queue that is already large was restored by MPD's own
-`state_file`, and `D` empties it.
+~state_file~, and ~D~ empties it.
 
 Outside the player buffer:
 
 | Command                  | Meaning                                          |
 |--------------------------+--------------------------------------------------|
-| `M-x orpheus`            | open the player                                  |
-| `M-x orpheus-play-pause` | play or pause without leaving what you are doing |
-| `M-x orpheus-next`       | next track                                       |
-| `M-x orpheus-volume-up`  | volume up by `orpheus-volume-step`               |
-| `M-x orpheus-visualizer` | spectrum visualizer                              |
-| `M-x orpheus-ssh-diagnose` | check the remote SSH commands and shell features |
-| `M-x orpheus-mode-line-mode` | show the track in the mode line              |
-| `M-x orpheus-quit`       | stop reading the status and close the player     |
+| ~M-x orpheus~            | open the player                                  |
+| ~M-x orpheus-play-pause~ | play or pause without leaving what you are doing |
+| ~M-x orpheus-next~       | next track                                       |
+| ~M-x orpheus-volume-up~  | volume up by ~orpheus-volume-step~               |
+| ~M-x orpheus-visualizer~ | spectrum visualizer                              |
+| ~M-x orpheus-ssh-diagnose~ | check the remote SSH commands and shell features |
+| ~M-x orpheus-mode-line-mode~ | show the track in the mode line              |
+| ~M-x orpheus-quit~       | stop reading the status and close the player     |
 
 All of the transport commands are ordinary interactive functions, so any of
-them can be bound in `global-map` or in a repeat map.
+them can be bound in ~global-map~ or in a repeat map.
 
 ** Configuration
 :PROPERTIES:
 :CUSTOM_ID: configuration
 :END:
 
-Every option lives in the `orpheus` customization group, so `M-x customize-group
-RET orpheus` shows the same list.
+Every option lives in the ~orpheus~ customization group, so ~M-x customize-group
+RET orpheus~ shows the same list.
 
 *** The session
 :PROPERTIES:
@@ -493,13 +493,13 @@ RET orpheus` shows the same list.
 
 | Option                     | Default | Meaning                                        |
 |----------------------------+---------+------------------------------------------------|
-| `orpheus-backend`          | `mpd`   | `mpd`, `local`, or any registered backend      |
-| `orpheus-refresh-interval` | `1.0`   | seconds between two status reads               |
-| `orpheus-volume-step`      | `2`     | volume change of the volume commands           |
-| `orpheus-seek-step`        | `5`     | seconds of the seek commands                   |
-| `orpheus-notifications`    | `t`     | notify on track change                         |
-| `orpheus-mode-line-width`  | `40`    | columns the mode-line track is given           |
-| `orpheus-cache-directory`  | `$XDG_CACHE_HOME/orpheus/` | cover art and generated files |
+| ~orpheus-backend~          | ~mpd~   | ~mpd~, ~local~, or any registered backend      |
+| ~orpheus-refresh-interval~ | ~1.0~   | seconds between two status reads               |
+| ~orpheus-volume-step~      | ~2~     | volume change of the volume commands           |
+| ~orpheus-seek-step~        | ~5~     | seconds of the seek commands                   |
+| ~orpheus-notifications~    | ~t~     | notify on track change                         |
+| ~orpheus-mode-line-width~  | ~40~    | columns the mode-line track is given           |
+| ~orpheus-cache-directory~  | ~$XDG_CACHE_HOME/orpheus/~ | cover art and generated files |
 
 *** The MPD backend
 :PROPERTIES:
@@ -508,11 +508,11 @@ RET orpheus` shows the same list.
 
 | Option                    | Default     | Meaning                                    |
 |---------------------------+-------------+--------------------------------------------|
-| `orpheus-mpd-host`        | `"localhost"` | host, when the socket is nil             |
-| `orpheus-mpd-port`        | `6600`      | port, when the socket is nil               |
-| `orpheus-mpd-socket`      | `nil`       | unix socket path                           |
-| `orpheus-mpd-password`    | `nil`       | password, or nil for `MPD_PASSWORD`/auth-source |
-| `orpheus-mpd-search-tag`  | `"any"`     | the tag search looks in                    |
+| ~orpheus-mpd-host~        | ~"localhost"~ | host, when the socket is nil             |
+| ~orpheus-mpd-port~        | ~6600~      | port, when the socket is nil               |
+| ~orpheus-mpd-socket~      | ~nil~       | unix socket path                           |
+| ~orpheus-mpd-password~    | ~nil~       | password, or nil for ~MPD_PASSWORD~/auth-source |
+| ~orpheus-mpd-search-tag~  | ~"any"~     | the tag search looks in                    |
 
 *** The local backend
 :PROPERTIES:
@@ -521,16 +521,16 @@ RET orpheus` shows the same list.
 
 | Option                       | Default     | Meaning                                |
 |------------------------------+-------------+----------------------------------------|
-| `orpheus-local-directory`    | `"~/Music"` | where the files tab starts             |
-| `orpheus-local-mpv-program`  | `"mpv"`     | the player                             |
-| `orpheus-local-audio-driver` | `nil`       | what follows `--ao=`, or nil for the platform |
-| `orpheus-local-extra-args`   | `nil`       | more mpv arguments, as a list          |
-| `orpheus-local-socket`       | `nil`       | IPC socket path, or nil for a temporary one |
-| `orpheus-local-cover-names`  | `cover.jpg`, `front.jpg`, … | files looked for next to a track or album folder; local and SSH |
-| `orpheus-local-extensions`   | `mp3`, `flac`, `opus`, … | what the files tab shows |
+| ~orpheus-local-directory~    | ="~/Music"= | where the files tab starts             |
+| ~orpheus-local-mpv-program~  | ~"mpv"~     | the player                             |
+| ~orpheus-local-audio-driver~ | ~nil~       | what follows ~--ao=~, or nil for the platform |
+| ~orpheus-local-extra-args~   | ~nil~       | more mpv arguments, as a list          |
+| ~orpheus-local-socket~       | ~nil~       | IPC socket path, or nil for a temporary one |
+| ~orpheus-local-cover-names~  | ~cover.jpg~, ~front.jpg~, … | files looked for next to a track or album folder; local and SSH |
+| ~orpheus-local-extensions~   | ~mp3~, ~flac~, ~opus~, … | what the files tab shows |
 
-`orpheus-local-audio-driver` is the escape hatch for a machine that needs a
-specific device: `"pipewire"`, `"coreaudio/1"`, `"wasapi"`, `"alsa/hw:1,0"`.
+~orpheus-local-audio-driver~ is the escape hatch for a machine that needs a
+specific device: ~"pipewire"~, ~"coreaudio/1"~, ~"wasapi"~, ~"alsa/hw:1,0"~.
 Left nil, the platform decides (see [[#platforms][Platforms]]).
 
 *** The SSH backend
@@ -540,15 +540,15 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 
 | Option                          | Default | Meaning                                         |
 |---------------------------------+---------+-------------------------------------------------|
-| `orpheus-ssh-host`              | `nil`   | `host` or `user@host`; nil means not configured |
-| `orpheus-ssh-directory`         | `nil`   | remote start directory; nil is the login home   |
-| `orpheus-ssh-program`           | `"ssh"` | the ssh program                                 |
-| `orpheus-ssh-extra-args`        | `nil`   | more ssh arguments, as a list                   |
-| `orpheus-ssh-sftp-program`      | `"sftp"` | sftp program used when cat is unavailable      |
-| `orpheus-ssh-sftp-extra-args`   | `nil`   | more sftp arguments, as a list                  |
-| `orpheus-ssh-concurrency`       | `2`     | simultaneous ssh downloads                      |
-| `orpheus-ssh-prefetch`          | `2`     | upcoming queue tracks fetched in the background |
-| `orpheus-ssh-cache-count`       | `8`     | completed tracks kept in the cache              |
+| ~orpheus-ssh-host~              | ~nil~   | ~host~ or ~user@host~; nil means not configured |
+| ~orpheus-ssh-directory~         | ~nil~   | remote start directory; nil is the login home   |
+| ~orpheus-ssh-program~           | ~"ssh"~ | the ssh program                                 |
+| ~orpheus-ssh-extra-args~        | ~nil~   | more ssh arguments, as a list                   |
+| ~orpheus-ssh-sftp-program~      | ~"sftp"~ | sftp program used when cat is unavailable      |
+| ~orpheus-ssh-sftp-extra-args~   | ~nil~   | more sftp arguments, as a list                  |
+| ~orpheus-ssh-concurrency~       | ~2~     | simultaneous ssh downloads                      |
+| ~orpheus-ssh-prefetch~          | ~2~     | upcoming queue tracks fetched in the background |
+| ~orpheus-ssh-cache-count~       | ~8~     | completed tracks kept in the cache              |
 
 *** Playlists
 :PROPERTIES:
@@ -557,10 +557,10 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 
 | Option                       | Default                           | Meaning                                             |
 |------------------------------+-----------------------------------+-----------------------------------------------------|
-| `orpheus-playlist-directory` | `$XDG_DATA_HOME/orpheus/playlists` | where portable playlists are read and written       |
+| ~orpheus-playlist-directory~ | ~$XDG_DATA_HOME/orpheus/playlists~ | where portable playlists are read and written       |
 
-The default falls back to `~/.local/share/orpheus/playlists` when
-`XDG_DATA_HOME` is unset.  The directory is made on the first save; an empty
+The default falls back to =~/.local/share/orpheus/playlists= when
+~XDG_DATA_HOME~ is unset.  The directory is made on the first save; an empty
 one is a tab with no rows.
 
 *** The interface and the visualizer
@@ -570,21 +570,21 @@ one is a tab with no rows.
 
 | Option                      | Default   | Meaning                                  |
 |-----------------------------+-----------+------------------------------------------|
-| `orpheus-ui-buffer-name`    | `"*orpheus*"` | the player's buffer                  |
-| `orpheus-ui-plain-ascii`    | `nil`     | ASCII glyphs instead of Unicode          |
-| `orpheus-ui-icons`          | `t`       | a glyph for each row's kind              |
-| `orpheus-ui-show-art`       | `t`       | draw cover art in a graphical frame      |
-| `orpheus-ui-show-now-playing` | `t`     | draw the now-playing card above the list |
-| `orpheus-ui-art-size`       | `220`     | longest side of the art, in pixels       |
-| `orpheus-ui-progress-width` | `16`      | columns of the progress bar              |
-| `orpheus-progress-filled-char` | `━`    | the played part of the bar               |
-| `orpheus-progress-empty-char`  | `─`    | the rest of the bar                      |
-| `orpheus-vis-program`       | `"cava"`  | the visualizer program                   |
-| `orpheus-vis-bars`          | `32`      | bars asked for                           |
-| `orpheus-vis-framerate`     | `30`      | frames per second drawn                  |
-| `orpheus-vis-input`         | `nil`     | cava's input method, or nil for the platform |
-| `orpheus-vis-graphical`     | `t`       | SVG bars in a graphical frame            |
-| `orpheus-vis-colors`        | five colours | the bar ramp, quiet to loud           |
+| ~orpheus-ui-buffer-name~    | ~"*orpheus*"~ | the player's buffer                  |
+| ~orpheus-ui-plain-ascii~    | ~nil~     | ASCII glyphs instead of Unicode          |
+| ~orpheus-ui-icons~          | ~t~       | a glyph for each row's kind              |
+| ~orpheus-ui-show-art~       | ~t~       | draw cover art in a graphical frame      |
+| ~orpheus-ui-show-now-playing~ | ~t~     | draw the now-playing card above the list |
+| ~orpheus-ui-art-size~       | ~220~     | longest side of the art, in pixels       |
+| ~orpheus-ui-progress-width~ | ~16~      | columns of the progress bar              |
+| ~orpheus-progress-filled-char~ | ~━~    | the played part of the bar               |
+| ~orpheus-progress-empty-char~  | ~─~    | the rest of the bar                      |
+| ~orpheus-vis-program~       | ~"cava"~  | the visualizer program                   |
+| ~orpheus-vis-bars~          | ~32~      | bars asked for                           |
+| ~orpheus-vis-framerate~     | ~30~      | frames per second drawn                  |
+| ~orpheus-vis-input~         | ~nil~     | cava's input method, or nil for the platform |
+| ~orpheus-vis-graphical~     | ~t~       | SVG bars in a graphical frame            |
+| ~orpheus-vis-colors~        | five colours | the bar ramp, quiet to loud           |
 
 ** Backends
 :PROPERTIES:
@@ -596,49 +596,49 @@ one is a tab with no rows.
 :CUSTOM_ID: what-a-backend-is
 :END:
 
-A backend is a `cl-defstruct` that includes `orpheus-backend` and implements
+A backend is a ~cl-defstruct~ that includes ~orpheus-backend~ and implements
 these generics from =orpheus-backend.el=:
 
 | Generic                          | Meaning                                        |
 |----------------------------------+------------------------------------------------|
-| `orpheus-backend-connected-p`    | is it ready to take commands?                  |
-| `orpheus-backend-connect`        | connect, then call back with the backend or nil |
-| `orpheus-backend-disconnect`     | close it                                       |
-| `orpheus-backend-status`         | an `orpheus-status`: state, elapsed, total, volume, flags, song id |
-| `orpheus-backend-track`          | an `orpheus-track`: URI, title, artist, album, duration, … |
-| `orpheus-backend-queue`          | the queue as `orpheus-item` rows                |
-| `orpheus-backend-browse`         | one tab's rows, for a kind and a path           |
-| `orpheus-backend-add`            | append URIs to the queue                       |
-| `orpheus-backend-play-uri`       | play a URI now                                 |
-| `orpheus-backend-portable-uri`   | store a URI as a library-relative path          |
-| `orpheus-backend-playlist-uri`   | resolve a playlist URI for the backend          |
-| `orpheus-backend-command`        | play, pause, toggle, stop, next, previous, seek, volume, repeat, random, single, consume, update, rescan, clear, shuffle, delete, save, playpos, playid, load |
-| `orpheus-backend-album-art`      | a file path to the cover, or nil               |
-| `orpheus-backend-downloads`      | active and recent transfers as rows, when it has a `downloads` capability |
-| `orpheus-backend-cancel-download` | cancel the transfer for a URI                 |
-| `orpheus-backend-capabilities`   | which of the browse kinds it can do            |
+| ~orpheus-backend-connected-p~    | is it ready to take commands?                  |
+| ~orpheus-backend-connect~        | connect, then call back with the backend or nil |
+| ~orpheus-backend-disconnect~     | close it                                       |
+| ~orpheus-backend-status~         | an ~orpheus-status~: state, elapsed, total, volume, flags, song id |
+| ~orpheus-backend-track~          | an ~orpheus-track~: URI, title, artist, album, duration, … |
+| ~orpheus-backend-queue~          | the queue as ~orpheus-item~ rows                |
+| ~orpheus-backend-browse~         | one tab's rows, for a kind and a path           |
+| ~orpheus-backend-add~            | append URIs to the queue                       |
+| ~orpheus-backend-play-uri~       | play a URI now                                 |
+| ~orpheus-backend-portable-uri~   | store a URI as a library-relative path          |
+| ~orpheus-backend-playlist-uri~   | resolve a playlist URI for the backend          |
+| ~orpheus-backend-command~        | play, pause, toggle, stop, next, previous, seek, volume, repeat, random, single, consume, update, rescan, clear, shuffle, delete, save, playpos, playid, load |
+| ~orpheus-backend-album-art~      | a file path to the cover, or nil               |
+| ~orpheus-backend-downloads~      | active and recent transfers as rows, when it has a ~downloads~ capability |
+| ~orpheus-backend-cancel-download~ | cancel the transfer for a URI                 |
+| ~orpheus-backend-capabilities~   | which of the browse kinds it can do            |
 
-The browse kinds are `queue`, `downloads`, `directories`, `artists`,
-`albumartists`, `albums`, `playlists` and `search`; the interface draws a tab
-per kind a backend claims.  A row is an `orpheus-item` with a label, a detail column, a
-kind, and an alist whose `uri` makes it playable and whose `browse` is a
-`(KIND . ARG)` to descend into.
+The browse kinds are ~queue~, ~downloads~, ~directories~, ~artists~,
+~albumartists~, ~albums~, ~playlists~ and ~search~; the interface draws a tab
+per kind a backend claims.  A row is an ~orpheus-item~ with a label, a detail column, a
+kind, and an alist whose ~uri~ makes it playable and whose ~browse~ is a
+~(KIND . ARG)~ to descend into.
 
 Three backends are shipped and are the reference implementations:
 
-- =orpheus-mpd.el= — a complete MPD client on `make-network-process`: TCP or a
-  unix socket, password, serialized replies, `ACK` errors, and the `albumart`
-  and `readpicture` binary payloads for cover art.
+- =orpheus-mpd.el= — a complete MPD client on ~make-network-process~: TCP or a
+  unix socket, password, serialized replies, ~ACK~ errors, and the ~albumart~
+  and ~readpicture~ binary payloads for cover art.
 - =orpheus-local.el= — mpv over its JSON IPC socket, with the queue kept in
-  Emacs, tags read from mpv's `metadata` property, cover art found next to the
+  Emacs, tags read from mpv's ~metadata~ property, cover art found next to the
   file or in its album folder, or extracted with ffmpeg, and URLs delegated to
   mpv (and so to yt-dlp).
-- =orpheus-ssh.el= — remote files over ssh and mpv here: `ls -1p' fills the
-  files tab, `find' fills Search, and `cat' streams the chosen track into a
+- =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
+  files tab, ~find~ fills Search, and ~cat~ streams the chosen track into a
   private cache file; a cover in the track's folder is copied to the same cache.
-  `sftp' takes over when the shell rejects `cat'.  A one-time check reports the
+  ~sftp~ takes over when the shell rejects ~cat~.  A one-time check reports the
   remote commands and shell features.  Transfers run
-  in a queue of at most `orpheus-ssh-concurrency', a play request goes ahead of
+  in a queue of at most ~orpheus-ssh-concurrency~, a play request goes ahead of
   the background prefetches, and the Downloads tab shows each one.  The local
   backend plays a copy once it is complete.  There is no daemon on the far side,
   and the cache goes away on disconnect and when Emacs exits.
@@ -678,8 +678,8 @@ Register a constructor and implement the generics:
 Two things make a backend feel finished: it calls its callbacks from process
 filters rather than from a blocking read, and it degrades by claiming fewer
 capabilities instead of lying about them.  A skeleton like the one above needs
-a `orpheus--spotify-call' of your own — an asynchronous wrapper around
-whichever client you drive, `spotify_player` and `playerctl` being the usual
+a ~orpheus--spotify-call~ of your own — an asynchronous wrapper around
+whichever client you drive, ~spotify_player~ and ~playerctl~ being the usual
 candidates.  No Spotify backend ships here because its authentication belongs
 to your account, not to this repository.
 
@@ -688,14 +688,14 @@ to your account, not to this repository.
 :CUSTOM_ID: youtube
 :END:
 
-No extra backend is needed: with `orpheus-backend` set to `local`, any URL mpv
+No extra backend is needed: with ~orpheus-backend~ set to ~local~, any URL mpv
 can open plays —
 
 #+begin_src emacs-lisp
 (orpheus-play-url "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 #+end_src
 
-— and when `yt-dlp` is installed mpv uses it automatically.  Seeking and
+— and when ~yt-dlp~ is installed mpv uses it automatically.  Seeking and
 metadata work where the extractor provides them.
 
 ** Graphics, and how it degrades
@@ -705,15 +705,15 @@ metadata work where the extractor provides them.
 
 - *In a graphical frame* the cover for the current track, or for the album
   folder being browsed when the track has none, is drawn above the list at
-  `orpheus-ui-art-size`; an image Emacs cannot decode is skipped.  The
+  ~orpheus-ui-art-size~; an image Emacs cannot decode is skipped.  The
   visualizer is an SVG bar graph with rounded bars and a colour ramp.
 - *In a terminal* no cover is fetched or drawn, and the list, the status line,
   the progress bar and the faces are unchanged.  The visualizer falls back to
   block characters, which is a real rendering, not a placeholder.
 - *In either* the status line is text and the progress bar is Unicode by
-  default and ASCII with `orpheus-ui-plain-ascii`.
+  default and ASCII with ~orpheus-ui-plain-ascii~.
 - *Over SSH* nothing is different from a local terminal, because nothing needs
-  a display: `display-graphic-p` is the only test that matters.
+  a display: ~display-graphic-p~ is the only test that matters.
 
 ** Platforms
 :PROPERTIES:
@@ -726,9 +726,9 @@ metadata work where the extractor provides them.
 :END:
 
 MPD's own audio output is the PipeWire, PulseAudio or ALSA one you configured
-in `mpd.conf`; orpheus does not touch it.  The local backend asks mpv for
-`--ao=pipewire,pulse,alsa`, so PipeWire is used when it is there and mpv falls
-back by itself when it is not.  cava captures with `method = pipewire`, the
+in ~mpd.conf~; orpheus does not touch it.  The local backend asks mpv for
+~--ao=pipewire,pulse,alsa~, so PipeWire is used when it is there and mpv falls
+back by itself when it is not.  cava captures with ~method = pipewire~, the
 monitor of the default sink, which is why the visualizer draws what any player
 is playing.
 
@@ -737,8 +737,8 @@ is playing.
 :CUSTOM_ID: macos
 :END:
 
-MPD uses CoreAudio.  The local backend asks mpv for `--ao=coreaudio`, and
-`orpheus-vis-input` defaults to cava's `portaudio` input.  That input records
+MPD uses CoreAudio.  The local backend asks mpv for ~--ao=coreaudio~, and
+~orpheus-vis-input~ defaults to cava's ~portaudio~ input.  That input records
 an *input* device, so hearing system output in the visualizer needs a loopback
 device such as BlackHole; without one, MPD and mpv still play, and the
 visualizer shows silence.  Cover art, notifications and the rest are the same
@@ -749,12 +749,12 @@ as anywhere else.
 :CUSTOM_ID: windows-and-everything-else
 :END:
 
-The local backend asks mpv for `--ao=wasapi` on Windows and drives it over a
+The local backend asks mpv for ~--ao=wasapi~ on Windows and drives it over a
 named pipe; that path is written and compiled but untested, so treat it as
 unproven rather than supported.  MPD works wherever MPD does — that includes
 an MPD on another machine, which is the case that needs no platform support at
 all.  Nothing in the package reads or writes a path in a platform-specific way
-beyond `temporary-file-directory` and `orpheus-cache-directory`.
+beyond ~temporary-file-directory~ and ~orpheus-cache-directory~.
 
 ** Development
 :PROPERTIES:
@@ -772,20 +772,20 @@ maak release -- minor # bump, close NEWS, gate, commit, tag, push, publish
 maak repl       # Emacs with the package loaded and the player open
 #+end_src
 
-`maak release` refuses a dirty or unsynced `trunk` and maak's `--dry-run`,
-closes the `* Unreleased` heading with today's date, runs the full gate, commits
-the release, tags `vX.Y.Z`, pushes both, and creates the GitHub release.  It
-takes an explicit version or `patch`, `minor` or `major`; `gh` must already be
+~maak release~ refuses a dirty or unsynced ~trunk~ and maak's ~--dry-run~,
+closes the ~* Unreleased~ heading with today's date, runs the full gate, commits
+the release, tags ~vX.Y.Z~, pushes both, and creates the GitHub release.  It
+takes an explicit version or ~patch~, ~minor~ or ~major~; ~gh~ must already be
 authenticated.
 
 The unit suite needs nothing but Emacs: it starts a fake MPD in the same
 process, on a loopback port, and speaks the protocol at it — greeting,
-password, replies queued before the connection is ready, `ACK` errors, a unix
+password, replies queued before the connection is ready, ~ACK~ errors, a unix
 socket, and a binary album-art payload.  The integration suite starts real
-programs in a temporary directory and skips itself when `mpd`, `mpv` or
-`ffmpeg` are missing.
+programs in a temporary directory and skips itself when ~mpd~, ~mpv~ or
+~ffmpeg~ are missing.
 
-=AGENTS.md= is generated by `maak agents` from the pinned skills in
+=AGENTS.md= is generated by ~maak agents~ from the pinned skills in
 =maak.scm=; edit that task, never the generated file.
 
 ** License
@@ -794,4 +794,4 @@ programs in a temporary directory and skips itself when `mpd`, `mpv` or
 :END:
 
 MIT.  The full text is in [[file:LICENSE]], and every source file carries an
-`SPDX-License-Identifier: MIT` line.  History lives in [[file:NEWS.org]].
+~SPDX-License-Identifier: MIT~ line.  History lives in [[file:NEWS.org]].
