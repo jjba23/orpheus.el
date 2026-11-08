@@ -9,6 +9,14 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Fixed
+
+- The SSH backend no longer reports a track as playing while `ssh cat` is still
+  copying it.  It says what it is downloading, stays stopped, and starts when
+  mpv has the local copy.
+
 * 0.4.0 (2026-11-08)
 
 *** Fixed

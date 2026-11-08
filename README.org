@@ -301,8 +301,10 @@ Music on another machine is copied over ssh and played by mpv here:
 #+end_src
 
 There is no daemon on the far side: `ls -1p` fills the files tab, and RET
-downloads the chosen track.  The copy lives in a private temporary directory,
-which is deleted when the backend disconnects and when Emacs exits.  Your key
+downloads the chosen track.  Playback begins once the copy is complete, so a
+large track spends its transfer time downloading rather than playing.  The copy
+lives in a private temporary directory, which is deleted when the backend
+disconnects and when Emacs exits.  Your key
 must already let you in, because ssh has no terminal in which to ask for a
 passphrase.  A host whose key is not in `~/.ssh/known_hosts' needs one
 `ssh music.example.org' from a terminal first, or
@@ -521,8 +523,9 @@ Three backends are shipped and are the reference implementations:
   file or extracted with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).
 - =orpheus-ssh.el= — remote files over ssh and mpv here: `ls -1p' fills the
   files tab, `cat' copies the chosen track into a temporary directory, and the
-  local backend plays it.  There is no daemon on the far side, and the
-  temporary directory goes away on disconnect and when Emacs exits.
+  local backend plays it once the copy is complete.  There is no daemon on the
+  far side, and the temporary directory goes away on disconnect and when Emacs
+  exits.
 
 ** Adding one
 :PROPERTIES:

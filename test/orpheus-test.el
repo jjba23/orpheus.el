@@ -1389,9 +1389,26 @@ so they are allowed by name."
                (should (equal (with-temp-buffer
                                 (insert-file-contents (cadr loaded))
                                 (buffer-string))
-                              "fake audio\n"))))
+                              "fake audio\n"))
+               (should (eq (orpheus-status-state
+                            (orpheus-local-instance-status ssh))
+                           'play))))
          (orpheus-backend-disconnect ssh))
        (should-not (file-exists-p (cadr loaded)))))))
+
+(ert-deftest orpheus-test/ssh-does-not-claim-playback-while-downloading ()
+  "A pending copy leaves the player stopped until mpv can open it."
+  (let ((ssh (orpheus-make-backend 'ssh)))
+    (setf (orpheus-local-instance-queue ssh) (list "Music/Song.mp3"))
+    (cl-letf (((symbol-function 'orpheus-local--resolve-uri)
+               (lambda (_backend _uri _callback) nil)))
+      (orpheus-local--play-index ssh 0)
+      (should (equal (orpheus-track-uri
+                      (orpheus-local-instance-track ssh))
+                     "Music/Song.mp3"))
+      (should-not (eq (orpheus-status-state
+                       (orpheus-local-instance-status ssh))
+                      'play)))))
 
 (ert-deftest orpheus-test/ssh-without-a-host-says-so ()
   "Without `orpheus-ssh-host' no mpv is started and the message says why."

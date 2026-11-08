@@ -228,6 +228,7 @@ machine whose key is not in `~/.ssh/known_hosts' yet, belongs here."
       (message "orpheus: set `orpheus-ssh-host' to the machine your music is on")
       (funcall callback nil))
      (t
+      (message "orpheus: downloading %s" (file-name-nondirectory uri))
       (let* ((path (orpheus-ssh--cache-file ssh uri))
              (buffer (generate-new-buffer " *orpheus-ssh-download*"))
              (process

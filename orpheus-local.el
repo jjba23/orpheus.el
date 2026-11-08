@@ -177,7 +177,7 @@ see `orpheus-local--resolve-uri'."
             (token (1+ (orpheus-local-instance-load-token local))))
         (setf (orpheus-local-instance-load-token local) token)
         (setf (orpheus-status-songid status) (1+ index))
-        (setf (orpheus-status-state status) 'play)
+        (setf (orpheus-status-state status) 'stop)
         (setf (orpheus-status-elapsed status) 0.0)
         (setf (orpheus-status-total status) 0.0)
         (orpheus-local--resolve-uri
@@ -185,12 +185,12 @@ see `orpheus-local--resolve-uri'."
          (lambda (path)
            (when (= token (orpheus-local-instance-load-token local))
              (if path
-                 (progn
+                 (let ((paused (eq (orpheus-status-state status) 'pause)))
+                   (setf (orpheus-status-state status) (if paused 'pause 'play))
                    (orpheus-local--send local (list "loadfile" path "replace"))
                    (orpheus-local--send
                     local (list "set_property" "pause"
-                                (if (eq (orpheus-status-state status) 'pause)
-                                    :true :false))))
+                                (if paused :true :false))))
                (setf (orpheus-status-state status) 'stop)
                (message "orpheus: cannot play %s" uri)))))))))
 
