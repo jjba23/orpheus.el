@@ -5,6 +5,8 @@
 #+language: en
 #+options: toc:nil num:nil
 
+* orpheus.el
+
 [[https://jointhefreeworld.org/ggg/dist/emacs-lisp.svg]] [[https://jointhefreeworld.org/ggg/dist/license-mit.svg]]
 
 /orpheus/ is the singer who could charm stones and rivers; this one charms a
@@ -38,7 +40,7 @@ and total, a progress bar, the volume and the four flags (repeat, random,
 single, consume).  The SSH backend adds a Downloads tab after Queue, with a
 row for every active, queued, finished or failed transfer.
 
-* Why write orpheus, yet another Emacs player? (YAEP)
+** Why write orpheus, yet another Emacs player? (YAEP)
 :PROPERTIES:
 :CUSTOM_ID: why-orpheus
 :END:
@@ -72,12 +74,12 @@ prove it is real.
   (it starts a fake MPD on a loopback port), and the integration suite starts a
   real MPD and a real mpv and plays through them.
 
-* Features
+** Features
 :PROPERTIES:
 :CUSTOM_ID: features
 :END:
 
-** The player
+*** The player
 :PROPERTIES:
 :CUSTOM_ID: the-player
 :END:
@@ -137,7 +139,7 @@ prove it is real.
   at point; `orpheus-play-url' takes a link, and mpv hands a video page to
   yt-dlp when it is installed.
 
-** Portable playlists
+*** Portable playlists
 :PROPERTIES:
 :CUSTOM_ID: portable-playlists
 :END:
@@ -176,7 +178,7 @@ mirror it, and one saved from either of those plays locally.  An absolute path
 outside the configured roots is still passed through unchanged, because no
 format can know where another machine keeps it.
 
-** The visualizer
+*** The visualizer
 :PROPERTIES:
 :CUSTOM_ID: the-visualizer
 :END:
@@ -192,7 +194,7 @@ The image is the package's own `orpheus-vis--svg' fed a sample frame and
 exported with Inkscape — no screenshot of a separate application.
 #+end_quote
 
-** What is not here yet
+*** What is not here yet
 :PROPERTIES:
 :CUSTOM_ID: what-is-not-here-yet
 :END:
@@ -203,12 +205,12 @@ playback on the local backend (mpv plays one file at a time there, so the gap
 is the time Emacs takes to load the next).  MPD gives gapless playback by
 itself, because the daemon owns the whole queue.
 
-* Ways to install
+** Ways to install
 :PROPERTIES:
 :CUSTOM_ID: ways-to-install
 :END:
 
-** From a checkout
+*** From a checkout
 :PROPERTIES:
 :CUSTOM_ID: from-a-checkout
 :END:
@@ -218,7 +220,7 @@ itself, because the daemon owns the whole queue.
 (require 'orpheus)
 #+end_src
 
-** With straight.el
+*** With straight.el
 :PROPERTIES:
 :CUSTOM_ID: with-straight.el
 :END:
@@ -228,7 +230,7 @@ itself, because the daemon owns the whole queue.
  '(orpheus :type git :host github :repo "jjba23/orpheus.el"))
 #+end_src
 
-** With use-package
+*** With use-package
 :PROPERTIES:
 :CUSTOM_ID: with-use-package
 :END:
@@ -247,7 +249,7 @@ the MPD backend, `mpv' (and `ffmpeg' for cover art extraction, `yt-dlp` for
 video links) for the local one, `ssh' (and `sftp' when the remote shell cannot
 run `cat') for the remote one, and `cava' for the visualizer.
 
-* Getting started
+** Getting started
 :PROPERTIES:
 :CUSTOM_ID: getting-started
 :END:
@@ -386,7 +388,7 @@ mpv must be installed here, and the audio comes out of this machine.  The start
 directory is relative to the login home or absolute; a leading `~` is not
 expanded, because the path is quoted for the remote shell.
 
-** Why MPD's queue is already full at the start
+*** Why MPD's queue is already full at the start
 :PROPERTIES:
 :CUSTOM_ID: why-mpds-queue-is-already-full
 :END:
@@ -401,7 +403,7 @@ nothing was added to it.  orpheus adds nothing on start.
 daemon forget it at shutdown.  The local backend is the other way round: Emacs
 keeps that queue, so it starts empty in every session.
 
-* Keys
+** Keys
 :PROPERTIES:
 :CUSTOM_ID: keys
 :END:
@@ -476,7 +478,7 @@ Outside the player buffer:
 All of the transport commands are ordinary interactive functions, so any of
 them can be bound in `global-map` or in a repeat map.
 
-* Configuration
+** Configuration
 :PROPERTIES:
 :CUSTOM_ID: configuration
 :END:
@@ -484,7 +486,7 @@ them can be bound in `global-map` or in a repeat map.
 Every option lives in the `orpheus` customization group, so `M-x customize-group
 RET orpheus` shows the same list.
 
-** The session
+*** The session
 :PROPERTIES:
 :CUSTOM_ID: the-session
 :END:
@@ -499,7 +501,7 @@ RET orpheus` shows the same list.
 | `orpheus-mode-line-width`  | `40`    | columns the mode-line track is given           |
 | `orpheus-cache-directory`  | `$XDG_CACHE_HOME/orpheus/` | cover art and generated files |
 
-** The MPD backend
+*** The MPD backend
 :PROPERTIES:
 :CUSTOM_ID: the-mpd-backend
 :END:
@@ -512,7 +514,7 @@ RET orpheus` shows the same list.
 | `orpheus-mpd-password`    | `nil`       | password, or nil for `MPD_PASSWORD`/auth-source |
 | `orpheus-mpd-search-tag`  | `"any"`     | the tag search looks in                    |
 
-** The local backend
+*** The local backend
 :PROPERTIES:
 :CUSTOM_ID: the-local-backend
 :END:
@@ -531,7 +533,7 @@ RET orpheus` shows the same list.
 specific device: `"pipewire"`, `"coreaudio/1"`, `"wasapi"`, `"alsa/hw:1,0"`.
 Left nil, the platform decides (see [[#platforms][Platforms]]).
 
-** The SSH backend
+*** The SSH backend
 :PROPERTIES:
 :CUSTOM_ID: the-ssh-backend
 :END:
@@ -548,7 +550,7 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 | `orpheus-ssh-prefetch`          | `2`     | upcoming queue tracks fetched in the background |
 | `orpheus-ssh-cache-count`       | `8`     | completed tracks kept in the cache              |
 
-** Playlists
+*** Playlists
 :PROPERTIES:
 :CUSTOM_ID: playlist-configuration
 :END:
@@ -561,7 +563,7 @@ The default falls back to `~/.local/share/orpheus/playlists` when
 `XDG_DATA_HOME` is unset.  The directory is made on the first save; an empty
 one is a tab with no rows.
 
-** The interface and the visualizer
+*** The interface and the visualizer
 :PROPERTIES:
 :CUSTOM_ID: the-interface-and-the-visualizer
 :END:
@@ -584,12 +586,12 @@ one is a tab with no rows.
 | `orpheus-vis-graphical`     | `t`       | SVG bars in a graphical frame            |
 | `orpheus-vis-colors`        | five colours | the bar ramp, quiet to loud           |
 
-* Backends
+** Backends
 :PROPERTIES:
 :CUSTOM_ID: backends
 :END:
 
-** What a backend is
+*** What a backend is
 :PROPERTIES:
 :CUSTOM_ID: what-a-backend-is
 :END:
@@ -641,7 +643,7 @@ Three backends are shipped and are the reference implementations:
   backend plays a copy once it is complete.  There is no daemon on the far side,
   and the cache goes away on disconnect and when Emacs exits.
 
-** Adding one
+*** Adding one
 :PROPERTIES:
 :CUSTOM_ID: adding-one
 :END:
@@ -681,7 +683,7 @@ whichever client you drive, `spotify_player` and `playerctl` being the usual
 candidates.  No Spotify backend ships here because its authentication belongs
 to your account, not to this repository.
 
-** YouTube
+*** YouTube
 :PROPERTIES:
 :CUSTOM_ID: youtube
 :END:
@@ -696,7 +698,7 @@ can open plays —
 — and when `yt-dlp` is installed mpv uses it automatically.  Seeking and
 metadata work where the extractor provides them.
 
-* Graphics, and how it degrades
+** Graphics, and how it degrades
 :PROPERTIES:
 :CUSTOM_ID: graphics
 :END:
@@ -713,12 +715,12 @@ metadata work where the extractor provides them.
 - *Over SSH* nothing is different from a local terminal, because nothing needs
   a display: `display-graphic-p` is the only test that matters.
 
-* Platforms
+** Platforms
 :PROPERTIES:
 :CUSTOM_ID: platforms
 :END:
 
-** GNU/Linux and PipeWire
+*** GNU/Linux and PipeWire
 :PROPERTIES:
 :CUSTOM_ID: gnulinux-and-pipewire
 :END:
@@ -730,7 +732,7 @@ back by itself when it is not.  cava captures with `method = pipewire`, the
 monitor of the default sink, which is why the visualizer draws what any player
 is playing.
 
-** macOS
+*** macOS
 :PROPERTIES:
 :CUSTOM_ID: macos
 :END:
@@ -742,7 +744,7 @@ device such as BlackHole; without one, MPD and mpv still play, and the
 visualizer shows silence.  Cover art, notifications and the rest are the same
 as anywhere else.
 
-** Windows and everything else
+*** Windows and everything else
 :PROPERTIES:
 :CUSTOM_ID: windows-and-everything-else
 :END:
@@ -754,7 +756,7 @@ an MPD on another machine, which is the case that needs no platform support at
 all.  Nothing in the package reads or writes a path in a platform-specific way
 beyond `temporary-file-directory` and `orpheus-cache-directory`.
 
-* Development
+** Development
 :PROPERTIES:
 :CUSTOM_ID: development
 :END:
@@ -786,7 +788,7 @@ programs in a temporary directory and skips itself when `mpd`, `mpv` or
 =AGENTS.md= is generated by `maak agents` from the pinned skills in
 =maak.scm=; edit that task, never the generated file.
 
-* License
+** License
 :PROPERTIES:
 :CUSTOM_ID: license
 :END:

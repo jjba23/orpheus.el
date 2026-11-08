@@ -9,6 +9,13 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Changed
+
+- README.org now uses one top-level Org heading with nested sections, so the
+  document has a single title and valid section hierarchy.
+
 * 0.9.0 (2026-11-08)
 
 *** Added
