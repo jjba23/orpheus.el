@@ -1424,8 +1424,8 @@ keystroke doubles it and a few of them fill it with copies."
          (text (with-temp-buffer
                  (insert-file-contents readme)
                  (buffer-string)))
-         (start (string-match "^\\* Configuration" text))
-         (end (string-match "^\\* Backends" text))
+         (start (string-match "^\\*+ Configuration" text))
+         (end (string-match "^\\*+ Backends" text))
          (named nil))
     (should start)
     (should end)
