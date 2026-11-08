@@ -651,8 +651,15 @@ maak            # the whole gate: clean, lint, unit suite
 maak lint       # byte-compile with warnings as errors, then checkdoc
 maak test       # the unit suite
 maak integration # the same checks against a real MPD and a real mpv
+maak release -- 0.4.1 # bump, close NEWS, gate, commit, tag, push, publish
 maak repl       # Emacs with the package loaded and the player open
 #+end_src
+
+`maak release` refuses a dirty or unsynced `trunk` and maak's `--dry-run`,
+closes the `* Unreleased` heading with today's date, runs the full gate, commits
+the release, tags `vX.Y.Z`, pushes both, and creates the GitHub release.  It
+takes an explicit version or `patch`, `minor` or `major`; `gh` must already be
+authenticated.
 
 The unit suite needs nothing but Emacs: it starts a fake MPD in the same
 process, on a loopback port, and speaks the protocol at it — greeting,

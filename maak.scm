@@ -7,7 +7,10 @@
 (define-module (maak)
   #:declarative? #t
   #:use-module (maak maak)
+  #:use-module (ice-9 popen)
+  #:use-module (ice-9 regex)
   #:use-module ((ice-9 rdelim) #:select (read-line))
+  #:use-module (srfi srfi-13)
   ;; The container helpers are imported under a prefix because the tasks below
   ;; are named the way maak exposes them on the command line -- `maak
   ;; container-build' -- and a task may not shadow the helper it calls.
@@ -335,6 +338,240 @@ over general advice, and the narrowest rule here wins over the broadest.
                     (newline port)
                     (display practice port))
                   agent-practices)))))
+;; ====== Releasing ======
+
+;; A release is the one task that writes to the repository, tags, pushes and
+;; publishes.  It refuses to start anywhere but a clean, synced trunk, and it
+;; runs the gate after the version and changelog are closed; a red gate puts
+;; both files back the way they were.
+
+(define (release-capture program . args)
+  "Run PROGRAM with ARGS and return its standard output.
+Signal an error when PROGRAM exits non-zero."
+  (let ((port (apply open-pipe* OPEN_READ program args)))
+    (let loop ((lines '()))
+      (let ((line (read-line port)))
+        (if (eof-object? line)
+            (let ((status (close-pipe port)))
+              (unless (zero? status)
+                (error (format #f "~a ~a failed with status ~a"
+                               program (string-join args " ") status)))
+              (string-concatenate-reverse
+               (map (lambda (line) (string-append line "\n")) lines)))
+            (loop (cons line lines)))))))
+
+(define (release-trim text)
+  "Remove leading and trailing whitespace from TEXT."
+  (let loop ((start 0) (end (string-length text)))
+    (cond ((and (< start end) (char-whitespace? (string-ref text start)))
+           (loop (1+ start) end))
+          ((and (< start end) (char-whitespace? (string-ref text (1- end))))
+           (loop start (1- end)))
+          (else (substring text start end)))))
+
+(define (release-git-output . args)
+  "Return what `git ARGS' writes, with surrounding whitespace removed."
+  (release-trim (apply release-capture "git" args)))
+
+(define (release-require-clean-tree)
+  "Refuse to release with local changes."
+  (unless (string-null? (release-git-output "status" "--porcelain"))
+    (error "release: the worktree is not clean; commit or stash first")))
+
+(define (release-require-synced-trunk)
+  "Refuse to release from a branch other than a trunk at origin/trunk."
+  (let ((branch (release-git-output "branch" "--show-current")))
+    (unless (string=? branch "trunk")
+      (error (format #f "release: on branch ~s, not trunk" branch))))
+  (run (list "git" "fetch" "origin" "trunk") #:verbose? #t)
+  (let ((head (release-git-output "rev-parse" "HEAD"))
+        (remote (release-git-output "rev-parse" "origin/trunk")))
+    (unless (string=? head remote)
+      (error "release: trunk and origin/trunk differ; push or pull first"))))
+
+(define (release-require-tag-absent tag)
+  "Refuse to reuse TAG."
+  (when (zero? (system* "git" "show-ref" "--verify" "--quiet" tag))
+    (error (format #f "release: tag ~a already exists" tag))))
+
+(define (release-require-gh)
+  "Refuse to publish when gh is not authenticated."
+  (unless (zero? (system* "gh" "auth" "status"))
+    (error "release: gh is not authenticated")))
+
+(define (release-version-parts version)
+  "Return VERSION's three numbers, or signal an error."
+  (let ((match (string-match "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$" version)))
+    (unless match
+      (error (format #f "release: ~s is not an X.Y.Z version" version)))
+    (map (lambda (n) (string->number (match:substring match n))) '(1 2 3))))
+
+(define (release-version>? a b)
+  "Return true when version A is newer than version B."
+  (let loop ((a (release-version-parts a))
+             (b (release-version-parts b)))
+    (cond ((null? a) #f)
+          ((> (car a) (car b)) #t)
+          ((< (car a) (car b)) #f)
+          (else (loop (cdr a) (cdr b))))))
+
+(define (release-next-version current bump)
+  "Return the version after CURRENT for BUMP.
+BUMP is an explicit X.Y.Z, or patch, minor or major."
+  (cond
+   ((string=? bump "patch")
+    (let* ((parts (release-version-parts current))
+           (major (car parts))
+           (minor (cadr parts))
+           (patch (caddr parts)))
+      (format #f "~a.~a.~a" major minor (1+ patch))))
+   ((string=? bump "minor")
+    (let* ((parts (release-version-parts current))
+           (major (car parts))
+           (minor (cadr parts)))
+      (format #f "~a.~a.0" major (1+ minor))))
+   ((string=? bump "major")
+    (let ((major (car (release-version-parts current))))
+      (format #f "~a.0.0" (1+ major))))
+   (else
+    (release-version-parts bump)
+    (unless (release-version>? bump current)
+      (error (format #f "release: ~a is not newer than ~a" bump current)))
+    bump)))
+
+(define (release-source-version)
+  "Return the version in orpheus.el, after checking both declarations."
+  (let* ((source (slurp "orpheus.el"))
+         (header (string-match
+                  ";;; Version: ([0-9]+\\.[0-9]+\\.[0-9]+)" source))
+         (constant (string-match
+                    "defconst orpheus-version \"([0-9]+\\.[0-9]+\\.[0-9]+)\""
+                    source)))
+    (unless (and header constant)
+      (error "release: orpheus.el has no Version header or orpheus-version"))
+    (let ((header-version (match:substring header 1))
+          (constant-version (match:substring constant 1)))
+      (unless (string=? header-version constant-version)
+        (error "release: the Version header and orpheus-version disagree"))
+      header-version)))
+
+(define (release-replace text old new what)
+  "Replace OLD with NEW in TEXT, or signal an error naming WHAT."
+  (unless (string-contains text old)
+    (error (format #f "release: cannot find ~a" what)))
+  (regexp-substitute/global #f (regexp-quote old) text 'pre new 'post))
+
+(define (release-source-text source current version)
+  "Return SOURCE with CURRENT replaced by VERSION in both declarations."
+  (release-replace
+   (release-replace source
+                    (format #f ";;; Version: ~a" current)
+                    (format #f ";;; Version: ~a" version)
+                    "the Version header")
+   (format #f "(defconst orpheus-version \"~a\"" current)
+   (format #f "(defconst orpheus-version \"~a\"" version)
+   "orpheus-version"))
+
+(define (release-news-text news version date)
+  "Return NEWS with its Unreleased heading closed as VERSION on DATE."
+  (let* ((marker "* Unreleased")
+         (at (string-contains news marker))
+         (start (and at (+ at (string-length marker))))
+         (next (and start (string-contains news "\n* " start)))
+         (body (and start (substring news start
+                                     (or next (string-length news))))))
+    (unless at
+      (error "release: NEWS.org has no * Unreleased heading"))
+    (unless (and body (string-match "[^ \t\n]" body))
+      (error "release: the Unreleased section is empty"))
+    (when (string-contains news (format #f "* ~a (" version))
+      (error (format #f "release: NEWS.org already has a ~a section" version)))
+    (release-replace news marker
+                     (format #f "* ~a (~a)" version date)
+                     "the Unreleased heading")))
+
+(define (release-section news version)
+  "Return the NEWS section for VERSION."
+  (let* ((marker (format #f "* ~a (" version))
+         (at (string-contains news marker)))
+    (unless at
+      (error (format #f "release: NEWS.org has no section for ~a" version)))
+    (let* ((next (string-contains news "\n* "
+                                 (+ at (string-length marker))))
+           (end (or next (string-length news))))
+      (release-trim (substring news at end)))))
+
+(define (release-notes section)
+  "Return SECTION as the Markdown body of a release."
+  (let ((lines (map (lambda (line)
+                      (cond ((string-prefix? "*** " line)
+                             (string-append "### " (substring line 4)))
+                            ((string-prefix? "** " line)
+                             (string-append "## " (substring line 3)))
+                            ((string-prefix? "* " line)
+                             (string-append "# " (substring line 2)))
+                            (else line)))
+                    (string-split section #\newline))))
+    (release-trim (string-join lines "\n"))))
+
+(define (release-run-gate source news)
+  "Run the full gate, restoring SOURCE and NEWS if it fails."
+  (catch #t
+    (lambda ()
+      (check)
+      (integration))
+    (lambda (key . args)
+      (release-write "orpheus.el" source)
+      (release-write "NEWS.org" news)
+      (apply throw key args))))
+
+(define (release-write path text)
+  "Write TEXT to PATH."
+  (call-with-output-file path
+    (lambda (port) (display text port))))
+
+(define (release . args)
+  "Cut a release: bump VERSION, close NEWS, gate, commit, tag, push and publish.
+VERSION is an explicit X.Y.Z, or patch, minor or major.
+Usage: maak release -- 0.4.1"
+  (when (dry-run?)
+    (error "release: refusing to run under --dry-run"))
+  (unless (= (length args) 1)
+    (error "usage: maak release -- X.Y.Z|patch|minor|major"))
+  (let* ((bump (car args))
+         (current (release-source-version))
+         (version (release-next-version current bump))
+         (date (strftime "%Y-%m-%d" (localtime (current-time))))
+         (tag (format #f "v~a" version))
+         (source (slurp "orpheus.el"))
+         (news (slurp "NEWS.org"))
+         (new-source (release-source-text source current version))
+         (new-news (release-news-text news version date)))
+    (release-require-clean-tree)
+    (release-require-synced-trunk)
+    (release-require-tag-absent tag)
+    (release-require-gh)
+    (release-write "orpheus.el" new-source)
+    (release-write "NEWS.org" new-news)
+    (release-run-gate source news)
+    (let* ((notes (release-notes (release-section new-news version)))
+           (body (string-append notes
+                                "\n\nThe gate is green: lint, unit tests, "
+                                "and integration tests.\n")))
+      (when (string-null? notes)
+        (error "release: the changelog section is empty"))
+      (run (list "git" "add" "NEWS.org" "orpheus.el") #:verbose? #t)
+      (run (list "git" "commit" "-m" (format #f "chore(release): ~a" version)
+                 "-m" body)
+           #:verbose? #t)
+      (run (list "git" "tag" "-a" tag "-m" (format #f "orpheus.el ~a" version))
+           #:verbose? #t)
+      (run (list "git" "push" "origin" "HEAD") #:verbose? #t)
+      (run (list "git" "push" "origin" tag) #:verbose? #t)
+      (run (list "gh" "release" "create" tag "--title" tag "--notes" notes)
+           #:verbose? #t)
+      (format #t "orpheus: released ~a\n" version))))
+
 ;; ====== Container tasks ======
 
 (define (container-build)

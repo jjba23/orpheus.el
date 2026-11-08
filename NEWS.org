@@ -11,6 +11,11 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 * Unreleased
 
+*** Added
+
+- `maak release` bumps the version, closes the changelog, runs the gate, tags
+  the release, pushes it, and creates the GitHub release.
+
 *** Fixed
 
 - The SSH backend no longer reports a track as playing while `ssh cat` is still
