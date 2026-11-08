@@ -1432,7 +1432,7 @@ keystroke doubles it and a few of them fill it with copies."
     (let ((section (substring text start end))
           (position 0))
       ;; Only the rows of the tables, whose first column is an option name.
-      (while (string-match "^| `\\(orpheus-[a-z0-9-]+\\)`" section position)
+      (while (string-match "^| \\(?:~\\|=\\)\\(orpheus-[a-z0-9-]+\\)\\(?:~\\|=\\)" section position)
         (push (intern (match-string 1 section)) named)
         (setq position (match-end 0))))
     (should (> (length named) 20))
@@ -1453,7 +1453,7 @@ so they are allowed by name."
          (position 0)
          (checked 0)
          (types '(orpheus-track orpheus-status orpheus-item)))
-    (while (string-match "`\\(orpheus-[a-z0-9-]*[a-z0-9]\\)`" text position)
+    (while (string-match "\\(?:~\\|=\\)\\(orpheus-[a-z0-9-]*[a-z0-9]\\)\\(?:~\\|=\\)" text position)
       (let ((symbol (intern (match-string 1 text))))
         (setq position (match-end 0))
         (unless (string-prefix-p "orpheus--" (symbol-name symbol))
@@ -1461,6 +1461,15 @@ so they are allowed by name."
           (should (or (boundp symbol) (fboundp symbol)
                       (memq symbol types))))))
     (should (> checked 30))))
+
+(ert-deftest orpheus-test/readme-uses-org-code-markup ()
+  "The README uses Org code markup, not Markdown backticks."
+  (let ((text (with-temp-buffer
+                (insert-file-contents
+                 (expand-file-name "README.org"
+                                   (file-name-directory orpheus-test--source)))
+                (buffer-string))))
+    (should-not (string-match-p "`" text))))
 
 ;;; Marks, icons and the parent row
 
