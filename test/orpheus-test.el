@@ -830,6 +830,10 @@ and the password with it."
     (should (keymapp orpheus-ui-mode-map))
     (dolist (key '("p" "s" "n" "a" "d" "?" "/" "g"))
       (should (commandp (lookup-key orpheus-ui-mode-map (kbd key)))))
+    (should (eq (lookup-key orpheus-ui-mode-map (kbd "p"))
+                #'orpheus-ui-previous-line))
+    (should (eq (lookup-key orpheus-ui-mode-map (kbd "SPC"))
+                #'orpheus-play-pause))
     (should (commandp (lookup-key orpheus-ui-mode-map (kbd "RET"))))))
 
 (ert-deftest orpheus-test/ui-render-queue ()
@@ -894,6 +898,48 @@ keystroke doubles it and a few of them fill it with copies."
         (orpheus-ui-add-all)
         ;; A row arrives as one URI, the whole tab as a list of them.
         (should (equal added '(("c.mp3") "c.mp3")))))))
+
+(ert-deftest orpheus-test/ui-add-asks-before-a-large-queue ()
+  "Queueing more than the threshold asks first; no leaves the queue alone."
+  (let* ((orpheus-ui-add-confirm-threshold 2)
+         (tab (orpheus-ui-tab-create
+               :kind 'directories :title "Directories"
+               :items (list (orpheus-item-create :label "One" :kind 'track
+                                                 :data '((uri . "a.mp3")))
+                            (orpheus-item-create :label "Two" :kind 'track
+                                                 :data '((uri . "b.mp3")))
+                            (orpheus-item-create :label "Three" :kind 'track
+                                                 :data '((uri . "c.mp3"))))))
+         (added nil)
+         (asked nil))
+    (setq orpheus-ui--tabs (vector tab) orpheus-ui--tab 0)
+    (cl-letf (((symbol-function 'orpheus-backend-add)
+               (lambda (_backend uris) (setq added uris)))
+              ((symbol-function 'y-or-n-p)
+               (lambda (prompt) (setq asked prompt) nil)))
+      (orpheus-ui-add-all)
+      (should asked)
+      (should-not added))
+    (cl-letf (((symbol-function 'orpheus-backend-add)
+               (lambda (_backend uris) (setq added uris)))
+              ((symbol-function 'y-or-n-p)
+               (lambda (_prompt) t)))
+      (orpheus-ui-add-all)
+      (should (equal added '("a.mp3" "b.mp3" "c.mp3"))))))
+
+(ert-deftest orpheus-test/ui-warns-about-a-huge-queue ()
+  "A queue of thousands says how to clear it, and says it once."
+  (let ((orpheus-ui-queue-warning-size 3)
+        (orpheus-ui--queue-warned nil)
+        (messages nil)
+        (tab (orpheus-ui-tab-create :kind 'queue :view 'queue :title "Queue")))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest args)
+                 (push (apply #'format format args) messages))))
+      (orpheus-ui--set-items tab (make-list 4 nil))
+      (should (string-match-p "D clears it" (car messages)))
+      (orpheus-ui--set-items tab (make-list 4 nil))
+      (should (= (length messages) 1)))))
 
 
 ;;; Helpers shared by the UI and the backends
@@ -1045,10 +1091,47 @@ so they are allowed by name."
                    (orpheus-ui-tab-create :kind 'directories :view 'directories
                                           :arg (list "Rock/Live"))))
                  '(directories "Rock/")))
+  ;; A top-level directory's parent is the root, which is the empty path.
+  (should (equal (orpheus-item-browse
+                  (orpheus-ui--parent-item
+                   (orpheus-ui-tab-create :kind 'directories :view 'directories
+                                          :arg (list "Rock/"))))
+                 '(directories "")))
   (should-not (orpheus-ui--parent-item
                (orpheus-ui-tab-create :kind 'directories :view 'directories)))
   (should-not (orpheus-ui--parent-item
                (orpheus-ui-tab-create :kind 'queue :view 'queue))))
+
+(ert-deftest orpheus-test/ui-parent-row-confirms ()
+  "RET on the `../' row moves the tab to the parent directory."
+  (let* ((tab (orpheus-ui-tab-create :kind 'directories :view 'directories
+                                     :title "Directories"
+                                     :arg '("Rock/Live/")))
+         (browsed nil)
+         (orpheus-ui-buffer-name
+          (generate-new-buffer-name "*orpheus-test-parent*"))
+         (orpheus-backend-current 'fake))
+    (with-temp-buffer
+      (rename-buffer orpheus-ui-buffer-name t)
+      (orpheus-ui-mode)
+      (setq orpheus-ui--tabs (vector tab)
+            orpheus-ui--tab 0)
+      (orpheus-ui--set-items tab
+                             (list (orpheus-item-create
+                                    :label "Song" :kind 'track
+                                    :data '((uri . "x.mp3")))))
+      (orpheus-ui--render)
+      (goto-char (point-min))
+      (orpheus-ui--place-point)
+      (cl-letf (((symbol-function 'orpheus-backend-connected-p)
+                 (lambda (&rest _) t))
+                ((symbol-function 'orpheus-backend-browse)
+                 (lambda (_backend view arg done)
+                   (setq browsed (list view arg))
+                   (funcall done nil))))
+        (orpheus-ui-confirm)
+        (should (equal (orpheus-ui-tab-arg tab) '("Rock/")))
+        (should (equal browsed '(directories ("Rock/"))))))))
 
 
 ;;; Reading only when something changed
@@ -1206,33 +1289,112 @@ so they are allowed by name."
                              "add \"b.mp3\"" "command_list_end"))))
         (orpheus-backend-disconnect mpd)))))
 
+(ert-deftest orpheus-test/mpd-add-skips-directories ()
+  "MPD's `add' expands a directory, so a directory URI is never sent."
+  (orpheus-test--with-fake-mpd
+      (lambda (line)
+        (if (string-prefix-p "command_list_end" line)
+            "OK\n"
+          nil))
+    (let ((mpd (orpheus-test--mpd-client)))
+      (unwind-protect
+          (progn
+            (orpheus-backend-add mpd '("Music/" "a.mp3"))
+            (should (orpheus-test--wait
+                     (lambda ()
+                       (member "command_list_end"
+                               orpheus-test--mpd-requests))))
+            (should (equal (nreverse (cl-copy-list orpheus-test--mpd-requests))
+                           '("command_list_begin" "add \"a.mp3\""
+                             "command_list_end"))))
+        (orpheus-backend-disconnect mpd)))))
+
 
 ;;; The SSH backend
 
-(ert-deftest orpheus-test/ssh-backend-is-mpd ()
-  "The SSH backend is an MPD client behind a tunnel, and says so."
+(defun orpheus-test--with-fake-ssh (function)
+  "Call FUNCTION with ssh replaced by the suite's fake program."
+  (let ((orpheus-ssh-program
+         (expand-file-name invocation-name invocation-directory))
+        (orpheus-ssh-extra-args
+         (list "-Q" "--batch" "-l"
+               (expand-file-name
+                "test/orpheus-fake-ssh.el"
+                (file-name-directory orpheus-test--source))
+               "--"))
+        (orpheus-ssh-host "fake.invalid"))
+    (funcall function)))
+
+(ert-deftest orpheus-test/ssh-backend-is-local ()
+  "The SSH backend plays remote files with mpv, not with MPD."
   (should (orpheus-backend-exists-p 'ssh))
   (let ((ssh (orpheus-make-backend 'ssh)))
-    (should (orpheus-mpd-p ssh))
+    (should (orpheus-local-p ssh))
+    (should-not (orpheus-mpd-p ssh))
     (should (equal (orpheus-backend-capabilities ssh)
-                   (orpheus-backend-capabilities
-                    (orpheus-make-backend 'mpd))))))
+                   '(queue directories)))))
 
-(ert-deftest orpheus-test/ssh-tunnel-args ()
-  "The tunnel forwards a loopback port to the daemon's port on the far side."
-  (should (equal (orpheus-ssh--tunnel-args "music.example.org" 16600 6600)
-                 '("-N" "-o" "ExitOnForwardFailure=yes"
-                   "-L" "127.0.0.1:16600:localhost:6600"
-                   "music.example.org"))))
+(ert-deftest orpheus-test/ssh-directory-command ()
+  "A remote path is one quoted shell word, joined without doubled slashes."
+  (should (equal (orpheus-ssh--join "" "Song.mp3") "Song.mp3"))
+  (should (equal (orpheus-ssh--join "Music/" "Album/")
+                 "Music/Album/"))
+  (should (equal (orpheus-ssh--directory-command "Music/")
+                 "ls -1p -- 'Music/'"))
+  (should (equal (orpheus-ssh--directory-command "")
+                 "ls -1p"))
+  (should (equal (orpheus-ssh--shell-quote "It's/")
+                 "'It'\\''s/'")))
 
-(ert-deftest orpheus-test/ssh-free-port-is-a-port ()
-  "A port nothing is listening on is found rather than guessed."
-  (let ((port (orpheus-ssh--free-port)))
-    (should (integerp port))
-    (should (> port 1023))))
+(ert-deftest orpheus-test/ssh-browses-remote-directories ()
+  "The files tab lists the remote directory and skips non-music files."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (items nil))
+       (unwind-protect
+           (progn
+             (orpheus-backend-browse ssh 'directories '("Music/")
+                                     (lambda (result) (setq items result)))
+             (should (orpheus-test--wait (lambda () items) 20))
+             (should (equal (mapcar #'orpheus-item-label items)
+                            '("Album/" "Song.mp3")))
+             (should (equal (orpheus-item-browse (car items))
+                            '(directories "Music/Album/")))
+             (should (equal (alist-get 'uri
+                                       (orpheus-item-data (cadr items)))
+                            "Music/Song.mp3")))
+         (orpheus-backend-disconnect ssh))))))
+
+(ert-deftest orpheus-test/ssh-plays-a-downloaded-copy ()
+  "Playing a remote file downloads it, loads the copy, and cleans up."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (sent nil)
+           (loaded nil))
+       (setf (orpheus-local-instance-queue ssh) (list "Music/Song.mp3"))
+       (unwind-protect
+           (progn
+             (cl-letf (((symbol-function 'orpheus-local--send)
+                        (lambda (_local command &optional _callback)
+                          (push command sent))))
+               (orpheus-local--play-index ssh 0)
+               (should (orpheus-test--wait
+                        (lambda ()
+                          (setq loaded (cl-find "loadfile" sent
+                                                :key #'car :test #'equal)))
+                        20))
+               (should (file-readable-p (cadr loaded)))
+               (should (equal (with-temp-buffer
+                                (insert-file-contents (cadr loaded))
+                                (buffer-string))
+                              "fake audio\n"))))
+         (orpheus-backend-disconnect ssh))
+       (should-not (file-exists-p (cadr loaded)))))))
 
 (ert-deftest orpheus-test/ssh-without-a-host-says-so ()
-  "Without `orpheus-ssh-host' the tunnel is not even attempted."
+  "Without `orpheus-ssh-host' no mpv is started and the message says why."
   (let ((orpheus-ssh-host nil)
         (reached 'none)
         (messages nil))
@@ -1245,40 +1407,5 @@ so they are allowed by name."
       (should (cl-some (lambda (text)
                          (string-match-p "orpheus-ssh-host" text))
                        messages)))))
-
-(ert-deftest orpheus-test/ssh-tunnel-reaches-the-daemon ()
-  "The tunnel is started, and the MPD behind it answers through it."
-  (orpheus-test--with-fake-mpd
-      (lambda (line)
-        (if (string-prefix-p "status" line)
-            "state: play\nvolume: 40\nOK\n"
-          "OK\n"))
-    (let* ((process-environment (cons "MPD_PASSWORD=fake" process-environment))
-           (orpheus-ssh-program (expand-file-name invocation-name
-                                                   invocation-directory))
-           (orpheus-ssh-extra-args
-            (list "-Q" "--batch" "-l"
-                  (expand-file-name
-                   "test/orpheus-fake-ssh.el"
-                   (file-name-directory orpheus-test--source))
-                  "--"))
-           (orpheus-ssh-host "fake.invalid")
-           (orpheus-ssh-mpd-port orpheus-test--mpd-port)
-           (orpheus-ssh-local-port nil)
-           (ssh (orpheus-make-backend 'ssh))
-           (connected nil)
-           (status nil))
-      (unwind-protect
-          (progn
-            (orpheus-backend-connect ssh
-                                     (lambda (backend)
-                                       (setq connected backend)))
-            (should (eq (orpheus-test--wait (lambda () connected) 20) ssh))
-            (should (orpheus-backend-connected-p ssh))
-            (orpheus-backend-status ssh (lambda (result) (setq status result)))
-            (should (orpheus-test--wait (lambda () status) 10))
-            (should (eq (orpheus-status-state status) 'play))
-            (should (= (orpheus-status-volume status) 40)))
-        (orpheus-backend-disconnect ssh)))))
 
 ;;; orpheus-test.el ends here

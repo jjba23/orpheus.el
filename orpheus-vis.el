@@ -58,8 +58,8 @@ The value is a cava input method: `pipewire', `pulse', `alsa',
   :type 'character :group 'orpheus)
 
 (defcustom orpheus-vis-colors
-  '("#3b82f6" "#22d3ee" "#34d399" "#fbbf24" "#f87171")
-  "Colours of the SVG bars, from quiet to loud."
+  '("#23395d" "#3f6f9e" "#7aa8c9" "#c3aede" "#e8cf9a")
+  "Colours of the SVG bars, from quiet to loud: deep Aegean to gold."
   :type '(repeat color) :group 'orpheus)
 
 (defcustom orpheus-vis-graphical t
@@ -159,7 +159,7 @@ The car is the list of bar heights, or nil while no frame is complete."
 
 (defun orpheus-vis--color (level)
   "Return the colour for a bar at LEVEL."
-  (let* ((colors (or orpheus-vis-colors '("#3b82f6")))
+  (let* ((colors (or orpheus-vis-colors '("#3f6f9e")))
          (index (min (1- (length colors))
                      (/ (* (max 0 (min 100 level)) (length colors)) 100))))
     (nth index colors)))

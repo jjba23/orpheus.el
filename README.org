@@ -15,9 +15,9 @@ the same tabs over the library, the same transport, cover art and a spectrum
 visualizer, with the keys Emacs fingers already know.  The difference is what
 plays the music: a backend is a small object that implements a handful of
 generic functions, and three of them ship here — one talks to a Music Player
-Daemon, one hands files and URLs to mpv, and one reaches a daemon on another
-machine through ssh.  Anything else that can be driven from the command line
-can become a fourth.
+Daemon, one hands files and URLs to mpv, and one copies files from another machine over
+ssh.  Anything else that can be driven from the command line can become a
+fourth.
 
 Everything is asynchronous: replies arrive in process filters and the status is
 read on a timer, so a slow server, a starting player or a hanging stream never
@@ -57,8 +57,8 @@ prove it is real.
 - *Nothing blocks.* :: No synchronously read socket and no
   `shell-command-to-string' in the path of the interface. MPD replies are
   parsed as they arrive, mpv speaks JSON over its IPC socket, the ssh backend's
-  tunnel is a process with a sentinel, and cava's frames are read by a filter
-  while you keep typing.
+  listings and downloads are processes with sentinels, and cava's frames are
+  read by a filter while you keep typing.
 - *One interface, two worlds.* :: Plain text, faces and a keymap. A terminal
   loses pictures and nothing else, and `orpheus-ui-plain-ascii' loses the
   Unicode for fonts that do not have it.
@@ -103,6 +103,8 @@ prove it is real.
   frame.
 - *Song change notifications.* :: Through `notifications-notify', with the cover
   as the icon, on by default and one flag away.
+- *A Greek palette.* :: Gold, marble, Aegean blue, iris and olive, chosen for a
+  dark or light frame, with a visualizer ramp that runs from deep sea to gold.
 - *A mode line you can click.* :: `orpheus-mode-line-mode' puts the playing
   track in the mode line of every buffer; `mouse-1' opens the player,
   `mouse-2' plays or pauses, and `mouse-3' opens the transport menu, so the
@@ -289,23 +291,25 @@ or, from anywhere:
 (orpheus-play-url "https://www.youtube.com/watch?v=...")
 #+end_src
 
-Music on another machine is the MPD player with a tunnel in front of it:
+Music on another machine is copied over ssh and played by mpv here:
 
 #+begin_src emacs-lisp
 (setq orpheus-backend 'ssh)
 (setq orpheus-ssh-host "music.example.org")   ; or "me@music.example.org"
+(setq orpheus-ssh-directory "Music")          ; nil starts in the login home
 (orpheus)
 #+end_src
 
-The daemon there must listen on its loopback interface, which is MPD's default,
-and your key must already let you in: the tunnel has no terminal in which to ask
-for a passphrase.  A host whose key is not in `~/.ssh/known_hosts' needs one
+There is no daemon on the far side: `ls -1p` fills the files tab, and RET
+downloads the chosen track.  The copy lives in a private temporary directory,
+which is deleted when the backend disconnects and when Emacs exits.  Your key
+must already let you in, because ssh has no terminal in which to ask for a
+passphrase.  A host whose key is not in `~/.ssh/known_hosts' needs one
 `ssh music.example.org' from a terminal first, or
 `(setq orpheus-ssh-extra-args '("-o" "StrictHostKeyChecking=accept-new"))' once.
-A password on the far side is looked up under `orpheus-ssh-host' and
-`orpheus-ssh-mpd-port' through `MPD_PASSWORD' or `auth-source', exactly as a
-local daemon's password is.  The audio comes out of the remote machine, which
-is the point.
+mpv must be installed here, and the audio comes out of this machine.  The start
+directory is relative to the login home or absolute; a leading `~` is not
+expanded, because the path is quoted for the remote shell.
 
 ** Why MPD's queue is already full at the start
 :PROPERTIES:
@@ -335,7 +339,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 |------------------------+----------------------------------------------------------|
 | `RET`                  | play the row, or open the album, artist or directory     |
 | `n`, `C-n`, `j`        | next row                                                 |
-| `C-p`, `k`             | previous row                                             |
+| `p`, `C-p`, `k`        | previous row                                             |
 | `C-v`, `M-v`           | one screen down, one screen up                           |
 | `M-<`, `M->`           | first row, last row                                      |
 | `TAB`, `S-TAB`         | next tab, previous tab                                   |
@@ -348,7 +352,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `D`                    | clear the queue                                          |
 | `/`, `C-s`             | search                                                   |
 | `C`                    | jump to the playing row                                  |
-| `SPC`, `p`             | play or pause                                            |
+| `SPC`                  | play or pause                                            |
 | `s`                    | stop                                                     |
 | `>`, `<`               | next track, previous track                               |
 | `f`, `b`               | seek forward, seek back                                  |
@@ -361,6 +365,13 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `?`                    | the key map in a buffer                                  |
 | `q`                    | bury the player                                          |
 | `mouse-1`, `mouse-2`   | select a row, play it                                    |
+
+Queueing is guarded: `A` (and `a` with many marks) asks before adding more than
+`orpheus-ui-add-confirm-threshold` rows, and a queue over
+`orpheus-ui-queue-warning-size` says how to clear it.  MPD also refuses a
+directory URI, because its `add` would expand the whole tree.  Connecting never
+queues anything; a queue that is already large was restored by MPD's own
+`state_file`, and `D` empties it.
 
 Outside the player buffer:
 
@@ -440,8 +451,7 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 | Option                    | Default | Meaning                                        |
 |---------------------------+---------+------------------------------------------------|
 | `orpheus-ssh-host`        | `nil`   | `host` or `user@host`; nil means not configured |
-| `orpheus-ssh-mpd-port`    | `6600`  | the daemon's port on the far side              |
-| `orpheus-ssh-local-port`  | `nil`   | loopback port of the tunnel, or nil for a free one |
+| `orpheus-ssh-directory`   | `nil`   | remote start directory; nil is the login home  |
 | `orpheus-ssh-program`     | `"ssh"` | the ssh program                                |
 | `orpheus-ssh-extra-args`  | `nil`   | more ssh arguments, as a list                  |
 
@@ -509,9 +519,10 @@ Three backends are shipped and are the reference implementations:
 - =orpheus-local.el= — mpv over its JSON IPC socket, with the queue kept in
   Emacs, tags read from mpv's `metadata` property, cover art found next to the
   file or extracted with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).
-- =orpheus-ssh.el= — the MPD backend behind `ssh -N -L', so a daemon on another
-  machine looks local on a loopback port.  Everything but the connection is the
-  MPD client, unchanged, and the audio comes out of the far machine.
+- =orpheus-ssh.el= — remote files over ssh and mpv here: `ls -1p' fills the
+  files tab, `cat' copies the chosen track into a temporary directory, and the
+  local backend plays it.  There is no daemon on the far side, and the
+  temporary directory goes away on disconnect and when Emacs exits.
 
 ** Adding one
 :PROPERTIES:

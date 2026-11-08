@@ -1,4 +1,4 @@
-;;; orpheus-ssh.el --- A Music Player Daemon on another machine, over ssh -*- lexical-binding: t -*-
+;;; orpheus-ssh.el --- Music on another machine, played through mpv -*- lexical-binding: t -*-
 
 ;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
@@ -6,42 +6,40 @@
 
 ;;; Commentary:
 
-;;; Some collections live on the machine that owns the speakers.  `ssh -N -L'
-;;; makes the daemon there look like a daemon here, on a loopback port nothing
-;;; else is using, and the rest is orpheus-mpd.el unchanged: the same queue,
-;;; the same library, the same cover art, the same transport.
+;;; Some collections live on a machine that is not this one.  This backend
+;;; lists a remote directory with ssh, copies the track you choose into a
+;;; private temporary directory, and hands that copy to mpv.  There is no
+;;; daemon on the far side and no tunnel: each listing and each download is one
+;;; short-lived ssh command.
 ;;;
-;;; Emacs never listens on the network itself and the tunnel is one process
-;;; that a sentinel watches, so a machine that goes away is reported rather
-;;; than waited for.  The audio output belongs to the far side, which is the
-;;; point: a laptop can drive the music on a home server.
+;;; The queue, the transport and the status are the local backend's, unchanged,
+;;; because this backend includes it.  Only the path mpv opens is different:
+;;; `orpheus-local--resolve-uri' downloads a remote name first.  The temporary
+;;; directory is removed when the backend disconnects and when Emacs exits.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
 (require 'orpheus-backend)
-(require 'orpheus-mpd)
+(require 'orpheus-local)
 
 ;;; Settings
 
 (defcustom orpheus-ssh-host nil
-  "Machine the remote MPD runs on, as ssh takes it.
+  "Machine the music lives on, as ssh takes it.
 The value is a host name, or `user@host' when the login name differs from
 yours.  A nil host is a backend that is not configured yet, and connecting
-says so instead of starting a tunnel that could not work."
+says so instead of starting a player that could not work."
   :type '(choice (const :tag "Not configured" nil) string)
   :group 'orpheus)
 
-(defcustom orpheus-ssh-mpd-port 6600
-  "Port the MPD on `orpheus-ssh-host' listens on."
-  :type 'integer :group 'orpheus)
-
-(defcustom orpheus-ssh-local-port nil
-  "Loopback port the tunnel listens on, or nil to pick a free one.
-A port is picked by opening one and closing it again, so two sessions do not
-fight over the same number."
-  :type '(choice (const :tag "Pick a free port" nil) integer)
+(defcustom orpheus-ssh-directory nil
+  "Remote directory the files tab starts in, or nil for the login home.
+The value is a path on the far side: relative to the login home, such as
+\"Music\", or absolute.  A leading `~' is not expanded, because the path is
+quoted for the remote shell."
+  :type '(choice (const :tag "The login home" nil) string)
   :group 'orpheus)
 
 (defcustom orpheus-ssh-program "ssh"
@@ -56,30 +54,28 @@ machine whose key is not in `~/.ssh/known_hosts' yet, belongs here."
 
 ;;; The backend
 
-(cl-defstruct (orpheus-ssh (:include orpheus-mpd)
+(cl-defstruct (orpheus-ssh (:include orpheus-local)
                            (:constructor orpheus-ssh--create)
                            (:conc-name orpheus-ssh-instance-))
-  "The MPD backend reached through an ssh tunnel.
-Everything but the connection is the MPD backend's, so its methods are used
-as they are and the tunnel is only what gets them their connection."
-  process
-  local-port
-  (connecting nil)
-  (waiting nil)
-  (attempts 0))
+  "The mpv backend whose files come from another machine over ssh."
+  temp-directory
+  (downloads (make-hash-table :test #'equal))
+  (processes nil)
+  current-file)
+
+(defvar orpheus-ssh--live nil
+  "SSH backends whose temporary files may still be on disk.")
 
 (defun orpheus-ssh--make ()
   "Return a new SSH backend built from the user options."
-  (orpheus-ssh--create :name 'ssh
-                       :host "127.0.0.1"
-                       :port (or orpheus-ssh-local-port 0)
-                       :socket nil
-                       :password nil))
+  (let ((ssh (orpheus-ssh--create :name 'ssh :volume 100)))
+    (push ssh orpheus-ssh--live)
+    ssh))
 
 (orpheus-register-backend 'ssh #'orpheus-ssh--make
-                          "A Music Player Daemon on another machine, over ssh")
+                          "Music on another machine, copied over ssh and played locally")
 
-;;; The tunnel
+;;; The remote host
 
 (defun orpheus-ssh--host ()
   "Return the host to reach, or nil when none is configured."
@@ -87,155 +83,244 @@ as they are and the tunnel is only what gets them their connection."
        (not (string-empty-p orpheus-ssh-host))
        orpheus-ssh-host))
 
-(defun orpheus-ssh--free-port ()
-  "Return a loopback TCP port nothing is listening on right now."
-  (let ((server (make-network-process :name "orpheus-ssh-port"
-                                      :server t :host "127.0.0.1"
-                                      :family 'ipv4 :service t :noquery t)))
-    (prog1 (process-contact server :service)
-      (delete-process server))))
+(defun orpheus-ssh--program ()
+  "Return ssh's program name or path."
+  (or (executable-find orpheus-ssh-program) orpheus-ssh-program))
 
-(defun orpheus-ssh--tunnel-args (host local-port mpd-port)
-  "Return the ssh arguments forwarding LOCAL-PORT to MPD-PORT on HOST."
-  (list "-N"
-        "-o" "ExitOnForwardFailure=yes"
-        "-L" (format "127.0.0.1:%d:localhost:%d" local-port mpd-port)
-        host))
+(defun orpheus-ssh--shell-quote (string)
+  "Return STRING quoted as one POSIX shell word."
+  (concat "'" (string-replace "'" "'\\''" string) "'"))
 
-(defun orpheus-ssh--tunnel-live-p (ssh)
-  "Return non-nil when SSH's tunnel process is running."
-  (process-live-p (orpheus-ssh-instance-process ssh)))
+(defun orpheus-ssh--join (dir name)
+  "Return NAME below DIR, where DIR may be empty for the remote home."
+  (if (or (null dir) (string-empty-p dir))
+      name
+    (concat (file-name-as-directory dir) name)))
 
-(defun orpheus-ssh--stop-tunnel (ssh)
-  "Stop SSH's tunnel, if one is running."
-  (let ((process (orpheus-ssh-instance-process ssh)))
-    (setf (orpheus-ssh-instance-process ssh) nil)
-    (when (process-live-p process)
-      (ignore-errors (delete-process process)))))
+(defun orpheus-ssh--directory-command (dir)
+  "Return the remote command that lists DIR, or the login home when empty."
+  (if (or (null dir) (string-empty-p dir))
+      "ls -1p"
+    (format "ls -1p -- %s" (orpheus-ssh--shell-quote dir))))
 
-(defun orpheus-ssh--sentinel (ssh process event)
-  "Forget the tunnel of SSH when PROCESS ends, as EVENT says."
-  (when (and (eq process (orpheus-ssh-instance-process ssh))
-             (not (process-live-p process)))
-    (setf (orpheus-ssh-instance-process ssh) nil)
-    (orpheus-mpd--close ssh)
-    (run-hook-with-args 'orpheus-backend-disconnected-hook ssh event)
-    (unless (orpheus-ssh-instance-connecting ssh)
-      (message "orpheus: the ssh tunnel to %s stopped (%s); see *orpheus ssh*"
-               (or (orpheus-ssh--host) "the remote machine")
-               (string-trim event)))))
+(defun orpheus-ssh--media-file-p (name)
+  "Return non-nil when NAME looks like something mpv can play."
+  (member (downcase (or (file-name-extension name) ""))
+          orpheus-local-extensions))
 
-(defun orpheus-ssh--call-waiting (ssh backend)
-  "Call everyone waiting for SSH's tunnel with BACKEND."
-  (let ((waiting (prog1 (orpheus-ssh-instance-waiting ssh)
-                   (setf (orpheus-ssh-instance-waiting ssh) nil))))
-    (dolist (callback waiting)
-      (ignore-errors (funcall callback backend)))))
+;;; Listing a remote directory
 
-(defun orpheus-ssh--give-up (ssh reason)
-  "Stop waiting for SSH's tunnel, tell its callers, and say REASON."
-  (setf (orpheus-ssh-instance-connecting ssh) nil)
-  (orpheus-ssh--call-waiting ssh nil)
-  (message "orpheus: cannot reach MPD over ssh: %s" reason))
+(defun orpheus-ssh--directory-items (dir output)
+  "Return rows for DIR from the remote `ls' OUTPUT."
+  (delq nil
+        (mapcar
+         (lambda (line)
+           (cond
+            ((string-suffix-p "/" line)
+             (orpheus-item-create
+              :label line :kind 'directory :detail "remote"
+              :data (list (cons 'browse
+                                (cons 'directories
+                                      (list (orpheus-ssh--join dir line)))))))
+            ((orpheus-ssh--media-file-p line)
+             (orpheus-item-create
+              :label line :kind 'track
+              :detail (upcase (or (file-name-extension line) "file"))
+              :data (list (cons 'uri (orpheus-ssh--join dir line)))))))
+         (split-string output "\n" t))))
 
-(defun orpheus-ssh--ready (ssh)
-  "Hand SSH to everyone waiting for its tunnel."
-  (setf (orpheus-ssh-instance-attempts ssh) 0
-        (orpheus-ssh-instance-connecting ssh) nil)
-  (orpheus-ssh--call-waiting ssh ssh))
-
-(defun orpheus-ssh--reconnect (ssh)
-  "Try to log in to the MPD behind SSH's tunnel, retrying while it starts."
-  (let ((attempts (1+ (orpheus-ssh-instance-attempts ssh))))
-    (setf (orpheus-ssh-instance-attempts ssh) attempts)
-    (cond
-      ((not (orpheus-ssh--tunnel-live-p ssh))
-       (orpheus-ssh--give-up
-        ssh "the ssh program could not open the tunnel; see *orpheus ssh*"))
-      ((> attempts 100)
-       (orpheus-ssh--give-up ssh "mpd did not answer through the tunnel"))
-      (t
-       ;; A daemon that is not listening yet is expected while ssh opens the
-       ;; port, so its refusal is not repeated on every attempt.
-       (let ((inhibit-message t))
-         (orpheus-mpd--connect
-          ssh
-          (lambda (conn)
-            (if conn
-                (orpheus-ssh--ready ssh)
-              (when (orpheus-ssh-instance-connecting ssh)
-                (run-with-timer 0.1 nil #'orpheus-ssh--reconnect ssh))))))))))
-
-(defun orpheus-ssh--spawn (ssh)
-  "Start SSH's tunnel for SSH and connect the MPD behind it.
-Return non-nil when a tunnel process was started."
-  (orpheus-ssh--stop-tunnel ssh)
+(defun orpheus-ssh--run (_ssh command callback)
+  "Run COMMAND on ssh's host, then call CALLBACK with its output or nil."
   (if-let* ((host (orpheus-ssh--host)))
-           (let* ((local (or orpheus-ssh-local-port (orpheus-ssh--free-port)))
-                  (program (or (executable-find orpheus-ssh-program)
-                               orpheus-ssh-program)))
-             (setf (orpheus-mpd-instance-port ssh) local
-                   (orpheus-ssh-instance-local-port ssh) local
-                   ;; auth-source is asked for the machine the user names, not
-                   ;; for the loopback port the tunnel happens to use.
-                   (orpheus-mpd-instance-password ssh)
-                   (or (orpheus-mpd-instance-password ssh)
-                       (orpheus-mpd--credential
-                        (make-orpheus-mpd :host host
-                                          :port orpheus-ssh-mpd-port))))
-             (setf (orpheus-ssh-instance-process ssh)
-                   (condition-case err
-                       (make-process
-                        :name "orpheus-ssh"
-                        :command (append (list program)
-                                         orpheus-ssh-extra-args
-                                         (orpheus-ssh--tunnel-args
-                                          host local orpheus-ssh-mpd-port))
-                        :buffer nil :noquery t
-                        :stderr (get-buffer-create "*orpheus ssh*")
-                        :sentinel (lambda (process event)
-                                    (orpheus-ssh--sentinel ssh process event)))
-                     (error
-                      (orpheus-ssh--give-up ssh (error-message-string err))
-                      nil)))
-             (when (orpheus-ssh--tunnel-live-p ssh)
-               (setf (orpheus-ssh-instance-attempts ssh) 0)
-               (orpheus-ssh--reconnect ssh)
-               t))
-    (orpheus-ssh--give-up
-     ssh "set `orpheus-ssh-host' to the machine MPD runs on")
-    nil))
+           (let ((buffer (generate-new-buffer " *orpheus-ssh-command*")))
+             (condition-case err
+                 (make-process
+                  :name "orpheus-ssh"
+                  :command (append (list (orpheus-ssh--program))
+                                   orpheus-ssh-extra-args
+                                   (list host command))
+                  :buffer buffer
+                  :stderr (get-buffer-create "*orpheus ssh*")
+                  :noquery t
+                  :sentinel
+                  (lambda (process _event)
+                    (unless (process-live-p process)
+                      (let ((output
+                             (and (eq (process-status process) 'exit)
+                                  (zerop (process-exit-status process))
+                                  (with-current-buffer buffer (buffer-string)))))
+                        (when (buffer-live-p buffer) (kill-buffer buffer))
+                        (if output
+                            (funcall callback output)
+                          (message "orpheus: ssh could not list %s; see *orpheus ssh*"
+                                   command)
+                          (funcall callback nil))))))
+               (error
+                (when (buffer-live-p buffer) (kill-buffer buffer))
+                (message "orpheus: cannot run ssh: %s"
+                         (error-message-string err))
+                (funcall callback nil))))
+    (message "orpheus: set `orpheus-ssh-host' to the machine your music is on")
+    (funcall callback nil)))
+
+(defun orpheus-ssh--browse-directories (ssh dir callback)
+  "Call CALLBACK with DIR's rows on SSH, or nil when ssh fails."
+  (orpheus-ssh--run
+   ssh (orpheus-ssh--directory-command dir)
+   (lambda (output)
+     (funcall callback (and output (orpheus-ssh--directory-items dir output))))))
+
+;;; Downloading one track
+
+(defun orpheus-ssh--temp-directory (ssh)
+  "Return SSH's private temporary directory, making it when needed."
+  (or (orpheus-ssh-instance-temp-directory ssh)
+      (setf (orpheus-ssh-instance-temp-directory ssh)
+            (make-temp-file "orpheus-ssh-" t))))
+
+(defun orpheus-ssh--cache-file (ssh uri)
+  "Return a path in SSH's temporary directory for URI."
+  (let* ((dir (orpheus-ssh--temp-directory ssh))
+         (base (or (file-name-nondirectory (directory-file-name uri))
+                   "track"))
+         (safe (replace-regexp-in-string "[^A-Za-z0-9._-]" "_" base)))
+    (expand-file-name
+     (format "%s-%s" (substring (secure-hash 'sha1 uri) 0 8) safe)
+     dir)))
+
+(defun orpheus-ssh--note-current (ssh path)
+  "Remember PATH as SSH's current copy and delete the previous one."
+  (let ((old (orpheus-ssh-instance-current-file ssh)))
+    (unless (equal old path)
+      (when old (ignore-errors (delete-file old)))
+      (setf (orpheus-ssh-instance-current-file ssh) path))))
+
+(defun orpheus-ssh--download-sentinel (ssh process path uri callback buffer)
+  "Finish PROCESS, one of SSH's downloads of URI into PATH, and call CALLBACK."
+  (unless (process-live-p process)
+    (setf (orpheus-ssh-instance-processes ssh)
+          (delq process (orpheus-ssh-instance-processes ssh)))
+    (unwind-protect
+        (if (and (eq (process-status process) 'exit)
+                 (zerop (process-exit-status process))
+                 (file-directory-p (file-name-directory path)))
+            (progn
+              (with-current-buffer buffer
+                (let ((coding-system-for-write 'binary))
+                  (write-region (point-min) (point-max) path nil 'silent)))
+              (puthash uri path (orpheus-ssh-instance-downloads ssh))
+              (orpheus-ssh--note-current ssh path)
+              (funcall callback path))
+          (ignore-errors (delete-file path))
+          (message "orpheus: ssh could not download %s; see *orpheus ssh*" uri)
+          (funcall callback nil))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(defun orpheus-ssh--download (ssh uri callback)
+  "Download URI from SSH's host, then call CALLBACK with the local copy."
+  (let ((cached (gethash uri (orpheus-ssh-instance-downloads ssh)))
+        (host (orpheus-ssh--host)))
+    (cond
+     ((and cached (file-readable-p cached))
+      (orpheus-ssh--note-current ssh cached)
+      (funcall callback cached))
+     ((null host)
+      (message "orpheus: set `orpheus-ssh-host' to the machine your music is on")
+      (funcall callback nil))
+     (t
+      (let* ((path (orpheus-ssh--cache-file ssh uri))
+             (buffer (generate-new-buffer " *orpheus-ssh-download*"))
+             (process
+              (condition-case err
+                  (progn
+                    (with-current-buffer buffer (set-buffer-multibyte nil))
+                    (make-process
+                     :name "orpheus-ssh-download"
+                     :command (append
+                               (list (orpheus-ssh--program))
+                               orpheus-ssh-extra-args
+                               (list host
+                                     (format "cat -- %s"
+                                             (orpheus-ssh--shell-quote uri))))
+                     :buffer buffer
+                     :stderr (get-buffer-create "*orpheus ssh*")
+                     :noquery t
+                     :coding 'binary
+                     :sentinel
+                     (lambda (process _event)
+                       (orpheus-ssh--download-sentinel
+                        ssh process path uri callback buffer))))
+                (error
+                 (when (buffer-live-p buffer) (kill-buffer buffer))
+                 (message "orpheus: cannot run ssh: %s"
+                          (error-message-string err))
+                 nil))))
+        (if process
+            (push process (orpheus-ssh-instance-processes ssh))
+          (funcall callback nil)))))))
+
+(defun orpheus-ssh--cleanup (ssh)
+  "Stop SSH's downloads and delete its temporary directory."
+  (dolist (process (orpheus-ssh-instance-processes ssh))
+    (when (process-live-p process) (ignore-errors (delete-process process))))
+  (setf (orpheus-ssh-instance-processes ssh) nil)
+  (clrhash (orpheus-ssh-instance-downloads ssh))
+  (let ((dir (orpheus-ssh-instance-temp-directory ssh)))
+    (when dir
+      (ignore-errors (delete-directory dir t))
+      (setf (orpheus-ssh-instance-temp-directory ssh) nil)))
+  (setf (orpheus-ssh-instance-current-file ssh) nil))
+
+(defun orpheus-ssh--cleanup-all ()
+  "Delete the temporary files of every SSH backend still alive."
+  (dolist (ssh orpheus-ssh--live)
+    (ignore-errors (orpheus-ssh--cleanup ssh))))
+
+(add-hook 'kill-emacs-hook #'orpheus-ssh--cleanup-all)
 
 ;;; Backend methods
 
+(cl-defmethod orpheus-local--resolve-uri ((ssh orpheus-ssh) uri callback)
+  "Download URI from SSH to a local copy, then call CALLBACK with its path."
+  (orpheus-ssh--download ssh uri callback))
+
 (cl-defmethod orpheus-backend-connected-p ((ssh orpheus-ssh))
-  "Return non-nil when SSH's tunnel runs and the MPD behind it answered."
-  (let ((conn (orpheus-mpd-instance-connection ssh)))
-    (and (orpheus-ssh--tunnel-live-p ssh)
-         conn
-         (eq (orpheus-mpd-connection-state conn) 'ready)
-         (process-live-p (orpheus-mpd-connection-process conn)))))
+  "Return non-nil when SSH has a host and its mpv is listening."
+  (and (orpheus-ssh--host) (orpheus-local--ready-p ssh)))
 
 (cl-defmethod orpheus-backend-connect ((ssh orpheus-ssh) callback)
-  "Start the tunnel when it is not up, then call CALLBACK with SSH."
-  (cond
-    ((orpheus-backend-connected-p ssh)
-     (funcall callback ssh))
-    ((orpheus-ssh-instance-connecting ssh)
-     (setf (orpheus-ssh-instance-waiting ssh)
-           (append (orpheus-ssh-instance-waiting ssh) (list callback))))
-    (t
-     (setf (orpheus-ssh-instance-connecting ssh) t
-           (orpheus-ssh-instance-waiting ssh) (list callback))
-     (if (orpheus-ssh--tunnel-live-p ssh)
-         (orpheus-ssh--reconnect ssh)
-       (orpheus-ssh--spawn ssh)))))
+  "Start mpv for SSH when a host is set, then call CALLBACK with it or nil."
+  (if (orpheus-ssh--host)
+      (orpheus-local--ensure ssh callback)
+    (message "orpheus: set `orpheus-ssh-host' to the machine your music is on")
+    (funcall callback nil)))
 
 (cl-defmethod orpheus-backend-disconnect ((ssh orpheus-ssh))
-  "Close SSH's connection to the remote MPD and stop the tunnel."
-  (orpheus-mpd--close ssh)
-  (orpheus-ssh--stop-tunnel ssh)
-  (setf (orpheus-ssh-instance-connecting ssh) nil))
+  "Stop SSH's mpv and delete its downloaded files."
+  (orpheus-local--kill ssh)
+  (orpheus-ssh--cleanup ssh)
+  (setq orpheus-ssh--live (delq ssh orpheus-ssh--live)))
+
+(cl-defmethod orpheus-backend-browse ((ssh orpheus-ssh) kind arg callback)
+  "Browse KIND on SSH, with ARG as the path down the remote hierarchy."
+  (pcase kind
+         ('queue (funcall callback (orpheus-local--queue-items ssh)))
+         ('directories
+          (orpheus-ssh--browse-directories
+           ssh (or (car arg) orpheus-ssh-directory) callback))
+         (_ (funcall callback nil))))
+
+(cl-defmethod orpheus-backend-album-art ((ssh orpheus-ssh) track callback)
+  "Find cover art for TRACK in SSH's downloaded copy, then call CALLBACK."
+  (let ((file (gethash (orpheus-track-uri track)
+                       (orpheus-ssh-instance-downloads ssh))))
+    (if (and file (file-readable-p file))
+        (orpheus-local--album-art-file file callback)
+      (funcall callback nil))))
+
+(cl-defmethod orpheus-backend-capabilities ((_ssh orpheus-ssh))
+  "Return what files on another machine can browse."
+  '(queue directories))
 
 (provide 'orpheus-ssh)
 

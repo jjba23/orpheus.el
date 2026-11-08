@@ -9,6 +9,31 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Fixed
+
+- The `../' row now appears at a top-level directory and goes to the root, and
+  RET on it moves the tab there instead of leaving only `^' to do the work.
+- MPD refuses a directory URI, and `A' asks before queueing more than
+  `orpheus-ui-add-confirm-threshold' tracks, so one keystroke cannot fill the
+  queue with the whole library.  A queue over `orpheus-ui-queue-warning-size'
+  says so and names `D', which clears it.  Connecting itself queues nothing;
+  a queue that is already large was restored by MPD's own `state_file'.
+
+*** Changed
+
+- The SSH backend no longer uses MPD.  It lists remote directories with `ssh',
+  copies the selected track into a private temporary directory, and plays it
+  with mpv, so the audio comes out of this machine and the far side needs no
+  daemon.  The copy is removed on disconnect and when Emacs exits.
+  `orpheus-ssh-mpd-port' and `orpheus-ssh-local-port' are gone;
+  `orpheus-ssh-directory' sets where the files tab starts.
+- `p' moves to the previous row, as it does in Dired.  `SPC' is the key that
+  plays or pauses; `RET' still opens a directory or plays a row.
+- The faces and the visualizer use a Greek palette: gold, marble, Aegean blue,
+  iris and olive in either light, and a bar ramp from deep sea to gold.
+
 * 0.3.0 (2026-11-08)
 
 *** Added

@@ -84,6 +84,7 @@ The value is what follows `--ao=', for example \"pipewire\" or
   (volume 100)
   (request-id 0)
   (requests (make-hash-table :test #'eql))
+  (load-token 0)
   (connecting nil)
   (waiting nil)
   (attempts 0))
@@ -152,8 +153,17 @@ REPEAT wraps around; RANDOM picks another entry."
          (setq index (1+ index))))
      (orpheus-local-instance-queue local))))
 
+(cl-defgeneric orpheus-local--resolve-uri (backend uri callback)
+  "Call CALLBACK with a path BACKEND's mpv can open for URI.")
+
+(cl-defmethod orpheus-local--resolve-uri ((_local orpheus-local) uri callback)
+  "Play URI as it is and call CALLBACK with it."
+  (funcall callback uri))
+
 (defun orpheus-local--play-index (local index)
-  "Play the queue entry at INDEX on LOCAL."
+  "Play the queue entry at INDEX on LOCAL.
+A backend that keeps its files elsewhere can make the entry playable first;
+see `orpheus-local--resolve-uri'."
   (let* ((queue (orpheus-local-instance-queue local))
          (uri (nth index queue)))
     (when uri
@@ -163,13 +173,26 @@ REPEAT wraps around; RANDOM picks another entry."
                                   :title (if (string-match-p "\\`[a-z]+://" uri)
                                            uri
                                            (file-name-nondirectory uri))))
-      (let ((status (orpheus-local-instance-status local)))
+      (let ((status (orpheus-local-instance-status local))
+            (token (1+ (orpheus-local-instance-load-token local))))
+        (setf (orpheus-local-instance-load-token local) token)
         (setf (orpheus-status-songid status) (1+ index))
         (setf (orpheus-status-state status) 'play)
         (setf (orpheus-status-elapsed status) 0.0)
-        (setf (orpheus-status-total status) 0.0))
-      (orpheus-local--send local (list "loadfile" uri "replace"))
-      (orpheus-local--send local (list "set_property" "pause" :false)))))
+        (setf (orpheus-status-total status) 0.0)
+        (orpheus-local--resolve-uri
+         local uri
+         (lambda (path)
+           (when (= token (orpheus-local-instance-load-token local))
+             (if path
+                 (progn
+                   (orpheus-local--send local (list "loadfile" path "replace"))
+                   (orpheus-local--send
+                    local (list "set_property" "pause"
+                                (if (eq (orpheus-status-state status) 'pause)
+                                    :true :false))))
+               (setf (orpheus-status-state status) 'stop)
+               (message "orpheus: cannot play %s" uri)))))))))
 
 ;;; Talking mpv
 
@@ -410,6 +433,8 @@ CALLBACK is called with the error string, or nil, and the data."
   "Stop LOCAL's mpv and forget the queue's playback."
   (let ((ipc (orpheus-local-instance-ipc local))
         (process (orpheus-local-instance-process local)))
+    (setf (orpheus-local-instance-load-token local)
+          (1+ (orpheus-local-instance-load-token local)))
     (setf (orpheus-local-instance-ipc local) nil)
     (setf (orpheus-local-instance-process local) nil)
     (setf (orpheus-local-instance-connecting local) nil)
@@ -436,19 +461,22 @@ CALLBACK is called with the error string, or nil, and the data."
                        (funcall callback
                                 (and (file-readable-p output) output)))))))))
 
-(cl-defmethod orpheus-backend-album-art ((_local orpheus-local) track callback)
-  "Find cover art for TRACK next to the file or inside it, then call CALLBACK."
-  (let* ((uri (orpheus-track-uri track))
-         (covers (when (and uri (file-regular-p uri))
+(defun orpheus-local--album-art-file (file callback)
+  "Find cover art for FILE next to it or inside it, then call CALLBACK."
+  (let* ((covers (when (and file (file-regular-p file))
                    (mapcar (lambda (name)
-                             (expand-file-name name (file-name-directory uri)))
+                             (expand-file-name name (file-name-directory file)))
                            orpheus-local-cover-names)))
          (found (cl-find-if #'file-readable-p covers)))
     (cond
       (found (funcall callback found))
-      ((and uri (file-regular-p uri))
-       (orpheus-local--extract-art uri callback))
+      ((and file (file-regular-p file))
+       (orpheus-local--extract-art file callback))
       (t (funcall callback nil)))))
+
+(cl-defmethod orpheus-backend-album-art ((_local orpheus-local) track callback)
+  "Find cover art for TRACK next to the file or inside it, then call CALLBACK."
+  (orpheus-local--album-art-file (orpheus-track-uri track) callback))
 
 ;;; Browsing files
 
@@ -566,6 +594,8 @@ backend, so a parent row here would show the way up twice."
                     'play 'pause))
             (funcall send "cycle" '("pause")))
            ('stop
+            (setf (orpheus-local-instance-load-token local)
+                  (1+ (orpheus-local-instance-load-token local)))
             (funcall send "stop")
             (setf (orpheus-status-state (orpheus-local-instance-status local))
                   'stop))
@@ -596,6 +626,8 @@ backend, so a parent row here would show the way up twice."
                          rest)
                 (setf (orpheus-local-instance-index local) 0))))
            ('clear
+            (setf (orpheus-local-instance-load-token local)
+                  (1+ (orpheus-local-instance-load-token local)))
             (setf (orpheus-local-instance-queue local) nil
                   (orpheus-local-instance-index local) 0
                   (orpheus-local-instance-track local) nil)

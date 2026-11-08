@@ -31,27 +31,39 @@
 ;;; Look
 
 (defface orpheus-status-face
-  '((t :inherit bold))
-  "Face of the status line."
+  '((((background dark)) :inherit bold :foreground "#e6c78a")
+    (((background light)) :inherit bold :foreground "#6b4f1f")
+    (t :inherit bold))
+  "Face of the status line: gold on a dark frame, bronze on a light one."
   :group 'orpheus)
 
 (defface orpheus-title-face
-  '((t :inherit default))
-  "Face of a track's title."
+  '((((background dark)) :inherit default :foreground "#ece5d8")
+    (((background light)) :inherit default :foreground "#2b2622")
+    (t :inherit default))
+  "Face of a track's title: marble in either light."
   :group 'orpheus)
 
 (defface orpheus-artist-face
-  '((t :inherit font-lock-variable-name-face))
-  "Face of artists, playlists and other named things."
+  '((((background dark)) :inherit font-lock-variable-name-face
+     :foreground "#93b8e6")
+    (((background light)) :inherit font-lock-variable-name-face
+     :foreground "#2f5d8a")
+    (t :inherit font-lock-variable-name-face))
+  "Face of artists, playlists and other named things: Aegean blue."
   :group 'orpheus)
 
 (defface orpheus-album-face
-  '((t :inherit font-lock-string-face))
-  "Face of album names."
+  '((((background dark)) :inherit font-lock-string-face
+     :foreground "#c3aede")
+    (((background light)) :inherit font-lock-string-face
+     :foreground "#5b4a7a")
+    (t :inherit font-lock-string-face))
+  "Face of album names: iris."
   :group 'orpheus)
 
 (defface orpheus-current-face
-  '((t :inherit highlight :extend t))
+  '((t :inherit highlight :weight bold :extend t))
   "Face of the row that is playing."
   :group 'orpheus)
 
@@ -61,8 +73,10 @@
   :group 'orpheus)
 
 (defface orpheus-tab-active-face
-  '((t :inherit bold :underline t))
-  "Face of the selected tab."
+  '((((background dark)) :inherit bold :underline t :foreground "#e6c78a")
+    (((background light)) :inherit bold :underline t :foreground "#6b4f1f")
+    (t :inherit bold :underline t))
+  "Face of the selected tab: gold, underlined, bold."
   :group 'orpheus)
 
 (defface orpheus-muted-face
@@ -71,8 +85,10 @@
   :group 'orpheus)
 
 (defface orpheus-directory-face
-  '((t :inherit dired-directory))
-  "Face of a directory row."
+  '((((background dark)) :foreground "#b7c98a")
+    (((background light)) :foreground "#4f5d2a")
+    (t :inherit dired-directory))
+  "Face of a directory row: olive, the colour of a grove."
   :group 'orpheus)
 
 (defface orpheus-error-face
@@ -81,7 +97,7 @@
   :group 'orpheus)
 
 (defface orpheus-marked-face
-  '((t :inherit warning))
+  '((t :inherit warning :weight bold))
   "Face of the mark column of a marked row."
   :group 'orpheus)
 
@@ -111,6 +127,16 @@ Set it in a terminal whose font has no play, pause or block characters."
 `orpheus-ui-plain-ascii' turns the glyphs into letters, and a font without
 symbols is the reason to turn them off."
   :type 'boolean :group 'orpheus)
+
+(defcustom orpheus-ui-add-confirm-threshold 250
+  "Number of rows `orpheus-ui-add' and `orpheus-ui-add-all' queue before asking.
+The files tab can hold a whole flat music library, and queueing all of it with
+one keystroke is what turns a queue into thousands of rows."
+  :type 'integer :group 'orpheus)
+
+(defcustom orpheus-ui-queue-warning-size 1000
+  "Track count at which loading the queue says how to clear it."
+  :type 'integer :group 'orpheus)
 
 ;;; Glyphs and strings
 
@@ -232,6 +258,9 @@ The queue is always there, because every backend can queue."
 (defvar orpheus-ui--art-cache (make-hash-table :test #'equal)
   "Cover file of each URI already fetched, so a cover is fetched once.")
 
+(defvar orpheus-ui--queue-warned nil
+  "Whether a queue over `orpheus-ui-queue-warning-size' was reported.")
+
 (defvar orpheus-ui--needs-refresh t
   "Whether the player buffer must ask the backend for its rows again.")
 
@@ -288,15 +317,15 @@ The queue is always there, because every backend can queue."
                       (orpheus-ui-tab-items tab)))))))
 
 (defun orpheus-ui--parent-item (tab)
-  "Return the row that leaves TAB's directory, or nil at the top."
+  "Return the row that leaves TAB's directory, or nil at the top.
+A top-level directory's parent is the root, which is the empty path on every
+backend."
   (let ((dir (and (eq (orpheus-ui-tab-view tab) 'directories)
                   (car (orpheus-ui-tab-arg tab)))))
     (when (and (stringp dir) (not (string-empty-p dir)))
-      (let ((parent (file-name-directory (directory-file-name dir))))
-        (when (and parent
-                   (not (string-empty-p parent))
-                   (not (equal (directory-file-name parent)
-                               (directory-file-name dir))))
+      (let ((parent (or (file-name-directory (directory-file-name dir)) "")))
+        (unless (equal (directory-file-name parent)
+                       (directory-file-name dir))
           (orpheus-item-create
            :label "../" :kind 'directory
            :data (list (cons 'browse (cons 'directories (list parent))))))))))
@@ -489,7 +518,13 @@ which row is highlighted."
     (when (>= (orpheus-ui-tab-index tab)
               (max 1 (length (orpheus-ui-tab-items tab))))
       (setf (orpheus-ui-tab-index tab)
-            (max 0 (1- (length (orpheus-ui-tab-items tab))))))))
+            (max 0 (1- (length (orpheus-ui-tab-items tab))))))
+    (when (and (eq (orpheus-ui-tab-view tab) 'queue)
+               (> (length items) orpheus-ui-queue-warning-size)
+               (not orpheus-ui--queue-warned))
+      (setq orpheus-ui--queue-warned t)
+      (message "orpheus: the queue has %d tracks; D clears it"
+               (length items)))))
 
 (defun orpheus-ui--load-tab (tab callback)
   "Read TAB's rows and then call CALLBACK, in this buffer.
@@ -732,6 +767,11 @@ of the tab that is already there is the whole tick."
                (orpheus-ui-refresh))
              (message "orpheus: already at the top"))))
 
+(defun orpheus-ui--confirm-add (count)
+  "Return non-nil when COUNT rows may be queued without asking."
+  (or (<= count orpheus-ui-add-confirm-threshold)
+      (y-or-n-p (format "Queue %d tracks? " count))))
+
 (defun orpheus-ui-add ()
   "Add the marked rows, or the row at point, to the queue.
 The queue tab is not a source: a queue row added to the queue appends the
@@ -749,6 +789,8 @@ whole queue to itself."
       ((eq (orpheus-ui-tab-kind tab) 'queue)
        (message "orpheus: this is the queue already; nothing to add"))
       ((null uris) (message "orpheus: nothing to queue here"))
+      ((not (orpheus-ui--confirm-add (length uris)))
+       (message "orpheus: kept the queue as it was"))
       (t
         (orpheus-backend-add orpheus-backend-current
                              (if (= 1 (length uris)) (car uris) uris))
@@ -768,6 +810,8 @@ is a copy of a row that is there already."
     (cond
       ((eq (orpheus-ui-tab-kind tab) 'queue)
        (message "orpheus: this is the queue already; nothing to add"))
+      ((not (orpheus-ui--confirm-add (length uris)))
+       (message "orpheus: kept the queue as it was"))
       (uris
         (orpheus-backend-add orpheus-backend-current uris)
         (message "orpheus: queued %d track(s)" (length uris))
@@ -862,7 +906,7 @@ is a copy of a row that is there already."
 (defconst orpheus-ui--help-lines
   '(("RET" "play the track, or open the album, artist or directory")
     ("n / C-n / j" "next row")
-    ("C-p / k" "previous row")
+    ("p / C-p / k" "previous row")
     ("C-v / M-v" "one screen down and up")
     ("M-< / M->" "first and last row")
     ("TAB / S-TAB" "next and previous tab")
@@ -877,7 +921,7 @@ is a copy of a row that is there already."
     ("/ / C-s" "search")
     ("C" "jump to the playing row")
     ("?" "this help")
-    ("SPC / p" "play or pause")
+    ("SPC" "play or pause")
     ("s" "stop")
     ("> / <" "next and previous track")
     ("f / b" "seek forward and back")
@@ -948,7 +992,7 @@ is a copy of a row that is there already."
     (define-key map (kbd "C") 'orpheus-ui-jump-to-current)
     (define-key map (kbd "?") 'orpheus-ui-help)
     (define-key map (kbd "SPC") 'orpheus-play-pause)
-    (define-key map (kbd "p") 'orpheus-play-pause)
+    (define-key map (kbd "p") 'orpheus-ui-previous-line)
     (define-key map (kbd "s") 'orpheus-stop)
     (define-key map (kbd ">") 'orpheus-next)
     (define-key map (kbd "<") 'orpheus-previous)

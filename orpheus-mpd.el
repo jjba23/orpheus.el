@@ -581,14 +581,28 @@ the editor while each is added."
               (when (plist-get reply :ok)
                 (orpheus-mpd--items-from-songs (plist-get reply :lines) t))))))
 
+(defun orpheus-mpd--file-uri-p (uri)
+  "Return non-nil when URI names a file MPD adds one by one.
+A URI ending in a slash is a directory to MPD, and adding it queues every file
+under it, which is how one keystroke can fill the queue with a library."
+  (and (stringp uri)
+       (not (string-empty-p uri))
+       (not (string-suffix-p "/" uri))))
+
 (cl-defmethod orpheus-backend-add ((mpd orpheus-mpd) uris)
-  "Append URIS to MPD's queue."
-  (let ((uris (if (listp uris) uris (list uris))))
-    (when uris
+  "Append URIS to MPD's queue.
+A directory is refused: MPD would expand it to every file below it."
+  (let* ((uris (if (listp uris) uris (list uris)))
+         (files (delq nil (mapcar (lambda (uri)
+                                    (and (orpheus-mpd--file-uri-p uri) uri))
+                                  uris))))
+    (when (< (length files) (length uris))
+      (message "orpheus: MPD queues files, not directories"))
+    (when files
       (orpheus-mpd--send-commands
        mpd (mapcar (lambda (uri)
                      (format "add %s" (orpheus-mpd--quote uri)))
-                   uris)))))
+                   files)))))
 
 (defun orpheus-mpd--close (mpd)
   "Drop MPD's connection, if it still has one."
@@ -601,14 +615,17 @@ the editor while each is added."
           (ignore-errors (delete-process process)))))))
 
 (cl-defmethod orpheus-backend-play-uri ((mpd orpheus-mpd) uri)
-  "Append URI to MPD's queue and start it."
-  (orpheus-mpd--send-command
-   mpd "addid" (list (orpheus-mpd--quote uri))
-   (lambda (reply)
-     (let ((id (and (plist-get reply :ok)
-                    (orpheus-mpd--line-value (plist-get reply :lines) "Id"))))
-       (when id
-         (orpheus-mpd--send-command mpd "playid" (list id)))))))
+  "Append URI to MPD's queue and start it.
+A directory is refused, because MPD would add everything under it."
+  (if (not (orpheus-mpd--file-uri-p uri))
+      (message "orpheus: MPD plays files, not directories")
+    (orpheus-mpd--send-command
+     mpd "addid" (list (orpheus-mpd--quote uri))
+     (lambda (reply)
+       (let ((id (and (plist-get reply :ok)
+                      (orpheus-mpd--line-value (plist-get reply :lines) "Id"))))
+         (when id
+           (orpheus-mpd--send-command mpd "playid" (list id))))))))
 
 (cl-defmethod orpheus-backend-album-art ((mpd orpheus-mpd) track callback)
   "Fetch cover art for TRACK from MPD, then call CALLBACK with a file path."

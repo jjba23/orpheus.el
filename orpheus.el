@@ -23,12 +23,13 @@
 ;;;
 ;;; - `mpd' talks to a Music Player Daemon over TCP or a unix socket.  The
 ;;; daemon owns the audio output, so PipeWire, PulseAudio, ALSA and CoreAudio
-;;; all work without this package knowing about them.;;; - `local' plays files and URLs with mpv over its JSON IPC socket.  mpv uses
+;;; all work without this package knowing about them.
+;;; - `local' plays files and URLs with mpv over its JSON IPC socket.  mpv uses
 ;;;   PipeWire on Linux, CoreAudio on macOS and WASAPI on Windows, and hands
 ;;;   YouTube links to yt-dlp.
-;;; - `ssh' reaches a Music Player Daemon on another machine through an
-;;;   `ssh -N -L' tunnel; the connection is the only part that differs from
-;;;   the `mpd' backend.
+;;; - `ssh' lists music on another machine and copies a track into a temporary
+;;;   directory before playing it here with mpv.  There is no daemon on the far
+;;;   side and no tunnel; the queue and transport are the local backend's.
 ;;;
 ;;; Everything is asynchronous: replies arrive in process filters, and the
 ;;; status is read on a timer, so a slow server or a starting player never
@@ -70,7 +71,7 @@
 Register another with `orpheus-register-backend'."
   :type '(choice (const :tag "Music Player Daemon" mpd)
                  (const :tag "Local files and URLs through mpv" local)
-                 (const :tag "A daemon on another machine, over ssh" ssh)
+                 (const :tag "Files on another machine, copied over ssh" ssh)
                  (symbol :tag "Another registered backend"))
   :group 'orpheus)
 
