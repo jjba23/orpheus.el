@@ -42,7 +42,7 @@ and total, a progress bar, the volume and the four flags (repeat, random,
 single, consume).  The SSH backend adds a Downloads tab after Queue, with a
 row for every active, queued, finished or failed transfer.
 
-* Why orpheus?
+* Why write orpheus, yet another Emacs player? (YAEP)
 :PROPERTIES:
 :CUSTOM_ID: why-orpheus
 :END:
