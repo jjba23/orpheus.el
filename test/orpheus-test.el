@@ -1462,14 +1462,15 @@ so they are allowed by name."
                       (memq symbol types))))))
     (should (> checked 30))))
 
-(ert-deftest orpheus-test/readme-uses-org-code-markup ()
-  "The README uses Org code markup, not Markdown backticks."
-  (let ((text (with-temp-buffer
-                (insert-file-contents
-                 (expand-file-name "README.org"
-                                   (file-name-directory orpheus-test--source)))
-                (buffer-string))))
-    (should-not (string-match-p "`" text))))
+(ert-deftest orpheus-test/docs-use-org-code-markup ()
+  "The Org documentation uses Org code markup, not Markdown backticks."
+  (dolist (file '("README.org" "NEWS.org"))
+    (let ((text (with-temp-buffer
+                  (insert-file-contents
+                   (expand-file-name file
+                                     (file-name-directory orpheus-test--source)))
+                  (buffer-string))))
+      (should-not (string-match-p "`" text)))))
 
 ;;; Marks, icons and the parent row
 

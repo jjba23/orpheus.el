@@ -503,16 +503,33 @@ BUMP is an explicit X.Y.Z, or patch, minor or major."
            (end (or next (string-length news))))
       (release-trim (substring news at end)))))
 
+(define (release-inline-code line)
+  "Return LINE with Org ~code~ and =code= spans as Markdown code."
+  (let loop ((position 0) (pieces '()))
+    (let ((match (string-match "(~([^~]+)~|=([^=]+)=)" line position)))
+      (if match
+          (let ((start (match:start match 1))
+                (end (match:end match 1))
+                (code (or (match:substring match 2)
+                          (match:substring match 3))))
+            (loop end
+                  (cons (string-append (substring line position start)
+                                       "`" code "`")
+                        pieces)))
+          (string-concatenate-reverse
+           (cons (substring line position) pieces))))))
+
 (define (release-notes section)
   "Return SECTION as the Markdown body of a release."
   (let ((lines (map (lambda (line)
-                      (cond ((string-prefix? "*** " line)
-                             (string-append "### " (substring line 4)))
-                            ((string-prefix? "** " line)
-                             (string-append "## " (substring line 3)))
-                            ((string-prefix? "* " line)
-                             (string-append "# " (substring line 2)))
-                            (else line)))
+                      (release-inline-code
+                       (cond ((string-prefix? "*** " line)
+                              (string-append "### " (substring line 4)))
+                             ((string-prefix? "** " line)
+                              (string-append "## " (substring line 3)))
+                             ((string-prefix? "* " line)
+                              (string-append "# " (substring line 2)))
+                             (else line))))
                     (string-split section #\newline))))
     (release-trim (string-join lines "\n"))))
 

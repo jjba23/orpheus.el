@@ -9,6 +9,13 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Changed
+
+- NEWS.org uses Org inline-code markup, and the release task renders it
+  as Markdown in GitHub release notes.
+
 * 0.9.2 (2026-11-09)
 
 *** Changed
@@ -27,7 +34,7 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 *** Added
 
 - The playlist editor inserts the player's marked tracks, or its current row,
-  with `i`.  A track keeps its tags, and a portable playlist row contributes
+  with ~i~.  A track keeps its tags, and a portable playlist row contributes
   every track in its file.
 - Player rows, tabs and playlist editor rows have mouse-3 context menus for
   their common actions; playlist editor rows also select with mouse-1.
@@ -37,8 +44,8 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 *** Added
 
 - Portable playlists store library-relative paths when the queue names a file
-  below the backend's library root.  `local` strips
-  `orpheus-local-directory`, SSH strips `orpheus-ssh-directory`, and MPD strips
+  below the backend's library root.  ~local~ strips
+  ~orpheus-local-directory~, SSH strips ~orpheus-ssh-directory~, and MPD strips
   the local music root; playback expands the relative path for the active
   backend.  A playlist saved from one backend can therefore play on another
   when the libraries mirror.  An absolute path outside the configured roots is
@@ -48,7 +55,7 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 - Playlist playback and append resolve relative URIs through the active
   backend instead of sending them to every backend unchanged.
-- MPD's backend-level `save' and `load' actions remain for server-playlist
+- MPD's backend-level ~save~ and ~load~ actions remain for server-playlist
   compatibility; the player continues to save and open portable files.
 
 * 0.7.0 (2026-11-08)
@@ -56,28 +63,28 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 *** Added
 
 - Cover art follows the current track and the album folder being browsed.  The
-  local and SSH backends find `cover.jpg`, `Cover.PNG`, `cover.webp`,
-  `folder.*`, `front.*`, `album.*` and `artwork.*` case-insensitively; SSH
+  local and SSH backends find ~cover.jpg~, ~Cover.PNG~, ~cover.webp~,
+  ~folder.*~, ~front.*~, ~album.*~ and ~artwork.*~ case-insensitively; SSH
   copies a remote cover into the cache.  MPD uses its embedded art.  A track
   without art falls back to the folder being browsed.
 - Art is centred using its actual pixel width, scaled to the window and
-  `orpheus-ui-art-size`, and an image Emacs cannot decode is skipped instead of
+  ~orpheus-ui-art-size~, and an image Emacs cannot decode is skipped instead of
   breaking a redraw.  A terminal still fetches and draws nothing.
 - Portable playlists: every backend now has a Playlists tab backed by M3U8
-  files in `orpheus-playlist-directory`.  `C-x C-s` saves the current queue
+  files in ~orpheus-playlist-directory~.  ~C-x C-s~ saves the current queue
   from any backend, the tab reads existing M3U, M3U8 and PLS files, and RET,
-  `a` and `d` play, append and delete them.  MPD's server playlists share the
+  ~a~ and ~d~ play, append and delete them.  MPD's server playlists share the
   tab instead of disappearing.  Playlist URIs are passed to the active backend
   unchanged, so a playlist travels between backends only when its URI
   namespace does.
-- The Playlists tab opens a portable playlist in an editor buffer with `e`.
-  `M-<up>` and `M-<down>` move a track, `d` removes it, and `C-x C-s` writes the
+- The Playlists tab opens a portable playlist in an editor buffer with ~e~.
+  ~M-<up>~ and ~M-<down>~ move a track, ~d~ removes it, and ~C-x C-s~ writes the
   M3U8 file back; parsed tags travel with the track.  PLS files stay read-only
-  in the editor so a `.pls` name never receives M3U8 content.
+  in the editor so a ~.pls~ name never receives M3U8 content.
 
 *** Changed
 
-- `C-x C-s` no longer sends MPD's server-side `save`; it writes the queue as a
+- ~C-x C-s~ no longer sends MPD's server-side ~save~; it writes the queue as a
   portable M3U8 file, so a saved playlist is not tied to the backend that made
   it.  MPD's own playlists are still listed and playable in the Playlists tab.
 
@@ -85,24 +92,24 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 *** Added
 
-- SSH checks its remote shell once per session and reports which of `cat',
-  `find', `ls -lL', command substitution and compound commands work.
-  `M-x orpheus-ssh-diagnose` shows the same table on demand.
-- When the remote shell cannot run `cat', SSH downloads fall back to `sftp'.
-  `orpheus-ssh-sftp-program` and `orpheus-ssh-sftp-extra-args` configure the
+- SSH checks its remote shell once per session and reports which of ~cat~,
+  ~find~, ~ls -lL~, command substitution and compound commands work.
+  ~M-x orpheus-ssh-diagnose~ shows the same table on demand.
+- When the remote shell cannot run ~cat~, SSH downloads fall back to ~sftp~.
+  ~orpheus-ssh-sftp-program~ and ~orpheus-ssh-sftp-extra-args~ configure the
   fallback.
 
 * 0.5.1 (2026-11-08)
 
 *** Fixed
 
-- Remote search no longer fails when the host has no `find`: it falls back to a
-  recursive `ls`, treats an empty result as no matches, and reports a complete
+- Remote search no longer fails when the host has no ~find~: it falls back to a
+  recursive ~ls~, treats an empty result as no matches, and reports a complete
   failure only once instead of on every retry.
-- SSH downloads no longer rely on `stat', `wc' or command substitution: the
-  file streams with `cat', and a separate `ls -lL' probe supplies the size for
+- SSH downloads no longer rely on ~stat~, ~wc~ or command substitution: the
+  file streams with ~cat~, and a separate ~ls -lL~ probe supplies the size for
   progress when available.  A host that cannot report a size still downloads,
-  showing `--%' and no ETA.
+  showing ~--%~ and no ETA.
 
 * 0.5.0 (2026-11-08)
 
@@ -111,21 +118,21 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 - SSH transfers have a visible Downloads tab.  Every request is a row, whether
   it is queued, downloading, finished or failed, with its byte count.  A
   running transfer also shows its completion percentage, rolling speed and
-  ETA; RET plays a finished copy or retries a failure, and `d' cancels a
+  ETA; RET plays a finished copy or retries a failure, and ~d~ cancels a
   transfer.
-- SSH searches the remote library with `find' and the local backend searches
-  below `orpheus-local-directory', both asynchronously and in the existing
+- SSH searches the remote library with ~find~ and the local backend searches
+  below ~orpheus-local-directory~, both asynchronously and in the existing
   Search tab.  MPD search is unchanged.
 - A now-playing card above the list shows the track, artist, album and a
-  coloured progress bar.  `orpheus-ui-show-now-playing' turns it off.
+  coloured progress bar.  ~orpheus-ui-show-now-playing~ turns it off.
 
 *** Changed
 
 - SSH downloads stream to a cache file as bytes arrive instead of collecting a
   whole track in an Emacs buffer and writing it from a sentinel.  Up to
-  `orpheus-ssh-concurrency' transfers run at once, a play request goes ahead of
-  background prefetches, the next `orpheus-ssh-prefetch' queue entries are
-  fetched early, and the last `orpheus-ssh-cache-count' completed tracks stay
+  ~orpheus-ssh-concurrency~ transfers run at once, a play request goes ahead of
+  background prefetches, the next ~orpheus-ssh-prefetch~ queue entries are
+  fetched early, and the last ~orpheus-ssh-cache-count~ completed tracks stay
   cached.  The header line counts active and queued transfers and shows their
   aggregate throughput.
 
@@ -138,12 +145,12 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 *** Added
 
-- `maak release` bumps the version, closes the changelog, runs the gate, tags
+- ~maak release~ bumps the version, closes the changelog, runs the gate, tags
   the release, pushes it, and creates the GitHub release.
 
 *** Fixed
 
-- The SSH backend no longer reports a track as playing while `ssh cat` is still
+- The SSH backend no longer reports a track as playing while ~ssh cat~ is still
   copying it.  It says what it is downloading, stays stopped, and starts when
   mpv has the local copy.
 
@@ -151,24 +158,24 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 *** Fixed
 
-- The `../' row now appears at a top-level directory and goes to the root, and
-  RET on it moves the tab there instead of leaving only `^' to do the work.
-- MPD refuses a directory URI, and `A' asks before queueing more than
-  `orpheus-ui-add-confirm-threshold' tracks, so one keystroke cannot fill the
-  queue with the whole library.  A queue over `orpheus-ui-queue-warning-size'
-  says so and names `D', which clears it.  Connecting itself queues nothing;
-  a queue that is already large was restored by MPD's own `state_file'.
+- The ~../~ row now appears at a top-level directory and goes to the root, and
+  RET on it moves the tab there instead of leaving only ~^~ to do the work.
+- MPD refuses a directory URI, and ~A~ asks before queueing more than
+  ~orpheus-ui-add-confirm-threshold~ tracks, so one keystroke cannot fill the
+  queue with the whole library.  A queue over ~orpheus-ui-queue-warning-size~
+  says so and names ~D~, which clears it.  Connecting itself queues nothing;
+  a queue that is already large was restored by MPD's own ~state_file~.
 
 *** Changed
 
-- The SSH backend no longer uses MPD.  It lists remote directories with `ssh',
+- The SSH backend no longer uses MPD.  It lists remote directories with ~ssh~,
   copies the selected track into a private temporary directory, and plays it
   with mpv, so the audio comes out of this machine and the far side needs no
   daemon.  The copy is removed on disconnect and when Emacs exits.
-  `orpheus-ssh-mpd-port' and `orpheus-ssh-local-port' are gone;
-  `orpheus-ssh-directory' sets where the files tab starts.
-- `p' moves to the previous row, as it does in Dired.  `SPC' is the key that
-  plays or pauses; `RET' still opens a directory or plays a row.
+  ~orpheus-ssh-mpd-port~ and ~orpheus-ssh-local-port~ are gone;
+  ~orpheus-ssh-directory~ sets where the files tab starts.
+- ~p~ moves to the previous row, as it does in Dired.  ~SPC~ is the key that
+  plays or pauses; ~RET~ still opens a directory or plays a row.
 - The faces and the visualizer use a Greek palette: gold, marble, Aegean blue,
   iris and olive in either light, and a bar ramp from deep sea to gold.
 
@@ -176,29 +183,29 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 *** Added
 
-- A clickable mode line: `orpheus-mode-line-mode' now shows the track even
+- A clickable mode line: ~orpheus-mode-line-mode~ now shows the track even
   when nothing is playing, and the entry answers the mouse — left opens the
   player, middle plays or pauses, right opens a transport menu.  The width of
-  the title is `orpheus-mode-line-width'.
+  the title is ~orpheus-mode-line-width~.
 - The SSH backend, =orpheus-ssh.el=: a remote daemon reached through
-  `ssh -N -L', with the whole MPD client — queue, library, cover art,
-  transport — behind it.  Configured by `orpheus-ssh-host',
-  `orpheus-ssh-mpd-port', `orpheus-ssh-local-port', `orpheus-ssh-program' and
-  `orpheus-ssh-extra-args'.
-- Dired keys and marks in the player: `^' leaves a directory, `m', `u', `U'
-  and `t' mark and unmark rows, `a' and `d' act on the marked rows, and every
-  row carries a glyph for its kind.  `orpheus-ui-icons' turns the glyphs off
-  and `orpheus-ui-plain-ascii' turns them into letters.
-- Directory tabs get their `../' row from the interface itself, so the way out
+  ~ssh -N -L~, with the whole MPD client — queue, library, cover art,
+  transport — behind it.  Configured by ~orpheus-ssh-host~,
+  ~orpheus-ssh-mpd-port~, ~orpheus-ssh-local-port~, ~orpheus-ssh-program~ and
+  ~orpheus-ssh-extra-args~.
+- Dired keys and marks in the player: ~^~ leaves a directory, ~m~, ~u~, ~U~
+  and ~t~ mark and unmark rows, ~a~ and ~d~ act on the marked rows, and every
+  row carries a glyph for its kind.  ~orpheus-ui-icons~ turns the glyphs off
+  and ~orpheus-ui-plain-ascii~ turns them into letters.
+- Directory tabs get their ~../~ row from the interface itself, so the way out
   of a directory is the same on every backend.
 
 *** Changed
 
-- `u' and `U' now unmark rows, as they do in Dired; updating and rescanning
-  the library moved to `M-u' and `M-U'.  `^' backs out of a directory, as in
-  Dired, beside `C-b'.
+- ~u~ and ~U~ now unmark rows, as they do in Dired; updating and rescanning
+  the library moved to ~M-u~ and ~M-U~.  ~^~ backs out of a directory, as in
+  Dired, beside ~C-b~.
 - The status timer no longer reads the current tab every second.  Rows are
-  read when a command, a track change or `g' invalidates them, and a tick
+  read when a command, a track change or ~g~ invalidates them, and a tick
   redraws the tab that is already there; a queue of thousands is fetched
   once, not once a second.
 - Adding several files to MPD is one command list, one round trip.
@@ -225,17 +232,17 @@ the changes since 0.1.0 that it already had.
 
 *** Fixed
 
-- `a' and `A' do nothing on the Queue tab.  Queuing a queue row appended the
+- ~a~ and ~A~ do nothing on the Queue tab.  Queuing a queue row appended the
   whole queue to itself, so one keystroke doubled it and a few of them filled
   the queue with copies of itself.  Every other tab still queues.
-- `orpheus-version' said 0.1.0 while the file header had moved on, so the
+- ~orpheus-version~ said 0.1.0 while the file header had moved on, so the
   suite's consistency check failed on every run.
 - An MPD that is not there is reported as a sentence that says where it looked
   and what went wrong — "cannot reach MPD at localhost:6600: Connection
-  refused.  Is mpd running?" — instead of the raw `make-network-process' error.
+  refused.  Is mpd running?" — instead of the raw ~make-network-process~ error.
   That error carried the arguments the process was made with, closures and all,
   so the message printed the connection, and the password inside it, into
-  `*Messages*' on every attempt.
+  ~*Messages*~ on every attempt.
 - The MPD password leaves the connection as soon as it has been sent, so a
   printed connection or a backtrace cannot repeat it.
 - An MPD that answers and refuses — a wrong password, or none where one is
@@ -245,17 +252,17 @@ the changes since 0.1.0 that it already had.
 
 *** Changed
 
-- The README says where the MPD password belongs: `~/.authinfo.gpg', read by
-  `auth-source' through GPG, with `MPD_PASSWORD' kept for a single session.
-  The recipe prompts for the secret instead of piping from `pass', which wrote
-  a passwordless entry whenever `pass' was not installed.
+- The README says where the MPD password belongs: =~/.authinfo.gpg=, read by
+  ~auth-source~ through GPG, with ~MPD_PASSWORD~ kept for a single session.
+  The recipe prompts for the secret instead of piping from ~pass~, which wrote
+  a passwordless entry whenever ~pass~ was not installed.
 - The README names the host and port the entry is looked up under, which are
-  `orpheus-mpd-host' and `orpheus-mpd-port' even when the connection goes
+  ~orpheus-mpd-host~ and ~orpheus-mpd-port~ even when the connection goes
   through a socket, and gives the GPG recipe in those two values instead of
-  hardcoded ones.  It also says what a `pass' store needs: `auth-source-pass'
+  hardcoded ones.  It also says what a ~pass~ store needs: ~auth-source-pass~
   switched on.
 - The README says why the Queue tab can be full on the first start: MPD keeps
-  the queue in its `state_file' and restores it, and orpheus adds nothing.
+  the queue in its ~state_file~ and restores it, and orpheus adds nothing.
 
 *** Version
 
@@ -269,20 +276,20 @@ The first release.
 
 - =orpheus.el=, the player itself: the customization group, the backend
   selection, the status timer, the transport commands, the mode-line indicator,
-  song-change notifications, and the entry points `orpheus',
-  `orpheus-play-file', `orpheus-add-file' and `orpheus-play-url'.
+  song-change notifications, and the entry points ~orpheus~,
+  ~orpheus-play-file~, ~orpheus-add-file~ and ~orpheus-play-url~.
 - =orpheus-backend.el=, the protocol every backend implements: the
-  `orpheus-track', `orpheus-status' and `orpheus-item' values, the registry
-  behind `orpheus-register-backend', and the formatting helpers the interface
+  ~orpheus-track~, ~orpheus-status~ and ~orpheus-item~ values, the registry
+  behind ~orpheus-register-backend~, and the formatting helpers the interface
   draws with.
-- =orpheus-mpd.el=, an MPD client written directly on `make-network-process':
-  TCP and unix sockets, password from the environment or `auth-source',
-  commands and replies serialized per connection, `ACK` errors handed to the
-  caller, and the binary `albumart`/`readpicture` payloads written to the
+- =orpheus-mpd.el=, an MPD client written directly on ~make-network-process~:
+  TCP and unix sockets, password from the environment or ~auth-source~,
+  commands and replies serialized per connection, ~ACK~ errors handed to the
+  caller, and the binary ~albumart~/~readpicture~ payloads written to the
   cache.  Status, current song, queue, directories, artists, album artists,
   albums, playlists, search, outputs, and the transport.
 - =orpheus-local.el=, an mpv backend over the JSON IPC socket: a queue kept in
-  Emacs, tags from mpv's `metadata`, cover art next to the file or extracted
+  Emacs, tags from mpv's ~metadata~, cover art next to the file or extracted
   with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).  The audio output
   follows the platform: PipeWire with PulseAudio and ALSA as fallbacks on
   Linux, CoreAudio on macOS, WASAPI on Windows.
