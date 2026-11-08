@@ -9,7 +9,7 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
-* Unreleased
+* 0.3.0 (2026-11-08)
 
 *** Added
 
@@ -50,6 +50,10 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 - The visualizer draws a frame once and reuses the image while the bars look
   the same, instead of rebuilding the SVG for every timer tick.  A buried
   visualizer does not redraw at all.
+
+*** Version
+
+- 0.3.0, the release after 0.2.1.
 
 * 0.2.1 (2026-11-07)
 
