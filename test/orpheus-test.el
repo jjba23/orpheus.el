@@ -1351,8 +1351,10 @@ so they are allowed by name."
 
 ;;; The SSH backend
 
-(defun orpheus-test--with-fake-ssh (function)
-  "Call FUNCTION with ssh replaced by the suite's fake program."
+(defun orpheus-test--with-fake-ssh (function &optional mode)
+  "Call FUNCTION with ssh replaced by the suite's fake program.
+MODE selects a failure the fake ssh should simulate: `empty', `missing' or
+`broken'."
   (let ((orpheus-ssh-program
          (expand-file-name invocation-name invocation-directory))
         (orpheus-ssh-extra-args
@@ -1361,7 +1363,12 @@ so they are allowed by name."
                 "test/orpheus-fake-ssh.el"
                 (file-name-directory orpheus-test--source))
                "--"))
-        (orpheus-ssh-host "fake.invalid"))
+        (orpheus-ssh-host "fake.invalid")
+        (process-environment
+         (if mode
+             (cons (concat "ORPHEUS_TEST_FAKE_SSH=" mode)
+                   process-environment)
+           process-environment)))
     (funcall function)))
 
 (ert-deftest orpheus-test/ssh-backend-is-local ()
@@ -1425,21 +1432,132 @@ so they are allowed by name."
              (should (orpheus-item-playable (car items))))
          (orpheus-backend-disconnect ssh))))))
 
-(ert-deftest orpheus-test/ssh-download-command-reports-size ()
-  "The copy command announces the remote size before the file bytes."
-  (let ((command (orpheus-ssh--download-command "Music/It's.mp3")))
-    (should (string-match-p "ORPHEUS-SIZE" command))
-    (should (string-match-p "stat -c %s" command))
-    (should (string-match-p (regexp-quote "'Music/It'\\''s.mp3'")
-                            command))))
+(ert-deftest orpheus-test/ssh-search-falls-back-to-a-recursive-listing ()
+  "When find is missing, search filters a recursive ls instead."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((orpheus-ssh-directory "Music")
+           (ssh (orpheus-make-backend 'ssh))
+           (items 'waiting)
+           (messages nil))
+       (unwind-protect
+           (progn
+             (should (string-match-p "2>/dev/null"
+                                     (orpheus-ssh--search-command)))
+             (cl-letf (((symbol-function 'message)
+                        (lambda (format-string &rest args)
+                          (push (apply #'format format-string args) messages))))
+               (orpheus-backend-browse ssh 'search '("song")
+                                       (lambda (result) (setq items result)))
+               (should (orpheus-test--wait
+                        (lambda () (not (eq items 'waiting))) 20)))
+             (should (equal (mapcar #'orpheus-item-label items)
+                            '("Song.mp3")))
+             (should (equal (alist-get 'uri
+                                       (orpheus-item-data (car items)))
+                            "Music/Song.mp3"))
+             (should (orpheus-ssh-instance-search-fallback ssh))
+             (should (cl-some (lambda (entry)
+                                (string-match-p "recursive" entry))
+                              messages)))
+         (orpheus-backend-disconnect ssh))))
+   "missing"))
 
-(ert-deftest orpheus-test/ssh-transfer-reads-a-split-size-header ()
-  "A size header split across chunks is read, not written to the file."
-  (let ((transfer (orpheus-ssh-transfer-create :header "")))
-    (should (equal (orpheus-ssh--transfer-data transfer "ORPHEUS-SIZE 1") ""))
-    (should (equal (orpheus-ssh--transfer-data transfer "0\nabc") "abc"))
-    (should (= (orpheus-ssh-transfer-total transfer) 10))
-    (should-not (orpheus-ssh-transfer-header transfer))))
+(ert-deftest orpheus-test/ssh-search-with-no-matches-is-not-a-failure ()
+  "A successful find with no matches returns nothing without an error."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((orpheus-ssh-directory "Music")
+           (ssh (orpheus-make-backend 'ssh))
+           (items 'waiting)
+           (messages nil))
+       (unwind-protect
+           (progn
+             (cl-letf (((symbol-function 'message)
+                        (lambda (format-string &rest args)
+                          (push (apply #'format format-string args) messages))))
+               (orpheus-backend-browse ssh 'search '("song")
+                                       (lambda (result) (setq items result)))
+               (should (orpheus-test--wait
+                        (lambda () (not (eq items 'waiting))) 20)))
+             (should-not items)
+             (should-not (orpheus-ssh-instance-search-fallback ssh))
+             (should-not (cl-some (lambda (entry)
+                                    (string-match-p "could not\\|failed" entry))
+                                  messages)))
+         (orpheus-backend-disconnect ssh))))
+   "empty"))
+
+(ert-deftest orpheus-test/ssh-search-reports-one-failure ()
+  "When find and ls both fail, repeated searches report it once."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((orpheus-ssh-directory "Music")
+           (ssh (orpheus-make-backend 'ssh))
+           (items 'waiting)
+           (messages nil))
+       (unwind-protect
+           (progn
+             (cl-letf (((symbol-function 'message)
+                        (lambda (format-string &rest args)
+                          (push (apply #'format format-string args) messages))))
+               (dotimes (_ 2)
+                 (setq items 'waiting)
+                 (orpheus-backend-browse ssh 'search '("song")
+                                         (lambda (result) (setq items result)))
+                 (should (orpheus-test--wait
+                          (lambda () (not (eq items 'waiting))) 20))))
+             (should-not items)
+             (should (orpheus-ssh-instance-search-fallback ssh))
+             (should (= 1
+                        (cl-count-if
+                         (lambda (entry)
+                           (string-match-p "search failed" entry))
+                         messages))))
+         (orpheus-backend-disconnect ssh))))
+   "broken"))
+
+(ert-deftest orpheus-test/ssh-download-command-is-plain-cat ()
+  "The download is a simple cat, so a minimal remote shell can run it."
+  (let ((command (orpheus-ssh--download-command "Music/It's.mp3")))
+    (should (equal command "cat -- 'Music/It'\\''s.mp3'"))
+    (should-not (string-match-p "stat\\|ORPHEUS-SIZE" command))))
+
+(ert-deftest orpheus-test/ssh-size-probe-reads-ls ()
+  "The optional size probe is a simple ls, and its size field is read."
+  (should (equal (orpheus-ssh--size-command "Music/It's.mp3")
+                 "ls -lL -- 'Music/It'\\''s.mp3' 2>/dev/null"))
+  (should (= (orpheus-ssh--parse-size
+              "-rw-r--r-- 1 user group 1234 Nov  8 12:00 Song.mp3\n")
+             1234))
+  (should-not (orpheus-ssh--parse-size "ls: no such file\n")))
+
+(ert-deftest orpheus-test/ssh-size-probe-fills-total ()
+  "A successful size probe fills the transfer total."
+  (let ((ssh (orpheus-make-backend 'ssh))
+        (transfer (orpheus-ssh-transfer-create
+                   :uri "Music/Song.mp3" :state 'downloading)))
+    (cl-letf (((symbol-function 'orpheus-ssh--run)
+               (lambda (_ssh _command callback &optional _quiet)
+                 (funcall callback
+                          "-rw-r--r-- 1 user group 2048 Nov  8 12:00 Song.mp3\n"))))
+      (orpheus-ssh--request-size ssh transfer))
+    (should (= (orpheus-ssh-transfer-total transfer) 2048))))
+
+(ert-deftest orpheus-test/ssh-size-probe-failure-is-cached ()
+  "A host that cannot report a size is asked only once."
+  (let ((ssh (orpheus-make-backend 'ssh))
+        (transfer (orpheus-ssh-transfer-create
+                   :uri "Music/Song.mp3" :state 'downloading))
+        (calls 0))
+    (cl-letf (((symbol-function 'orpheus-ssh--run)
+               (lambda (_ssh _command callback &optional _quiet)
+                 (cl-incf calls)
+                 (funcall callback nil))))
+      (orpheus-ssh--request-size ssh transfer)
+      (orpheus-ssh--request-size ssh transfer))
+    (should (= calls 1))
+    (should (orpheus-ssh-instance-size-failed ssh))))
 
 (ert-deftest orpheus-test/ssh-download-rows-show-their-state ()
   "A transfer becomes a row with its state, size and URI."
@@ -1473,7 +1591,7 @@ so they are allowed by name."
          (path (make-temp-file "orpheus-sample-"))
          (transfer (orpheus-ssh-transfer-create
                     :uri "Music/Song.mp3" :path path
-                    :state 'downloading :header nil)))
+                    :state 'downloading)))
     (unwind-protect
         (progn
           (orpheus-ssh--transfer-filter ssh transfer "abc")
@@ -1508,6 +1626,30 @@ so they are allowed by name."
           (should (= (alist-get 'speed data) 512))
           (should (= (alist-get 'eta data) 4)))
       (orpheus-backend-disconnect ssh))))
+
+(ert-deftest orpheus-test/ssh-download-without-size-probe-still-works ()
+  "A failed ls size probe does not stop the cat download."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (path nil))
+       (unwind-protect
+           (progn
+             (orpheus-ssh--download
+              ssh "Music/Song.mp3"
+              (lambda (result) (setq path result)))
+             (should (orpheus-test--wait (lambda () path) 20))
+             (should (file-readable-p path))
+             (should (equal (with-temp-buffer
+                              (insert-file-contents path)
+                              (buffer-string))
+                            "fake audio\n"))
+             (let ((transfer (orpheus-ssh--transfer-for-uri
+                              ssh "Music/Song.mp3")))
+               (should (eq (orpheus-ssh-transfer-state transfer) 'done))
+               (should (= (orpheus-ssh-transfer-bytes transfer) 11))))
+         (orpheus-backend-disconnect ssh))))
+   "nosize"))
 
 (ert-deftest orpheus-test/ssh-cancel-removes-a-partial-copy ()
   "Cancelling a transfer deletes the bytes it had already written."

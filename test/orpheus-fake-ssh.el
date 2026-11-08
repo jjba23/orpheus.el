@@ -13,16 +13,26 @@
 
 ;;; Code:
 
-(let ((command (car (last command-line-args-left))))
+(let ((command (car (last command-line-args-left)))
+      (mode (getenv "ORPHEUS_TEST_FAKE_SSH")))
   (cond
+   ((and command (string-prefix-p "ls -lL " command))
+    (if (equal mode "nosize")
+        (kill-emacs 1)
+      (princ "-rw-r--r-- 1 user group 11 Nov  8 12:00 Song.mp3\n")))
+   ((and command (string-prefix-p "ls -1pR " command))
+    (if (equal mode "broken")
+        (kill-emacs 1)
+      (princ "Music:\nSong.mp3\nAlbum/\n\nMusic/Album:\nOther.mp3\nnotes.txt\n")))
    ((and command (string-prefix-p "ls " command))
     (princ "Album/\nSong.mp3\nnotes.txt\n"))
-   ((and command (string-match-p "ORPHEUS-SIZE" command))
-    (princ "ORPHEUS-SIZE 11\nfake audio\n"))
    ((and command (string-prefix-p "cat " command))
     (princ "fake audio\n"))
    ((and command (string-prefix-p "find " command))
-    (princ "Music/Song.mp3\nMusic/Album/Other.mp3\nMusic/notes.txt\n"))
+    (cond
+     ((equal mode "empty") nil)
+     ((member mode '("missing" "broken")) (kill-emacs 127))
+     (t (princ "Music/Song.mp3\nMusic/Album/Other.mp3\nMusic/notes.txt\n"))))
    (t (kill-emacs 2))))
 
 ;;; orpheus-fake-ssh.el ends here

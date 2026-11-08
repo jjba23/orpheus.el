@@ -94,13 +94,17 @@ prove it is real.
   `orpheus-ssh-concurrency' at once.  A play request jumps ahead of prefetches,
   the next `orpheus-ssh-prefetch' queue entries arrive before you need them,
   and the Downloads tab shows every transfer's state, completion, rolling
-  speed, ETA and bytes.  The header line counts active and queued transfers and
+  speed, ETA and bytes.  The file streams with `cat'; a separate `ls -l'
+  probe supplies its size for progress when the host allows it, so a host that
+  cannot report a size still downloads and shows `--%'.  The header line counts
+  active and queued transfers and
   shows their aggregate throughput.  `d' cancels one and `RET' plays a finished
   copy or retries a failure.
 - *Search close to home.* :: MPD searches its library, the local backend runs
   `find' below `orpheus-local-directory', and SSH runs `find' below
-  `orpheus-ssh-directory'.  All three answer asynchronously and put the results
-  in the same Search tab.
+  `orpheus-ssh-directory'; when the host has no `find', SSH falls back to a
+  recursive `ls`.  All three answer asynchronously and put the results in the
+  same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
   artist and album, and a coloured progress bar.  `orpheus-ui-show-now-playing'
   turns it off when the header line is enough.
@@ -319,7 +323,8 @@ Music on another machine is copied over ssh and played by mpv here:
 #+end_src
 
 There is no daemon on the far side: `ls -1p` fills the files tab, a remote
-`find` fills Search, and RET starts a transfer.  Bytes go straight to a private
+`find` fills Search, falling back to a recursive `ls` when the host has no
+`find`, and RET starts a transfer.  Bytes go straight to a private
 cache file as they arrive, so another download never freezes Emacs; the
 Downloads tab shows what is queued and what is moving, and `d' cancels a row.
 Playback begins once the copy is complete, so a large track spends its transfer

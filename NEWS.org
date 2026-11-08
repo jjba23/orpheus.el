@@ -9,6 +9,18 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Fixed
+
+- Remote search no longer fails when the host has no `find`: it falls back to a
+  recursive `ls`, treats an empty result as no matches, and reports a complete
+  failure only once instead of on every retry.
+- SSH downloads no longer rely on `stat', `wc' or command substitution: the
+  file streams with `cat', and a separate `ls -lL' probe supplies the size for
+  progress when available.  A host that cannot report a size still downloads,
+  showing `--%' and no ETA.
+
 * 0.5.0 (2026-11-08)
 
 *** Added

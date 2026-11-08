@@ -83,7 +83,7 @@ current one is still playing.  More than two rarely improves a single link."
                (:constructor orpheus-ssh-transfer-create)
                (:conc-name orpheus-ssh-transfer-))
   "One track SSH is fetching, or has finished fetching."
-  uri path state (bytes 0) total started samples header callbacks process)
+  uri path state (bytes 0) total started samples callbacks process)
 
 (cl-defstruct (orpheus-ssh (:include orpheus-local)
                            (:constructor orpheus-ssh--create)
@@ -94,7 +94,10 @@ current one is still playing.  More than two rarely improves a single link."
   (transfers nil)
   (processes nil)
   (cache nil)
-  current-file)
+  current-file
+  search-fallback
+  search-warned
+  size-failed)
 
 (defvar orpheus-ssh--live nil
   "SSH backends whose temporary files may still be on disk.")
@@ -124,9 +127,6 @@ current one is still playing.  More than two rarely improves a single link."
   "Return STRING quoted as one POSIX shell word."
   (concat "'" (string-replace "'" "'\\''" string) "'"))
 
-(defconst orpheus-ssh--size-marker "ORPHEUS-SIZE "
-  "Header the remote copy prints before the file bytes.")
-
 (defconst orpheus-ssh--speed-window 5.0
   "Seconds of byte samples that make up a transfer's rolling speed.")
 
@@ -134,14 +134,22 @@ current one is still playing.  More than two rarely improves a single link."
   "Maximum number of byte samples kept for one transfer.")
 
 (defun orpheus-ssh--download-command (uri)
-  "Return the remote command that reports URI's size and then copies it."
-  (let ((quoted (orpheus-ssh--shell-quote uri)))
-    (format (concat "size=$(stat -c %%s -- %s 2>/dev/null"
-                    " || stat -f %%z -- %s 2>/dev/null"
-                    " || wc -c < %s);"
-                    " printf 'ORPHEUS-SIZE %%s\\n' \"$size\";"
-                    " exec cat -- %s")
-            quoted quoted quoted quoted)))
+  "Return the simple command that copies URI to standard output."
+  (format "cat -- %s" (orpheus-ssh--shell-quote uri)))
+
+(defun orpheus-ssh--size-command (uri)
+  "Return the simple command that reports URI's size."
+  (format "ls -lL -- %s 2>/dev/null" (orpheus-ssh--shell-quote uri)))
+
+(defun orpheus-ssh--parse-size (output)
+  "Return the byte size in ls -l OUTPUT, or nil."
+  (when-let* ((line (car (split-string (or output "") "\n" t)))
+              (fields (and line
+                           (split-string (string-trim line)
+                                         "[[:space:]]+" t))))
+    (when (>= (length fields) 5)
+      (let ((size (string-to-number (nth 4 fields))))
+        (when (> size 0) size)))))
 
 (defun orpheus-ssh--join (dir name)
   "Return NAME below DIR, where DIR may be empty for the remote home."
@@ -181,14 +189,22 @@ current one is still playing.  More than two rarely improves a single link."
               :data (list (cons 'uri (orpheus-ssh--join dir line)))))))
          (split-string output "\n" t))))
 
+(defun orpheus-ssh--search-root ()
+  "Return the remote directory search starts from."
+  (if (and orpheus-ssh-directory
+           (not (string-empty-p orpheus-ssh-directory)))
+      orpheus-ssh-directory
+    "."))
+
 (defun orpheus-ssh--search-command ()
-  "Return the command that lists files below the starting directory."
-  (format "find %s -type f -print"
-          (orpheus-ssh--shell-quote
-           (if (and orpheus-ssh-directory
-                    (not (string-empty-p orpheus-ssh-directory)))
-               orpheus-ssh-directory
-             "."))))
+  "Return the find command that lists files below the starting directory."
+  (format "find %s -type f -print 2>/dev/null"
+          (orpheus-ssh--shell-quote (orpheus-ssh--search-root))))
+
+(defun orpheus-ssh--search-listing-command ()
+  "Return the recursive ls command used when find is unavailable."
+  (format "ls -1pR -- %s"
+          (orpheus-ssh--shell-quote (orpheus-ssh--search-root))))
 
 (defun orpheus-ssh--relative-label (path)
   "Return PATH with the configured remote directory removed."
@@ -216,17 +232,61 @@ OUTPUT is the newline separated result of `orpheus-ssh--search-command'."
                   :data (list (cons 'uri path))))))
            (split-string output "\n" t)))))
 
-(defun orpheus-ssh--search (query callback)
-  "Search the remote library for QUERY and call CALLBACK with rows."
-  (if (or (null query) (string-empty-p query))
-      (funcall callback nil)
-    (orpheus-ssh--run
-     nil (orpheus-ssh--search-command)
-     (lambda (output)
-       (funcall callback (and output (orpheus-ssh--search-items query output)))))))
+(defun orpheus-ssh--search-listing-items (query output)
+  "Return track rows from recursive ls OUTPUT matching QUERY."
+  (let ((dir nil)
+        (paths nil))
+    (dolist (line (split-string output "\n"))
+      (cond
+       ((string-empty-p line))
+       ((string-suffix-p ":" line)
+        (setq dir (string-remove-suffix ":" line)))
+       ((string-suffix-p "/" line))
+       ((orpheus-ssh--media-file-p line)
+        (push (orpheus-ssh--join (if (equal dir ".") "" dir) line)
+              paths))))
+    (orpheus-ssh--search-items query (string-join (nreverse paths) "\n"))))
 
-(defun orpheus-ssh--run (_ssh command callback)
-  "Run COMMAND on ssh's host, then call CALLBACK with its output or nil."
+(defun orpheus-ssh--search (ssh query callback)
+  "Search SSH for QUERY and call CALLBACK with rows."
+  (cond
+   ((or (null query) (string-empty-p query))
+    (funcall callback nil))
+   ((orpheus-ssh-instance-search-fallback ssh)
+    (orpheus-ssh--search-listing ssh query callback))
+   (t
+    (orpheus-ssh--run
+     ssh (orpheus-ssh--search-command)
+     (lambda (output)
+       (if (null output)
+           (orpheus-ssh--search-listing ssh query callback)
+         (setf (orpheus-ssh-instance-search-warned ssh) nil)
+         (funcall callback (orpheus-ssh--search-items query output))))
+     t))))
+
+(defun orpheus-ssh--search-listing (ssh query callback)
+  "Search SSH with a recursive listing for QUERY, then call CALLBACK with rows."
+  (orpheus-ssh--run
+   ssh (orpheus-ssh--search-listing-command)
+   (lambda (output)
+     (if output
+         (progn
+           (setf (orpheus-ssh-instance-search-fallback ssh) t)
+           (unless (orpheus-ssh-instance-search-warned ssh)
+             (setf (orpheus-ssh-instance-search-warned ssh) t)
+             (message "orpheus: remote find is unavailable; using a recursive listing"))
+           (funcall callback (orpheus-ssh--search-listing-items query output)))
+       (setf (orpheus-ssh-instance-search-fallback ssh) t)
+       (unless (orpheus-ssh-instance-search-warned ssh)
+         (setf (orpheus-ssh-instance-search-warned ssh) t)
+         (message "orpheus: remote search failed; browse the Directories tab instead"))
+       (funcall callback nil)))
+   t))
+
+(defun orpheus-ssh--run (_ssh command callback &optional quiet)
+  "Run COMMAND on ssh's host, then call CALLBACK with its output or nil.
+When QUIET is non-nil, do not report a command that failed; the caller has a
+more useful message.  An empty successful command yields an empty string."
   (if-let* ((host (orpheus-ssh--host)))
            (let ((buffer (generate-new-buffer " *orpheus-ssh-command*")))
              (condition-case err
@@ -241,20 +301,23 @@ OUTPUT is the newline separated result of `orpheus-ssh--search-command'."
                   :sentinel
                   (lambda (process _event)
                     (unless (process-live-p process)
-                      (let ((output
+                      (let ((success
                              (and (eq (process-status process) 'exit)
-                                  (zerop (process-exit-status process))
-                                  (with-current-buffer buffer (buffer-string)))))
+                                  (zerop (process-exit-status process))))
+                            (output (with-current-buffer buffer
+                                      (buffer-string))))
                         (when (buffer-live-p buffer) (kill-buffer buffer))
-                        (if output
+                        (if success
                             (funcall callback output)
-                          (message "orpheus: ssh could not run %s; see *orpheus ssh*"
-                                   command)
+                          (unless quiet
+                            (message "orpheus: ssh could not run %s; see *orpheus ssh*"
+                                     command))
                           (funcall callback nil))))))
                (error
                 (when (buffer-live-p buffer) (kill-buffer buffer))
-                (message "orpheus: cannot run ssh: %s"
-                         (error-message-string err))
+                (unless quiet
+                  (message "orpheus: cannot run ssh: %s"
+                           (error-message-string err)))
                 (funcall callback nil))))
     (message "orpheus: set `orpheus-ssh-host' to the machine your music is on")
     (funcall callback nil)))
@@ -367,6 +430,18 @@ since `started' before there are two samples to compare."
               (cl-subseq samples 0 orpheus-ssh--speed-samples)
             samples))))
 
+(defun orpheus-ssh--request-size (ssh transfer)
+  "Ask SSH once for TRANSFER's size, when the host can report it."
+  (unless (orpheus-ssh-instance-size-failed ssh)
+    (orpheus-ssh--run
+     ssh (orpheus-ssh--size-command (orpheus-ssh-transfer-uri transfer))
+     (lambda (output)
+       (if-let* ((size (orpheus-ssh--parse-size output)))
+           (when (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+             (setf (orpheus-ssh-transfer-total transfer) size))
+         (setf (orpheus-ssh-instance-size-failed ssh) t)))
+     t)))
+
 (defun orpheus-ssh--transfer-detail (transfer)
   "Return the state, completion and speed shown for TRANSFER."
   (pcase (orpheus-ssh-transfer-state transfer)
@@ -440,8 +515,7 @@ since `started' before there are two samples to compare."
           (orpheus-ssh-transfer-bytes transfer) 0
           (orpheus-ssh-transfer-total transfer) nil
           (orpheus-ssh-transfer-started transfer) (float-time)
-          (orpheus-ssh-transfer-samples transfer) nil
-          (orpheus-ssh-transfer-header transfer) "")
+          (orpheus-ssh-transfer-samples transfer) nil)
     (condition-case err
         (let ((process
                (progn
@@ -464,52 +538,23 @@ since `started' before there are two samples to compare."
                               (orpheus-ssh--transfer-sentinel
                                ssh transfer process))))))
           (setf (orpheus-ssh-transfer-process transfer) process)
-          (push process (orpheus-ssh-instance-processes ssh)))
+          (push process (orpheus-ssh-instance-processes ssh))
+          (orpheus-ssh--request-size ssh transfer))
       (error
        (orpheus-ssh--fail-transfer
         ssh transfer (error-message-string err))))))
-
-(defun orpheus-ssh--transfer-data (transfer chunk)
-  "Return CHUNK after removing TRANSFER's leading size header.
-Set TRANSFER's total from the header.  A stream without the header is passed
-through unchanged."
-  (if (null (orpheus-ssh-transfer-header transfer))
-      chunk
-    (let* ((pending (concat (orpheus-ssh-transfer-header transfer) chunk))
-           (newline (string-match "\n" pending)))
-      (cond
-       ((null newline)
-        (if (> (string-bytes pending) 64)
-            (progn
-              (setf (orpheus-ssh-transfer-header transfer) nil)
-              pending)
-          (setf (orpheus-ssh-transfer-header transfer) pending)
-          ""))
-       (t
-        (let ((line (string-trim (substring pending 0 newline)))
-              (data (substring pending (match-end 0))))
-          (setf (orpheus-ssh-transfer-header transfer) nil)
-          (if (string-prefix-p orpheus-ssh--size-marker line)
-              (let ((total (string-to-number
-                            (substring line
-                                       (length orpheus-ssh--size-marker)))))
-                (when (> total 0)
-                  (setf (orpheus-ssh-transfer-total transfer) total))
-                data)
-            pending)))))))
 
 (defun orpheus-ssh--transfer-filter (ssh transfer chunk)
   "Write CHUNK into TRANSFER's cache file on SSH, then count it."
   (when (eq (orpheus-ssh-transfer-state transfer) 'downloading)
     (condition-case err
-        (let ((data (orpheus-ssh--transfer-data transfer chunk)))
-          (unless (string-empty-p data)
-            (let ((coding-system-for-write 'binary))
-              (write-region data nil (orpheus-ssh-transfer-path transfer)
-                            t 'silent))
-            (cl-incf (orpheus-ssh-transfer-bytes transfer)
-                     (string-bytes data))
-            (orpheus-ssh--note-transfer-sample transfer)))
+        (unless (string-empty-p chunk)
+          (let ((coding-system-for-write 'binary))
+            (write-region chunk nil (orpheus-ssh-transfer-path transfer)
+                          t 'silent))
+          (cl-incf (orpheus-ssh-transfer-bytes transfer)
+                   (string-bytes chunk))
+          (orpheus-ssh--note-transfer-sample transfer))
       (error
        (let ((process (orpheus-ssh-transfer-process transfer)))
          (setf (orpheus-ssh-transfer-state transfer) 'failed)
@@ -720,7 +765,7 @@ user's request and never becomes the current playing file."
          ('directories
           (orpheus-ssh--browse-directories
            ssh (or (car arg) orpheus-ssh-directory) callback))
-         ('search (orpheus-ssh--search (car arg) callback))
+         ('search (orpheus-ssh--search ssh (car arg) callback))
          ('downloads (orpheus-ssh--backend-downloads ssh callback))
          (_ (funcall callback nil))))
 
