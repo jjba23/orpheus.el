@@ -10,7 +10,7 @@
 ;;; lists a remote directory with ssh, copies the track you choose into a
 ;;; private temporary directory, and hands that copy to mpv.  There is no
 ;;; daemon on the far side and no tunnel: each listing, search and download is
-;;; one short-lived ssh command.
+;;; one short-lived ssh command, or an sftp process when the shell has no cat.
 ;;;
 ;;; Downloads run in a queue.  A play request jumps ahead of background
 ;;; prefetches, at most `orpheus-ssh-concurrency' ssh streams run at once, and
@@ -59,6 +59,16 @@ machine whose key is not in `~/.ssh/known_hosts' yet, belongs here.  On a slow
 link `-C' can make a large, uncompressed track arrive sooner."
   :type '(repeat string) :group 'orpheus)
 
+(defcustom orpheus-ssh-sftp-program "sftp"
+  "Program name or path of sftp, used when the remote shell cannot run `cat'."
+  :type 'string :group 'orpheus)
+
+(defcustom orpheus-ssh-sftp-extra-args nil
+  "Extra arguments passed to sftp before the host.
+A non-standard port belongs here as `-P PORT', because sftp spells the port
+differently from ssh; the rest of ssh's options have sftp's own spelling too."
+  :type '(repeat string) :group 'orpheus)
+
 (defcustom orpheus-ssh-cache-count 8
   "Number of downloaded tracks kept in SSH's temporary directory.
 A track played from the cache needs no second transfer.  The playing track is
@@ -83,7 +93,8 @@ current one is still playing.  More than two rarely improves a single link."
                (:constructor orpheus-ssh-transfer-create)
                (:conc-name orpheus-ssh-transfer-))
   "One track SSH is fetching, or has finished fetching."
-  uri path state (bytes 0) total started samples callbacks process)
+  uri path state (bytes 0) total started samples callbacks process
+  retried batch timer)
 
 (cl-defstruct (orpheus-ssh (:include orpheus-local)
                            (:constructor orpheus-ssh--create)
@@ -97,7 +108,11 @@ current one is still playing.  More than two rarely improves a single link."
   current-file
   search-fallback
   search-warned
-  size-failed)
+  size-failed
+  cat-failed
+  capabilities
+  capabilities-waiting
+  capabilities-reported)
 
 (defvar orpheus-ssh--live nil
   "SSH backends whose temporary files may still be on disk.")
@@ -150,6 +165,30 @@ current one is still playing.  More than two rarely improves a single link."
     (when (>= (length fields) 5)
       (let ((size (string-to-number (nth 4 fields))))
         (when (> size 0) size)))))
+
+(defun orpheus-ssh--sftp-program ()
+  "Return sftp's program name or path."
+  (or (executable-find orpheus-ssh-sftp-program) orpheus-ssh-sftp-program))
+
+(defun orpheus-ssh--sftp-quote (path)
+  "Return PATH quoted as one sftp batch word."
+  (concat "\""
+          (mapconcat
+           (lambda (char)
+             (if (member char (string-to-list "\\\"*?[]"))
+                 (concat "\\" (char-to-string char))
+               (char-to-string char)))
+           (string-to-list path) "")
+          "\""))
+
+(defun orpheus-ssh--sftp-batch (uri path)
+  "Return an sftp batch command that copies URI to PATH."
+  (when (or (string-match-p "[\r\n]" uri)
+            (string-match-p "[\r\n]" path))
+    (error "Path contains a newline"))
+  (format "get %s %s\n"
+          (orpheus-ssh--sftp-quote uri)
+          (orpheus-ssh--sftp-quote path)))
 
 (defun orpheus-ssh--join (dir name)
   "Return NAME below DIR, where DIR may be empty for the remote home."
@@ -321,6 +360,127 @@ more useful message.  An empty successful command yields an empty string."
                 (funcall callback nil))))
     (message "orpheus: set `orpheus-ssh-host' to the machine your music is on")
     (funcall callback nil)))
+
+;;; Checking the remote shell
+
+(defconst orpheus-ssh--probe-commands
+  '((cat . "cat -- /dev/null")
+    (find . "find . -maxdepth 0 -print")
+    (size . "ls -lL -- /")
+    (substitution . "printf '%s' \"$(printf ok)\"")
+    (compound . "printf ok >/dev/null && printf ok"))
+  "Remote commands that test the features SSH uses.")
+
+(defun orpheus-ssh--capability-summary (capabilities)
+  "Return one line describing CAPABILITIES."
+  (format (concat "cat %s, find %s, ls sizes %s, command substitution %s, "
+                  "compound commands %s; downloads use %s")
+          (if (alist-get 'cat capabilities) "yes" "no")
+          (if (alist-get 'find capabilities) "yes" "no")
+          (if (alist-get 'size capabilities) "yes" "no")
+          (if (alist-get 'substitution capabilities) "yes" "no")
+          (if (alist-get 'compound capabilities) "yes" "no")
+          (if (alist-get 'cat capabilities) "cat" "sftp")))
+
+(defun orpheus-ssh--probe (ssh)
+  "Probe SSH's remote commands once and then call its waiting callbacks."
+  (let ((checks orpheus-ssh--probe-commands)
+        (results nil))
+    (cl-labels
+        ((finish ()
+          (let ((capabilities (nreverse results)))
+            (setf (orpheus-ssh-instance-capabilities ssh) capabilities)
+            (unless (alist-get 'cat capabilities)
+              (setf (orpheus-ssh-instance-cat-failed ssh) t))
+            (unless (alist-get 'size capabilities)
+              (setf (orpheus-ssh-instance-size-failed ssh) t))
+            (unless (alist-get 'find capabilities)
+              (setf (orpheus-ssh-instance-search-fallback ssh) t))
+            (let ((waiting (orpheus-ssh-instance-capabilities-waiting ssh)))
+              (setf (orpheus-ssh-instance-capabilities-waiting ssh) nil)
+              (dolist (callback waiting)
+                (ignore-errors (funcall callback capabilities))))))
+         (next ()
+          (if-let* ((check (pop checks)))
+              (orpheus-ssh--run
+               ssh (cdr check)
+               (lambda (output)
+                 (push (cons (car check) (stringp output)) results)
+                 (next))
+               t)
+            (finish))))
+      (next))))
+
+(defun orpheus-ssh--capabilities (ssh callback)
+  "Call CALLBACK with SSH's capabilities, probing the host only once."
+  (cond
+   ((orpheus-ssh-instance-capabilities ssh)
+    (funcall callback (orpheus-ssh-instance-capabilities ssh)))
+   ((orpheus-ssh-instance-capabilities-waiting ssh)
+    (setf (orpheus-ssh-instance-capabilities-waiting ssh)
+          (append (orpheus-ssh-instance-capabilities-waiting ssh)
+                  (list callback))))
+   (t
+    (setf (orpheus-ssh-instance-capabilities-waiting ssh) (list callback))
+    (orpheus-ssh--probe ssh))))
+
+(defun orpheus-ssh--report-capabilities (ssh capabilities)
+  "Report CAPABILITIES for SSH once in the echo area."
+  (unless (orpheus-ssh-instance-capabilities-reported ssh)
+    (setf (orpheus-ssh-instance-capabilities-reported ssh) t)
+    (message "orpheus: SSH %s: %s"
+             (or (orpheus-ssh--host) "remote")
+             (orpheus-ssh--capability-summary capabilities))))
+
+(defconst orpheus-ssh--capability-labels
+  '((cat . "cat")
+    (find . "find")
+    (size . "ls -lL")
+    (substitution . "command substitution")
+    (compound . "compound commands"))
+  "Labels used by `orpheus-ssh-diagnose'.")
+
+(defun orpheus-ssh--diagnose-buffer (ssh buffer)
+  "Fill BUFFER with SSH's capability report."
+  (let ((capabilities (orpheus-ssh-instance-capabilities ssh)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "SSH host: %s\n\n"
+                        (or (orpheus-ssh--host) "not configured")))
+        (dolist (entry orpheus-ssh--capability-labels)
+          (insert (format "%-22s %s\n"
+                          (cdr entry)
+                          (if (alist-get (car entry) capabilities)
+                              "yes" "no"))))
+        (insert (format "%-22s %s\n" "sftp (local)"
+                        (if (executable-find orpheus-ssh-sftp-program)
+                            "yes" "no")))
+        (insert (format "\nDownloads use %s.\n"
+                        (if (alist-get 'cat capabilities) "cat" "sftp")))))))
+
+(defun orpheus-ssh-diagnose ()
+  "Report which commands and shell features SSH's host supports."
+  (interactive)
+  (unless (orpheus-ssh--host)
+    (user-error "Set `orpheus-ssh-host' to the machine your music is on"))
+  (let* ((current (and (boundp 'orpheus-backend-current)
+                       (symbol-value 'orpheus-backend-current)))
+         (ssh (if (orpheus-ssh-p current) current (orpheus-ssh--make)))
+         (buffer (get-buffer-create "*orpheus ssh capabilities*")))
+    (with-current-buffer buffer
+      (special-mode)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "SSH host: %s\n\nChecking...\n"
+                        (orpheus-ssh--host)))))
+    (display-buffer buffer)
+    (orpheus-ssh--capabilities
+     ssh
+     (lambda (_capabilities)
+       (when (buffer-live-p buffer)
+         (orpheus-ssh--diagnose-buffer ssh buffer))
+       (setf (orpheus-ssh-instance-capabilities-reported ssh) t)))))
 
 (defun orpheus-ssh--browse-directories (ssh dir callback)
   "Call CALLBACK with DIR's rows on SSH, or nil when ssh fails."
@@ -505,44 +665,125 @@ since `started' before there are two samples to compare."
              do (orpheus-ssh--start-transfer ssh transfer)
              (setq slots (1- slots)))))
 
+(defun orpheus-ssh--clear-transfer-work (transfer)
+  "Delete TRANSFER's sftp batch file and stop its size poll."
+  (let ((timer (orpheus-ssh-transfer-timer transfer))
+        (batch (orpheus-ssh-transfer-batch transfer)))
+    (when (timerp timer) (cancel-timer timer))
+    (when (and batch (file-exists-p batch))
+      (ignore-errors (delete-file batch)))
+    (setf (orpheus-ssh-transfer-timer transfer) nil
+          (orpheus-ssh-transfer-batch transfer) nil)))
+
 (defun orpheus-ssh--start-transfer (ssh transfer)
   "Start fetching TRANSFER for SSH."
   (let* ((uri (orpheus-ssh-transfer-uri transfer))
-         (path (orpheus-ssh--cache-file ssh uri))
-         (host (orpheus-ssh--host)))
+         (path (orpheus-ssh--cache-file ssh uri)))
     (setf (orpheus-ssh-transfer-path transfer) path
           (orpheus-ssh-transfer-state transfer) 'downloading
           (orpheus-ssh-transfer-bytes transfer) 0
           (orpheus-ssh-transfer-total transfer) nil
           (orpheus-ssh-transfer-started transfer) (float-time)
-          (orpheus-ssh-transfer-samples transfer) nil)
+          (orpheus-ssh-transfer-samples transfer) nil
+          (orpheus-ssh-transfer-retried transfer) nil)
     (condition-case err
-        (let ((process
-               (progn
-                 (make-directory (file-name-directory path) t)
-                 (with-temp-file path)
-                 (make-process
-                  :name "orpheus-ssh-download"
-                  :command (append
-                            (list (orpheus-ssh--program))
-                            orpheus-ssh-extra-args
-                            (list host
-                                  (orpheus-ssh--download-command uri)))
-                :buffer nil
-                :stderr (get-buffer-create "*orpheus ssh*")
-                :noquery t
-                :coding 'binary
-                :filter (lambda (_process chunk)
-                          (orpheus-ssh--transfer-filter ssh transfer chunk))
-                  :sentinel (lambda (process _event)
-                              (orpheus-ssh--transfer-sentinel
-                               ssh transfer process))))))
-          (setf (orpheus-ssh-transfer-process transfer) process)
-          (push process (orpheus-ssh-instance-processes ssh))
-          (orpheus-ssh--request-size ssh transfer))
+        (progn
+          (make-directory (file-name-directory path) t)
+          (if (orpheus-ssh-instance-cat-failed ssh)
+              (orpheus-ssh--start-sftp ssh transfer)
+            (orpheus-ssh--start-cat ssh transfer))
+          (when (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+            (orpheus-ssh--request-size ssh transfer)))
       (error
+       (orpheus-ssh--clear-transfer-work transfer)
        (orpheus-ssh--fail-transfer
         ssh transfer (error-message-string err))))))
+
+(defun orpheus-ssh--start-cat (ssh transfer)
+  "Start the cat process that fetches TRANSFER for SSH."
+  (condition-case err
+      (let* ((uri (orpheus-ssh-transfer-uri transfer))
+             (path (orpheus-ssh-transfer-path transfer))
+             (host (orpheus-ssh--host))
+             (process
+              (progn
+                (with-temp-file path)
+                (make-process
+                 :name "orpheus-ssh-download"
+                 :command (append
+                           (list (orpheus-ssh--program))
+                           orpheus-ssh-extra-args
+                           (list host
+                                 (orpheus-ssh--download-command uri)))
+                 :buffer nil
+                 :stderr (get-buffer-create "*orpheus ssh*")
+                 :noquery t
+                 :coding 'binary
+                 :filter (lambda (_process chunk)
+                           (orpheus-ssh--transfer-filter ssh transfer chunk))
+                 :sentinel (lambda (process _event)
+                             (orpheus-ssh--transfer-sentinel
+                              ssh transfer process))))))
+        (setf (orpheus-ssh-transfer-process transfer) process)
+        (push process (orpheus-ssh-instance-processes ssh)))
+    (error
+     (orpheus-ssh--fail-transfer
+      ssh transfer (error-message-string err)))))
+
+(defun orpheus-ssh--start-sftp (ssh transfer)
+  "Start the sftp fallback that fetches TRANSFER for SSH."
+  (orpheus-ssh--clear-transfer-work transfer)
+  (setf (orpheus-ssh-transfer-retried transfer) t
+        (orpheus-ssh-transfer-bytes transfer) 0
+        (orpheus-ssh-transfer-started transfer) (float-time)
+        (orpheus-ssh-transfer-samples transfer) nil)
+  (let* ((uri (orpheus-ssh-transfer-uri transfer))
+         (path (orpheus-ssh-transfer-path transfer))
+         (host (orpheus-ssh--host))
+         (batch nil))
+    (condition-case err
+        (progn
+          (setq batch (make-temp-file "orpheus-sftp-" nil ".batch"))
+          (setf (orpheus-ssh-transfer-batch transfer) batch)
+          (with-temp-file path)
+          (with-temp-file batch
+            (insert (orpheus-ssh--sftp-batch uri path)))
+          (let ((process
+                 (make-process
+                  :name "orpheus-ssh-sftp"
+                  :command (append (list (orpheus-ssh--sftp-program))
+                                   orpheus-ssh-sftp-extra-args
+                                   (list "-b" batch "--" host))
+                  :buffer nil
+                  :stderr (get-buffer-create "*orpheus ssh*")
+                  :noquery t
+                  :sentinel (lambda (process _event)
+                              (orpheus-ssh--transfer-sentinel
+                               ssh transfer process)))))
+            (setf (orpheus-ssh-transfer-process transfer) process)
+            (push process (orpheus-ssh-instance-processes ssh))
+            (setf (orpheus-ssh-transfer-timer transfer)
+                  (run-with-timer 0.2 0.2 #'orpheus-ssh--poll-sftp
+                                  ssh transfer process))))
+      (error
+       (orpheus-ssh--clear-transfer-work transfer)
+       (orpheus-ssh--fail-transfer
+        ssh transfer (error-message-string err))))))
+
+(defun orpheus-ssh--poll-sftp (_ssh transfer process)
+  "Record the bytes sftp PROCESS has written for TRANSFER."
+  (if (and (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+           (process-live-p process))
+      (let ((path (orpheus-ssh-transfer-path transfer)))
+        (when (file-readable-p path)
+          (let ((size (ignore-errors
+                        (file-attribute-size (file-attributes path)))))
+            (when (and size (> size (orpheus-ssh-transfer-bytes transfer)))
+              (setf (orpheus-ssh-transfer-bytes transfer) size)
+              (orpheus-ssh--note-transfer-sample transfer)))))
+    (let ((timer (orpheus-ssh-transfer-timer transfer)))
+      (when (timerp timer) (cancel-timer timer))
+      (setf (orpheus-ssh-transfer-timer transfer) nil))))
 
 (defun orpheus-ssh--transfer-filter (ssh transfer chunk)
   "Write CHUNK into TRANSFER's cache file on SSH, then count it."
@@ -568,17 +809,31 @@ since `started' before there are two samples to compare."
           (delq process (orpheus-ssh-instance-processes ssh))
           (orpheus-ssh-transfer-process transfer) nil)
     (when (eq (orpheus-ssh-transfer-state transfer) 'downloading)
-      (if (and (eq (process-status process) 'exit)
-               (zerop (process-exit-status process))
-               (file-readable-p (orpheus-ssh-transfer-path transfer)))
-          (orpheus-ssh--finish-transfer ssh transfer)
-        (orpheus-ssh--fail-transfer ssh transfer nil)))))
+      (cond
+       ((and (eq (process-status process) 'exit)
+             (zerop (process-exit-status process))
+             (file-readable-p (orpheus-ssh-transfer-path transfer)))
+        (orpheus-ssh--finish-transfer ssh transfer))
+       ((and (eq (process-status process) 'exit)
+             (not (zerop (process-exit-status process)))
+             (not (orpheus-ssh-transfer-retried transfer)))
+        (when (memq (process-exit-status process) '(126 127))
+          (setf (orpheus-ssh-instance-cat-failed ssh) t))
+        (orpheus-ssh--start-sftp ssh transfer))
+       (t
+        (orpheus-ssh--fail-transfer ssh transfer nil))))))
 
 (defun orpheus-ssh--finish-transfer (ssh transfer)
   "Record TRANSFER as complete on SSH and call everyone waiting for it."
-  (let ((uri (orpheus-ssh-transfer-uri transfer))
-        (path (orpheus-ssh-transfer-path transfer))
-        (callbacks (orpheus-ssh-transfer-callbacks transfer)))
+  (orpheus-ssh--clear-transfer-work transfer)
+  (let* ((uri (orpheus-ssh-transfer-uri transfer))
+         (path (orpheus-ssh-transfer-path transfer))
+         (callbacks (orpheus-ssh-transfer-callbacks transfer))
+         (size (and path (file-readable-p path)
+                    (ignore-errors
+                      (file-attribute-size (file-attributes path))))))
+    (when (and size (> size (orpheus-ssh-transfer-bytes transfer)))
+      (setf (orpheus-ssh-transfer-bytes transfer) size))
     (setf (orpheus-ssh-transfer-state transfer) 'done
           (orpheus-ssh-transfer-callbacks transfer) nil)
     (when (and (null (orpheus-ssh-transfer-total transfer))
@@ -596,6 +851,7 @@ since `started' before there are two samples to compare."
 
 (defun orpheus-ssh--fail-transfer (ssh transfer error)
   "Mark TRANSFER as failed on SSH, reporting ERROR when there is one."
+  (orpheus-ssh--clear-transfer-work transfer)
   (let ((uri (orpheus-ssh-transfer-uri transfer))
         (path (orpheus-ssh-transfer-path transfer))
         (callbacks (orpheus-ssh-transfer-callbacks transfer)))
@@ -677,7 +933,8 @@ user's request and never becomes the current playing file."
     (when transfer
       (let ((process (orpheus-ssh-transfer-process transfer)))
         (setf (orpheus-ssh-transfer-state transfer) 'cancelled)
-        (when (process-live-p process) (ignore-errors (delete-process process))))
+        (when (process-live-p process) (ignore-errors (delete-process process)))
+        (orpheus-ssh--clear-transfer-work transfer))
       (let ((callbacks (orpheus-ssh-transfer-callbacks transfer)))
         (setf (orpheus-ssh-transfer-callbacks transfer) nil)
         (dolist (callback callbacks)
@@ -703,6 +960,7 @@ user's request and never becomes the current playing file."
   (dolist (transfer (orpheus-ssh-instance-transfers ssh))
     (let ((process (orpheus-ssh-transfer-process transfer)))
       (when (process-live-p process) (ignore-errors (delete-process process)))
+      (orpheus-ssh--clear-transfer-work transfer)
       (let ((callbacks (orpheus-ssh-transfer-callbacks transfer)))
         (setf (orpheus-ssh-transfer-callbacks transfer) nil)
         (dolist (callback callbacks)
@@ -748,7 +1006,15 @@ user's request and never becomes the current playing file."
 (cl-defmethod orpheus-backend-connect ((ssh orpheus-ssh) callback)
   "Start mpv for SSH when a host is set, then call CALLBACK with it or nil."
   (if (orpheus-ssh--host)
-      (orpheus-local--ensure ssh callback)
+      (orpheus-local--ensure
+       ssh
+       (lambda (running)
+         (when running
+           (orpheus-ssh--capabilities
+            ssh
+            (lambda (capabilities)
+              (orpheus-ssh--report-capabilities ssh capabilities))))
+         (funcall callback running)))
     (message "orpheus: set `orpheus-ssh-host' to the machine your music is on")
     (funcall callback nil)))
 

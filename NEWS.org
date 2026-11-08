@@ -9,6 +9,17 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- SSH checks its remote shell once per session and reports which of `cat',
+  `find', `ls -lL', command substitution and compound commands work.
+  `M-x orpheus-ssh-diagnose` shows the same table on demand.
+- When the remote shell cannot run `cat', SSH downloads fall back to `sftp'.
+  `orpheus-ssh-sftp-program` and `orpheus-ssh-sftp-extra-args` configure the
+  fallback.
+
 * 0.5.1 (2026-11-08)
 
 *** Fixed

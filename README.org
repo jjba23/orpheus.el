@@ -96,10 +96,12 @@ prove it is real.
   and the Downloads tab shows every transfer's state, completion, rolling
   speed, ETA and bytes.  The file streams with `cat'; a separate `ls -l'
   probe supplies its size for progress when the host allows it, so a host that
-  cannot report a size still downloads and shows `--%'.  The header line counts
-  active and queued transfers and
-  shows their aggregate throughput.  `d' cancels one and `RET' plays a finished
-  copy or retries a failure.
+  cannot report a size still downloads and shows `--%'.  When the shell
+  rejects `cat', the transfer goes over `sftp' instead.  A one-time check on
+  connect reports which remote commands and shell features work, and
+  `M-x orpheus-ssh-diagnose` shows the same table on demand.  The header line
+  counts active and queued transfers and shows their aggregate throughput.
+  `d' cancels one and `RET' plays a finished copy or retries a failure.
 - *Search close to home.* :: MPD searches its library, the local backend runs
   `find' below `orpheus-local-directory', and SSH runs `find' below
   `orpheus-ssh-directory'; when the host has no `find', SSH falls back to a
@@ -205,8 +207,8 @@ itself, because the daemon owns the whole queue.
 
 The programs to install alongside it are the ones each backend uses: `mpd' for
 the MPD backend, `mpv' (and `ffmpeg' for cover art extraction, `yt-dlp` for
-video links) for the local one, `ssh' for the remote one, and `cava' for the
-visualizer.
+video links) for the local one, `ssh' (and `sftp' when the remote shell cannot
+run `cat') for the remote one, and `cava' for the visualizer.
 
 * Getting started
 :PROPERTIES:
@@ -327,8 +329,13 @@ There is no daemon on the far side: `ls -1p` fills the files tab, a remote
 `find`, and RET starts a transfer.  Bytes go straight to a private
 cache file as they arrive, so another download never freezes Emacs; the
 Downloads tab shows what is queued and what is moving, and `d' cancels a row.
-Playback begins once the copy is complete, so a large track spends its transfer
-time downloading rather than playing.  While the current track plays, the next
+When the remote shell rejects `cat`, the transfer uses `sftp` instead;
+`orpheus-ssh-sftp-program` names the program (which must be installed here),
+and `orpheus-ssh-sftp-extra-args` carries its options, such as `-P 2222`.  A
+one-time check when the backend connects reports which remote commands and
+shell features work, and `M-x orpheus-ssh-diagnose` shows the same table on
+demand.  Playback begins once the copy is complete, so a large track spends its
+transfer time downloading rather than playing.  While the current track plays, the next
 `orpheus-ssh-prefetch' queue entries are fetched in the background, and the last
 `orpheus-ssh-cache-count' completed tracks stay on disk, so replaying one or
 moving to the next needs no second transfer.  A play request always goes ahead
@@ -418,6 +425,7 @@ Outside the player buffer:
 | `M-x orpheus-next`       | next track                                       |
 | `M-x orpheus-volume-up`  | volume up by `orpheus-volume-step`               |
 | `M-x orpheus-visualizer` | spectrum visualizer                              |
+| `M-x orpheus-ssh-diagnose` | check the remote SSH commands and shell features |
 | `M-x orpheus-mode-line-mode` | show the track in the mode line              |
 | `M-x orpheus-quit`       | stop reading the status and close the player     |
 
@@ -484,15 +492,17 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 :CUSTOM_ID: the-ssh-backend
 :END:
 
-| Option                    | Default | Meaning                                        |
-|---------------------------+---------+------------------------------------------------|
-| `orpheus-ssh-host`        | `nil`   | `host` or `user@host`; nil means not configured |
-| `orpheus-ssh-directory`   | `nil`   | remote start directory; nil is the login home  |
-| `orpheus-ssh-program`     | `"ssh"` | the ssh program                                |
-| `orpheus-ssh-extra-args`  | `nil`   | more ssh arguments, as a list                  |
-| `orpheus-ssh-concurrency` | `2`     | simultaneous ssh downloads                      |
-| `orpheus-ssh-prefetch`    | `2`     | upcoming queue tracks fetched in the background |
-| `orpheus-ssh-cache-count` | `8`     | completed tracks kept in the cache              |
+| Option                          | Default | Meaning                                         |
+|---------------------------------+---------+-------------------------------------------------|
+| `orpheus-ssh-host`              | `nil`   | `host` or `user@host`; nil means not configured |
+| `orpheus-ssh-directory`         | `nil`   | remote start directory; nil is the login home   |
+| `orpheus-ssh-program`           | `"ssh"` | the ssh program                                 |
+| `orpheus-ssh-extra-args`        | `nil`   | more ssh arguments, as a list                   |
+| `orpheus-ssh-sftp-program`      | `"sftp"` | sftp program used when cat is unavailable      |
+| `orpheus-ssh-sftp-extra-args`   | `nil`   | more sftp arguments, as a list                  |
+| `orpheus-ssh-concurrency`       | `2`     | simultaneous ssh downloads                      |
+| `orpheus-ssh-prefetch`          | `2`     | upcoming queue tracks fetched in the background |
+| `orpheus-ssh-cache-count`       | `8`     | completed tracks kept in the cache              |
 
 ** The interface and the visualizer
 :PROPERTIES:
@@ -563,11 +573,12 @@ Three backends are shipped and are the reference implementations:
   file or extracted with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).
 - =orpheus-ssh.el= — remote files over ssh and mpv here: `ls -1p' fills the
   files tab, `find' fills Search, and `cat' streams the chosen track into a
-  private cache file.  Transfers run in a queue of at most
-  `orpheus-ssh-concurrency', a play request goes ahead of the background
-  prefetches, and the Downloads tab shows each one.  The local backend plays a
-  copy once it is complete.  There is no daemon on the far side, and the cache
-  goes away on disconnect and when Emacs exits.
+  private cache file; `sftp' takes over when the shell rejects `cat'.  A
+  one-time check reports the remote commands and shell features.  Transfers run
+  in a queue of at most `orpheus-ssh-concurrency', a play request goes ahead of
+  the background prefetches, and the Downloads tab shows each one.  The local
+  backend plays a copy once it is complete.  There is no daemon on the far side,
+  and the cache goes away on disconnect and when Emacs exits.
 
 ** Adding one
 :PROPERTIES:

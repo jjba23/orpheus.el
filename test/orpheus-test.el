@@ -1352,15 +1352,23 @@ so they are allowed by name."
 ;;; The SSH backend
 
 (defun orpheus-test--with-fake-ssh (function &optional mode)
-  "Call FUNCTION with ssh replaced by the suite's fake program.
-MODE selects a failure the fake ssh should simulate: `empty', `missing' or
-`broken'."
+  "Call FUNCTION with ssh and sftp replaced by the suite's fake programs.
+MODE selects a failure the fake ssh should simulate: `empty', `missing',
+`broken', `nosize', `nocat' or `minimal'."
   (let ((orpheus-ssh-program
          (expand-file-name invocation-name invocation-directory))
         (orpheus-ssh-extra-args
          (list "-Q" "--batch" "-l"
                (expand-file-name
                 "test/orpheus-fake-ssh.el"
+                (file-name-directory orpheus-test--source))
+               "--"))
+        (orpheus-ssh-sftp-program
+         (expand-file-name invocation-name invocation-directory))
+        (orpheus-ssh-sftp-extra-args
+         (list "-Q" "--batch" "-l"
+               (expand-file-name
+                "test/orpheus-fake-sftp.el"
                 (file-name-directory orpheus-test--source))
                "--"))
         (orpheus-ssh-host "fake.invalid")
@@ -1751,5 +1759,153 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing' or
       (should (cl-some (lambda (text)
                          (string-match-p "orpheus-ssh-host" text))
                        messages)))))
+
+(ert-deftest orpheus-test/ssh-capabilities-are-probed-once ()
+  "The capability check runs once and later calls use its answer."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (first 'waiting)
+           (second 'waiting))
+       (unwind-protect
+           (progn
+             (orpheus-ssh--capabilities
+              ssh (lambda (result) (setq first result)))
+             (should (orpheus-test--wait
+                      (lambda () (not (eq first 'waiting))) 20))
+             (let ((calls 0))
+               (cl-letf (((symbol-function 'orpheus-ssh--run)
+                          (lambda (&rest _args) (cl-incf calls))))
+                 (orpheus-ssh--capabilities
+                  ssh (lambda (result) (setq second result))))
+               (should (= calls 0)))
+             (should (equal first second))
+             (should (alist-get 'cat first)))
+         (orpheus-backend-disconnect ssh))))))
+
+(ert-deftest orpheus-test/ssh-capabilities-report-missing-shell-features ()
+  "The probe records every missing command and shell feature."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (capabilities 'waiting))
+       (unwind-protect
+           (progn
+             (orpheus-ssh--capabilities
+              ssh (lambda (result) (setq capabilities result)))
+             (should (orpheus-test--wait
+                      (lambda () (not (eq capabilities 'waiting))) 20))
+             (dolist (key '(cat find size substitution compound))
+               (should-not (alist-get key capabilities)))
+             (should (orpheus-ssh-instance-cat-failed ssh))
+             (should (orpheus-ssh-instance-size-failed ssh))
+             (should (orpheus-ssh-instance-search-fallback ssh))
+             (should (string-match-p
+                      "downloads use sftp"
+                      (orpheus-ssh--capability-summary capabilities))))
+         (orpheus-backend-disconnect ssh))))
+   "minimal"))
+
+(ert-deftest orpheus-test/ssh-connect-checks-capabilities-once ()
+  "Connecting asks for the check and reports its answer only once."
+  (let ((orpheus-ssh-host "fake.invalid")
+        (ssh (orpheus-make-backend 'ssh))
+        (probes 0)
+        (messages nil)
+        (connected 0)
+        (capabilities '((cat . t) (find . t) (size . t)
+                        (substitution . t) (compound . t))))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'orpheus-local--ensure)
+                     (lambda (_backend callback) (funcall callback ssh)))
+                    ((symbol-function 'orpheus-ssh--capabilities)
+                     (lambda (_backend callback)
+                       (cl-incf probes)
+                       (funcall callback capabilities)))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args) messages))))
+            (dotimes (_ 2)
+              (orpheus-backend-connect
+               ssh (lambda (backend) (when backend (cl-incf connected))))))
+          (should (= probes 2))
+          (should (= connected 2))
+          (should (= (length messages) 1))
+          (should (string-match-p "cat yes" (car messages))))
+      (orpheus-backend-disconnect ssh))))
+
+(ert-deftest orpheus-test/ssh-diagnose-shows-capabilities ()
+  "The diagnostic buffer lists the remote commands and shell features."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((orpheus-backend-current nil)
+           (buffer nil))
+       (cl-letf (((symbol-function 'display-buffer)
+                  (lambda (candidate &rest _args)
+                    (setq buffer candidate)
+                    candidate)))
+         (orpheus-ssh-diagnose)
+         (should (orpheus-test--wait
+                  (lambda ()
+                    (and buffer
+                         (with-current-buffer buffer
+                           (not (string-match-p "Checking" (buffer-string))))))
+                  20))
+         (with-current-buffer buffer
+           (should (string-match-p "cat" (buffer-string)))
+           (should (string-match-p "command substitution" (buffer-string))))
+         (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest orpheus-test/ssh-sftp-quotes-batch-paths ()
+  "An sftp batch path is quoted and special glob characters are escaped."
+  (should (equal (orpheus-ssh--sftp-quote "Music/It's \"x\"?.mp3")
+                 "\"Music/It's \\\"x\\\"\\?.mp3\""))
+  (should (equal (orpheus-ssh--sftp-batch "Music/Song.mp3" "/tmp/Song.mp3")
+                 "get \"Music/Song.mp3\" \"/tmp/Song.mp3\"\n"))
+  (should-error (orpheus-ssh--sftp-batch "bad\nname" "/tmp/Song.mp3")))
+
+(ert-deftest orpheus-test/ssh-sftp-fallback-when-cat-is-rejected ()
+  "A shell without cat gets the track over sftp instead."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (path nil))
+       (unwind-protect
+           (progn
+             (orpheus-ssh--download
+              ssh "Music/Song.mp3"
+              (lambda (result) (setq path result)))
+             (should (orpheus-test--wait (lambda () path) 20))
+             (should (equal (with-temp-buffer
+                              (insert-file-contents path)
+                              (buffer-string))
+                            "sftp bytes\n"))
+             (should (orpheus-ssh-instance-cat-failed ssh))
+             (let ((transfer (orpheus-ssh--transfer-for-uri
+                              ssh "Music/Song.mp3")))
+               (should (orpheus-ssh-transfer-retried transfer))
+               (should (= (orpheus-ssh-transfer-bytes transfer) 11))))
+         (orpheus-backend-disconnect ssh))))
+   "nocat"))
+
+(ert-deftest orpheus-test/ssh-sftp-used-when-cat-is-known-missing ()
+  "A cached cat failure chooses sftp before starting a process."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (path nil))
+       (setf (orpheus-ssh-instance-cat-failed ssh) t)
+       (unwind-protect
+           (progn
+             (orpheus-ssh--download
+              ssh "Music/Song.mp3"
+              (lambda (result) (setq path result)))
+             (should (orpheus-test--wait (lambda () path) 20))
+             (should (equal (with-temp-buffer
+                              (insert-file-contents path)
+                              (buffer-string))
+                            "sftp bytes\n")))
+         (orpheus-backend-disconnect ssh))))))
 
 ;;; orpheus-test.el ends here
