@@ -770,6 +770,11 @@ maak release -- minor # bump, close NEWS, gate, commit, tag, push, publish
 maak repl       # Emacs with the package loaded and the player open
 #+end_src
 
+GitHub Actions runs the gate on every push to ~trunk~ and every pull request:
+the unit suite on Emacs 29.1 and 31.1, the integration suite against a real
+~mpd~ and a real ~mpv~, and lint.  The workflow spells the commands out because
+maak is not installed there.
+
 ~maak release~ refuses a dirty or unsynced ~trunk~ and maak's ~--dry-run~,
 closes the ~* Unreleased~ heading with today's date, runs the full gate, commits
 the release, tags ~vX.Y.Z~, pushes both, and creates the GitHub release.  It

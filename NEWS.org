@@ -11,6 +11,12 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 
 * Unreleased
 
+*** Added
+
+- CI runs the gate on every push to ~trunk~ and every pull request: the unit
+  suite on Emacs 29.1 and 31.1, the integration suite against a real ~mpd~ and
+  a real ~mpv~, and lint.
+
 *** Changed
 
 - NEWS.org uses Org inline-code markup, and the release task renders it
