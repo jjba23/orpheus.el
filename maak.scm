@@ -23,9 +23,10 @@
 (define emacs-command
   (or (getenv "EMACS") "emacs"))
 
-;; The package: seven files, loaded in this order.
+;; The package: eight files, loaded in this order.
 (define source-files
   '("orpheus-backend.el"
+    "orpheus-playlist.el"
     "orpheus-mpd.el"
     "orpheus-local.el"
     "orpheus-ssh.el"
@@ -47,8 +48,9 @@
 
 ;; What byte-compilation leaves behind.
 (define compiled-files
-  '("orpheus-backend.elc" "orpheus-mpd.elc" "orpheus-local.elc"
-    "orpheus-ssh.elc" "orpheus-ui.elc" "orpheus-vis.elc" "orpheus.elc"
+  '("orpheus-backend.elc" "orpheus-playlist.elc" "orpheus-mpd.elc"
+    "orpheus-local.elc" "orpheus-ssh.elc" "orpheus-ui.elc" "orpheus-vis.elc"
+    "orpheus.elc"
     "test/orpheus-test.elc" "test/orpheus-integration-test.elc"
     "test/orpheus-checkdoc.elc"))
 

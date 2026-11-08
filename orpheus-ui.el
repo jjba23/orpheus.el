@@ -27,6 +27,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'orpheus-backend)
+(require 'orpheus-playlist)
 
 ;;; Look
 
@@ -308,12 +309,17 @@ one keystroke is what turns a queue into thousands of rows."
 
 (defun orpheus-ui--tabs-for-capabilities (capabilities)
   "Return the tabs a backend with CAPABILITIES gets, as (KIND . TITLE).
-The queue is always there, because every backend can queue."
-  (delq nil
-        (mapcar (lambda (kind)
-                  (when (or (eq kind 'queue) (memq kind capabilities))
-                    (cons kind (orpheus-ui-kind-title kind))))
-                orpheus-backend-browse-kinds)))
+The queue is always there, and so are portable playlists, which do not depend
+on what CAPABILITIES offers."
+  (let ((capabilities (if (and capabilities
+                              (not (memq 'playlists capabilities)))
+                          (cons 'playlists capabilities)
+                        capabilities)))
+    (delq nil
+          (mapcar (lambda (kind)
+                    (when (or (eq kind 'queue) (memq kind capabilities))
+                      (cons kind (orpheus-ui-kind-title kind))))
+                  orpheus-backend-browse-kinds))))
 
 ;;; State
 
@@ -389,6 +395,22 @@ The queue is always there, because every backend can queue."
        (or (alist-get 'uri (orpheus-item-data item))
            (alist-get 'id (orpheus-item-data item))
            (orpheus-item-label item))))
+
+(defun orpheus-ui--item-uris (item)
+  "Return the queue URIs ITEM contributes, or nil.
+A portable playlist row contributes every URI in its file; a track contributes
+its own URI.  A server playlist has no URI list until it is opened."
+  (let ((file (alist-get 'file (orpheus-item-data item))))
+    (cond
+     (file
+      (condition-case err
+          (orpheus-playlist-uris file)
+        (error
+         (message "orpheus: cannot read %s: %s" file
+                  (error-message-string err))
+         nil)))
+     ((orpheus-item-playable item)
+      (list (alist-get 'uri (orpheus-item-data item)))))))
 
 (defun orpheus-ui--marked-p (item)
   "Return non-nil when ITEM is marked in the current tab."
@@ -479,18 +501,28 @@ backend."
   "Return the cover art as an image, or nil."
   (let ((file (plist-get orpheus-ui--art :file)))
     (when (and file (file-readable-p file) (display-graphic-p))
-      (create-image file nil nil :max-width orpheus-ui-art-size
-                    :max-height orpheus-ui-art-size))))
+      (let* ((window (get-buffer-window))
+             (max (if window
+                      (max 1 (min orpheus-ui-art-size
+                                  (window-body-width window t)))
+                    orpheus-ui-art-size)))
+        (ignore-errors
+          (create-image file nil nil :max-width max :max-height max
+                        :ascent 'center))))))
 
 (defun orpheus-ui--insert-art (width)
   "Insert the cover art centred in WIDTH, or keep its place while it loads."
   (let ((image (orpheus-ui--art-image)))
     (cond
       (image
-       (let* ((size (image-size image t))
-              (indent (max 0 (/ (- width (car size)) 2))))
+       (let* ((size (ignore-errors (image-size image t)))
+              (columns (if size
+                           (ceiling (/ (float (car size))
+                                       (max 1 (frame-char-width))))
+                         1))
+              (indent (max 0 (/ (- width columns) 2))))
          (insert (make-string indent ?\s))
-         (insert-image image (make-string 1 ?\s))
+         (insert-image image " ")
          (insert "\n")))
       ((and (plist-get orpheus-ui--art :loading) (display-graphic-p))
        ;; The list must not jump up and back down when the cover arrives.
@@ -587,6 +619,8 @@ folder are read at a glance the way Dired shows them."
   (pcase kind
          ('downloads
           " RET play or retry  d cancel  g refresh  ? help  q bury")
+         ('playlists
+          " RET play  e edit  a add  d delete  C-x C-s save queue  g refresh  ? help  q bury")
          ('search
           " RET play  a add  m mark  / search again  g refresh  ? help  q bury")
          (_
@@ -643,6 +677,7 @@ which row is highlighted."
           (and tab (orpheus-ui-tab-loading tab))
           (and orpheus-status-current
                (orpheus-status-songid orpheus-status-current))
+          (plist-get orpheus-ui--art :key)
           (plist-get orpheus-ui--art :file)
           (orpheus-ui--download-summary-string)
           orpheus-ui--downloads)))
@@ -706,6 +741,20 @@ which row is highlighted."
            (with-current-buffer buffer
              (orpheus-ui--set-downloads items))))))))
 
+(defun orpheus-ui--playlist-items (callback)
+  "Read portable playlists, then any server playlists, and call CALLBACK.
+Portable rows come first, so a backend that also keeps playlists on its server
+adds to the same tab instead of replacing it."
+  (let ((portable (orpheus-playlist-items))
+        (backend orpheus-backend-current))
+    (if (and backend
+             (memq 'playlists (orpheus-backend-capabilities backend)))
+        (orpheus-backend-browse
+         backend 'playlists nil
+         (lambda (server)
+           (funcall callback (append portable server))))
+      (funcall callback portable))))
+
 (defun orpheus-ui--load-tab (tab callback)
   "Read TAB's rows and then call CALLBACK, in this buffer.
 Return non-nil when a read was asked for.  A reply that arrives after a newer
@@ -730,6 +779,8 @@ an older one."
           (orpheus-backend-queue backend done))
          ((eq (orpheus-ui-tab-view tab) 'downloads)
           (orpheus-backend-downloads backend done))
+         ((eq (orpheus-ui-tab-view tab) 'playlists)
+          (orpheus-ui--playlist-items done))
          (t
           (orpheus-backend-browse backend (orpheus-ui-tab-view tab)
                                   (orpheus-ui-tab-arg tab) done)))
@@ -760,6 +811,7 @@ read and are refreshed every tick so their bytes and the header summary move."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (orpheus-ui--refresh-downloads)
+        (orpheus-ui--update-context-art)
         (if orpheus-ui--needs-refresh
             (orpheus-ui-refresh)
           (orpheus-ui--redraw))))))
@@ -920,6 +972,18 @@ read and are refreshed every tick so their bytes and the header summary move."
         (tab (orpheus-ui--current-tab)))
     (cond
       ((null item) (message "orpheus: no row here"))
+      ((and (eq (orpheus-ui-tab-view tab) 'playlists)
+            (alist-get 'file (orpheus-item-data item)))
+       (let ((file (alist-get 'file (orpheus-item-data item))))
+         (condition-case err
+             (let ((count (orpheus-playlist-play file)))
+               (orpheus-ui-invalidate)
+               (if (> count 0)
+                   (message "orpheus: loaded %d track(s)" count)
+                 (message "orpheus: playlist is empty")))
+           (error
+            (message "orpheus: cannot load %s: %s" file
+                     (error-message-string err))))))
       ((orpheus-item-browse item)
        (pcase-let ((`(,kind . ,arg) (orpheus-item-browse item)))
          (setf (orpheus-ui-tab-stack tab)
@@ -981,11 +1045,7 @@ whole queue to itself."
   (let* ((tab (orpheus-ui--current-tab))
          (items (or (orpheus-ui--marked-items)
                     (list (orpheus-ui--item-at-point))))
-         (uris (delq nil
-                     (mapcar (lambda (item)
-                               (and (orpheus-item-playable item)
-                                    (alist-get 'uri (orpheus-item-data item))))
-                             items))))
+         (uris (delq nil (mapcan #'orpheus-ui--item-uris items))))
     (cond
       ((eq (orpheus-ui-tab-kind tab) 'queue)
        (message "orpheus: this is the queue already; nothing to add"))
@@ -1003,9 +1063,7 @@ whole queue to itself."
 Like `orpheus-ui-add', this does nothing on the queue tab, where every row
 is a copy of a row that is there already."
   (interactive)
-  (let ((uris (delq nil (mapcar (lambda (item)
-                                  (and (orpheus-item-playable item)
-                                       (alist-get 'uri (orpheus-item-data item))))
+  (let ((uris (delq nil (mapcan #'orpheus-ui--item-uris
                                 (orpheus-ui--current-items))))
         (tab (orpheus-ui--current-tab)))
     (cond
@@ -1027,6 +1085,21 @@ is a copy of a row that is there already."
                     (delq nil (list (orpheus-ui--item-at-point))))))
     (cond
       ((null items) (message "orpheus: no row here"))
+      ((and (eq (orpheus-ui-tab-view tab) 'playlists)
+            (cl-some (lambda (item)
+                       (alist-get 'file (orpheus-item-data item)))
+                     items))
+       (let ((files (delq nil
+                          (mapcar (lambda (item)
+                                    (alist-get 'file (orpheus-item-data item)))
+                                  items))))
+         (if (y-or-n-p (format "Delete %d playlist(s)? " (length files)))
+             (progn
+               (dolist (file files)
+                 (orpheus-playlist-delete file))
+               (orpheus-ui-invalidate)
+               (orpheus-ui-refresh t))
+           (message "orpheus: kept the playlist(s)"))))
       ((eq (orpheus-ui-tab-view tab) 'downloads)
        (dolist (item items)
          (when-let* ((uri (alist-get 'uri (orpheus-item-data item))))
@@ -1088,10 +1161,27 @@ is a copy of a row that is there already."
       (orpheus-ui-refresh))))
 
 (defun orpheus-ui-save-playlist (name)
-  "Save the queue as the playlist NAME."
+  "Save the queue as the portable playlist NAME."
   (interactive (list (read-string "Save queue as playlist: ")))
-  (orpheus-backend-command orpheus-backend-current 'save name)
-  (message "orpheus: saved %s" name))
+  (when (string-empty-p name)
+    (user-error "No playlist name"))
+  (orpheus-playlist-save-queue
+   name
+   (lambda (file)
+     (if file
+         (progn
+           (orpheus-ui-invalidate)
+           (message "orpheus: saved %s" (file-name-nondirectory file)))
+       (message "orpheus: the queue is empty")))))
+
+(defun orpheus-ui-edit-playlist ()
+  "Edit the portable playlist at point in its own buffer."
+  (interactive)
+  (let ((file (alist-get 'file (orpheus-item-data
+                                (orpheus-ui--item-at-point)))))
+    (if file
+        (orpheus-playlist-edit file)
+      (message "orpheus: only portable playlists can be edited"))))
 
 (defun orpheus-ui-mouse-select (event)
   "Move point to the row clicked on in EVENT."
@@ -1120,7 +1210,7 @@ is a copy of a row that is there already."
 ;;; Help
 
 (defconst orpheus-ui--help-lines
-  '(("RET" "play the track, or open the album, artist or directory")
+  '(    ("RET" "play the track or playlist, or open the album, artist or directory")
     ("n / C-n / j" "next row")
     ("p / C-p / k" "previous row")
     ("C-v / M-v" "one screen down and up")
@@ -1133,7 +1223,8 @@ is a copy of a row that is there already."
     ("U" "unmark every row")
     ("t" "invert the marks")
     ("a / A" "queue the marked rows, or this row; queue everything here")
-    ("d / C-k" "delete from the queue, or cancel a download")
+    ("e" "edit a portable playlist in its own buffer")
+    ("d / C-k" "delete from the queue, remove a playlist, or cancel a download")
     ("D" "clear the queue")
     ("/ / C-s" "search")
     ("C" "jump to the playing row")
@@ -1145,7 +1236,7 @@ is a copy of a row that is there already."
     ("M-<up> / M-<down>, + / -" "volume up and down")
     ("z / x / c / v" "repeat, random, consume, single")
     ("M-u / M-U" "update the library, rescan it")
-    ("C-x C-s" "save the queue as a playlist")
+    ("C-x C-s" "save the queue as a portable M3U8 playlist")
     ("g" "refresh the status and this tab")
     ("V" "spectrum visualizer")
     ("q" "bury the player"))
@@ -1201,6 +1292,7 @@ is a copy of a row that is there already."
     (define-key map (kbd "t") 'orpheus-ui-toggle-marks)
     (define-key map (kbd "a") 'orpheus-ui-add)
     (define-key map (kbd "A") 'orpheus-ui-add-all)
+    (define-key map (kbd "e") 'orpheus-ui-edit-playlist)
     (define-key map (kbd "d") 'orpheus-ui-delete)
     (define-key map (kbd "C-k") 'orpheus-ui-delete)
     (define-key map (kbd "D") 'orpheus-ui-clear)
@@ -1257,33 +1349,113 @@ is a copy of a row that is there already."
         (orpheus-ui--setup-tabs))
       (orpheus-ui--render))
     (pop-to-buffer buffer)
+    (orpheus-ui--update-context-art)
     (orpheus-ui-refresh)))
+
+(defun orpheus-ui--art-first-uri (tab)
+  "Return the first playable URI in TAB, or nil."
+  (when tab
+    (cl-loop for item in (orpheus-ui-tab-items tab)
+             for uri = (alist-get 'uri (orpheus-item-data item))
+             when (and uri (orpheus-item-playable item))
+             return uri)))
+
+(defun orpheus-ui--folder-art-request (callback)
+  "Find cover art for the current folder or album, then call CALLBACK."
+  (let ((player (and (not (local-variable-p 'orpheus-ui--tabs))
+                     (get-buffer orpheus-ui-buffer-name))))
+    (if (and player (not (eq player (current-buffer))) (buffer-live-p player))
+        ;; Status callbacks run in a process buffer; the tabs are in the player.
+        (with-current-buffer player
+          (orpheus-ui--folder-art-request callback))
+      (let* ((backend orpheus-backend-current)
+             (tab (orpheus-ui--current-tab))
+             (view (and tab (orpheus-ui-tab-view tab)))
+             (folder (and (eq view 'directories)
+                          (car (orpheus-ui-tab-arg tab))))
+             (uri (and (memq view '(directories albums artists albumartists
+                                              playlists))
+                       (orpheus-ui--art-first-uri tab))))
+        (cond
+         ((null backend) (funcall callback nil))
+         (folder
+          (orpheus-backend-folder-art
+           backend folder
+           (lambda (file)
+             (if (or file (null uri))
+                 (funcall callback file)
+               (orpheus-backend-album-art
+                backend (orpheus-track-create :uri uri) callback)))))
+         (uri
+          (orpheus-backend-album-art
+           backend (orpheus-track-create :uri uri) callback))
+         (t (funcall callback nil)))))))
+
+(defun orpheus-ui--show-art (key request &optional uri)
+  "Show the cover art under KEY, fetching it with REQUEST when needed.
+URI names the current track, when there is one."
+  (let* ((backend orpheus-backend-current)
+         (cached (and key (gethash key orpheus-ui--art-cache))))
+    (cond
+     ((or (null key) (null backend) (not orpheus-ui-show-art)
+          (not (display-graphic-p)))
+      (when orpheus-ui--art
+        (setq orpheus-ui--art nil)
+        (orpheus-ui--redraw)))
+     ((equal key (plist-get orpheus-ui--art :key)))
+     (cached
+      (setq orpheus-ui--art (list :key key :uri uri :file cached))
+      (orpheus-ui--redraw))
+     (t
+      (setq orpheus-ui--art (list :key key :uri uri :loading t))
+      (orpheus-ui--redraw)
+      (funcall request
+               (lambda (file)
+                 (when (equal key (plist-get orpheus-ui--art :key))
+                   (when file (puthash key file orpheus-ui--art-cache))
+                   (setq orpheus-ui--art (list :key key :uri uri :file file))
+                   (orpheus-ui--redraw))))))))
 
 (defun orpheus-ui--update-art (track)
   "Fetch cover art for TRACK, when it is not the one already shown.
-A terminal has nowhere to draw it, so nothing is fetched there, and a cover
-already cached is put back without asking the backend a second time."
-  (let* ((uri (and track (orpheus-track-uri track)))
-         (backend orpheus-backend-current)
-         (cached (and uri (gethash uri orpheus-ui--art-cache))))
+A track with no art falls back to the folder being browsed.  A terminal has
+nowhere to draw it, so nothing is fetched there, and a cover already cached is
+put back without asking the backend a second time."
+  (let* ((backend orpheus-backend-current)
+         (uri (and track (orpheus-track-uri track)))
+         (key (and backend uri
+                   (format "%s:track:%s"
+                           (orpheus-backend-name backend) uri))))
+    (if key
+        (orpheus-ui--show-art
+         key
+         (lambda (callback)
+           (orpheus-backend-album-art
+            backend track
+            (lambda (file)
+              (if file
+                  (funcall callback file)
+                (orpheus-ui--folder-art-request callback)))))
+         uri)
+      (orpheus-ui--show-art nil nil))))
+
+(defun orpheus-ui--update-context-art ()
+  "Show the cover for the current track, folder or album."
+  (let* ((backend orpheus-backend-current)
+         (track orpheus-track-current)
+         (uri (and track (orpheus-track-uri track)))
+         (tab (orpheus-ui--current-tab))
+         (view (and tab (orpheus-ui-tab-view tab))))
     (cond
-      ((or (null uri) (null backend) (not orpheus-ui-show-art)
-           (not (display-graphic-p)))
-       (setq orpheus-ui--art nil))
-      (cached
-       (setq orpheus-ui--art (list :uri uri :file cached))
-       (orpheus-ui--redraw))
-      ((equal uri (plist-get orpheus-ui--art :uri)))
-      (t
-       (setq orpheus-ui--art (list :uri uri :loading t))
-       (orpheus-ui--redraw)
-       (orpheus-backend-album-art
-        backend track
-        (lambda (file)
-          (when (equal uri (plist-get orpheus-ui--art :uri))
-            (when file (puthash uri file orpheus-ui--art-cache))
-            (setq orpheus-ui--art (list :uri uri :file file))
-            (orpheus-ui--redraw))))))))
+     ((and backend uri) (orpheus-ui--update-art track))
+     ((and backend tab
+           (memq view '(directories albums artists albumartists playlists)))
+      (orpheus-ui--show-art
+       (format "%s:%s:%S:%s" (orpheus-backend-name backend) view
+               (orpheus-ui-tab-arg tab)
+               (or (orpheus-ui--art-first-uri tab) ""))
+       (lambda (callback) (orpheus-ui--folder-art-request callback))))
+     (t (orpheus-ui--show-art nil nil)))))
 
 (provide 'orpheus-ui)
 

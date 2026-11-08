@@ -52,6 +52,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'orpheus-backend)
+(require 'orpheus-playlist)
 (require 'orpheus-mpd)
 (require 'orpheus-local)
 (require 'orpheus-ssh)

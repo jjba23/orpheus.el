@@ -9,6 +9,36 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- Cover art follows the current track and the album folder being browsed.  The
+  local and SSH backends find `cover.jpg`, `Cover.PNG`, `cover.webp`,
+  `folder.*`, `front.*`, `album.*` and `artwork.*` case-insensitively; SSH
+  copies a remote cover into the cache.  MPD uses its embedded art.  A track
+  without art falls back to the folder being browsed.
+- Art is centred using its actual pixel width, scaled to the window and
+  `orpheus-ui-art-size`, and an image Emacs cannot decode is skipped instead of
+  breaking a redraw.  A terminal still fetches and draws nothing.
+- Portable playlists: every backend now has a Playlists tab backed by M3U8
+  files in `orpheus-playlist-directory`.  `C-x C-s` saves the current queue
+  from any backend, the tab reads existing M3U, M3U8 and PLS files, and RET,
+  `a` and `d` play, append and delete them.  MPD's server playlists share the
+  tab instead of disappearing.  Playlist URIs are passed to the active backend
+  unchanged, so a playlist travels between backends only when its URI
+  namespace does.
+- The Playlists tab opens a portable playlist in an editor buffer with `e`.
+  `M-<up>` and `M-<down>` move a track, `d` removes it, and `C-x C-s` writes the
+  M3U8 file back; parsed tags travel with the track.  PLS files stay read-only
+  in the editor so a `.pls` name never receives M3U8 content.
+
+*** Changed
+
+- `C-x C-s` no longer sends MPD's server-side `save`; it writes the queue as a
+  portable M3U8 file, so a saved playlist is not tied to the backend that made
+  it.  MPD's own playlists are still listed and playable in the Playlists tab.
+
 * 0.6.0 (2026-11-08)
 
 *** Added

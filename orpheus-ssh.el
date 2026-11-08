@@ -202,6 +202,20 @@ current one is still playing.  More than two rarely improves a single link."
       "ls -1p"
     (format "ls -1p -- %s" (orpheus-ssh--shell-quote dir))))
 
+(defun orpheus-ssh--cover-file (dir output)
+  "Return the first cover path in DIR from the remote `ls' OUTPUT, or nil."
+  (when dir
+    (let ((files (split-string (or output "") "\n" t)))
+      (cl-loop
+       for name in orpheus-local-cover-names
+       for base = (file-name-nondirectory name)
+       for match = (cl-find-if
+                    (lambda (file)
+                      (and (not (string-suffix-p "/" file))
+                           (equal (downcase file) (downcase base))))
+                    files)
+       when match return (orpheus-ssh--join dir match)))))
+
 (defun orpheus-ssh--media-file-p (name)
   "Return non-nil when NAME looks like something mpv can play."
   (member (downcase (or (file-name-extension name) ""))
@@ -488,6 +502,140 @@ more useful message.  An empty successful command yields an empty string."
    ssh (orpheus-ssh--directory-command dir)
    (lambda (output)
      (funcall callback (and output (orpheus-ssh--directory-items dir output))))))
+
+;;; Remote cover art
+
+(defun orpheus-ssh--cover-cache-file (remote)
+  "Return the local cache path for REMOTE's cover."
+  (orpheus-cache-file
+   (format "ssh-cover:%s:%s" (or (orpheus-ssh--host) "") remote)
+   (file-name-nondirectory remote)))
+
+(defun orpheus-ssh--cover-ready-p (path)
+  "Return non-nil when PATH is a non-empty readable cover file."
+  (and path
+       (file-readable-p path)
+       (> (or (ignore-errors
+                (file-attribute-size (file-attributes path))) 0) 0)))
+
+(defun orpheus-ssh--folder-art (ssh dir callback)
+  "Find cover art for remote DIR on SSH, then call CALLBACK with a local path."
+  (orpheus-ssh--run
+   ssh (orpheus-ssh--directory-command dir)
+   (lambda (output)
+     (let ((remote (and output (orpheus-ssh--cover-file dir output))))
+       (if remote
+           (orpheus-ssh--fetch-cover ssh remote callback)
+         (funcall callback nil))))))
+
+(defun orpheus-ssh--fetch-cover (ssh remote callback)
+  "Copy REMOTE cover from SSH into the cache, then call CALLBACK with its path."
+  (let ((path (orpheus-ssh--cover-cache-file remote)))
+    (cond
+     ((orpheus-ssh--cover-ready-p path) (funcall callback path))
+     ((orpheus-ssh-instance-cat-failed ssh)
+      (orpheus-ssh--fetch-cover-sftp ssh remote path callback))
+     (t
+      (ignore-errors (delete-file path))
+      (orpheus-ssh--fetch-cover-cat ssh remote path callback)))))
+
+(defun orpheus-ssh--fetch-cover-cat (ssh remote path callback)
+  "Fetch REMOTE's cover through SSH's shell into PATH, then call CALLBACK."
+  (let ((buffer (generate-new-buffer " *orpheus-ssh-cover*")))
+    (with-current-buffer buffer (set-buffer-multibyte nil))
+    (condition-case nil
+        (let ((process
+               (make-process
+                :name "orpheus-ssh-cover"
+                :command (append
+                          (list (orpheus-ssh--program))
+                          orpheus-ssh-extra-args
+                          (list (orpheus-ssh--host)
+                                (format "cat -- %s"
+                                        (orpheus-ssh--shell-quote remote))))
+                :buffer buffer
+                :stderr (get-buffer-create "*orpheus ssh*")
+                :coding 'binary
+                :noquery t
+                :sentinel (lambda (process _event)
+                            (orpheus-ssh--cover-cat-sentinel
+                             ssh remote path buffer callback process)))))
+          (push process (orpheus-ssh-instance-processes ssh)))
+      (error
+       (when (buffer-live-p buffer) (kill-buffer buffer))
+       (funcall callback nil)))))
+
+(defun orpheus-ssh--cover-cat-sentinel (ssh remote path buffer callback process)
+  "Finish fetching REMOTE's cover into PATH for SSH after PROCESS exits."
+  (unless (process-live-p process)
+    (setf (orpheus-ssh-instance-processes ssh)
+          (delq process (orpheus-ssh-instance-processes ssh)))
+    (let ((status (process-status process))
+          (code (ignore-errors (process-exit-status process))))
+      (if (and (eq status 'exit) (integerp code) (zerop code))
+          (progn
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (let ((coding-system-for-write 'binary))
+                  (ignore-errors
+                    (write-region (point-min) (point-max) path nil 'silent))))
+              (kill-buffer buffer))
+            (if (orpheus-ssh--cover-ready-p path)
+                (funcall callback path)
+              (ignore-errors (delete-file path))
+              (funcall callback nil)))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (when (and (eq status 'exit)
+                   (memq code '(126 127))
+                   (memq ssh orpheus-ssh--live))
+          (setf (orpheus-ssh-instance-cat-failed ssh) t))
+        (if (and (eq status 'exit) (memq ssh orpheus-ssh--live))
+            (orpheus-ssh--fetch-cover-sftp ssh remote path callback)
+          (funcall callback nil))))))
+
+(defun orpheus-ssh--fetch-cover-sftp (ssh remote path callback)
+  "Fetch REMOTE's cover over SFTP for SSH into PATH, then call CALLBACK."
+  (let ((batch nil))
+    (condition-case nil
+        (progn
+          (setq batch (make-temp-file "orpheus-sftp-cover-" nil ".batch"))
+          (with-temp-file path)
+          (with-temp-file batch
+            (insert (orpheus-ssh--sftp-batch remote path)))
+          (let ((process
+                 (make-process
+                  :name "orpheus-ssh-sftp-cover"
+                  :command (append
+                            (list (orpheus-ssh--sftp-program))
+                            orpheus-ssh-sftp-extra-args
+                            (list "-b" batch "--" (orpheus-ssh--host)))
+                  :buffer nil
+                  :stderr (get-buffer-create "*orpheus ssh*")
+                  :noquery t
+                  :sentinel (lambda (process _event)
+                              (orpheus-ssh--cover-sftp-sentinel
+                               ssh path batch callback process)))))
+            (push process (orpheus-ssh-instance-processes ssh))))
+      (error
+       (when (and batch (file-exists-p batch))
+         (ignore-errors (delete-file batch)))
+       (ignore-errors (delete-file path))
+       (funcall callback nil)))))
+
+(defun orpheus-ssh--cover-sftp-sentinel (ssh path batch callback process)
+  "Finish fetching a cover into PATH for SSH after sftp PROCESS exits."
+  (unless (process-live-p process)
+    (setf (orpheus-ssh-instance-processes ssh)
+          (delq process (orpheus-ssh-instance-processes ssh)))
+    (when (and batch (file-exists-p batch))
+      (ignore-errors (delete-file batch)))
+    (let ((status (process-status process))
+          (code (ignore-errors (process-exit-status process))))
+      (if (and (eq status 'exit) (integerp code) (zerop code)
+               (orpheus-ssh--cover-ready-p path))
+          (funcall callback path)
+        (ignore-errors (delete-file path))
+        (funcall callback nil)))))
 
 ;;; Downloads and their queue
 
@@ -1044,12 +1192,22 @@ user's request and never becomes the current playing file."
   (orpheus-ssh--cancel ssh uri))
 
 (cl-defmethod orpheus-backend-album-art ((ssh orpheus-ssh) track callback)
-  "Find cover art for TRACK in SSH's downloaded copy, then call CALLBACK."
-  (let ((file (gethash (orpheus-track-uri track)
-                       (orpheus-ssh-instance-downloads ssh))))
+  "Find cover art for TRACK in SSH's copy or remote folder, then call CALLBACK."
+  (let* ((uri (orpheus-track-uri track))
+         (file (and uri (gethash uri (orpheus-ssh-instance-downloads ssh))))
+         (dir (and uri (file-name-directory uri))))
     (if (and file (file-readable-p file))
-        (orpheus-local--album-art-file file callback)
-      (funcall callback nil))))
+        (orpheus-local--album-art-file
+         file
+         (lambda (art)
+           (if art
+               (funcall callback art)
+             (orpheus-ssh--folder-art ssh dir callback))))
+      (orpheus-ssh--folder-art ssh dir callback))))
+
+(cl-defmethod orpheus-backend-folder-art ((ssh orpheus-ssh) folder callback)
+  "Find cover art for remote FOLDER on SSH, then call CALLBACK with a path."
+  (orpheus-ssh--folder-art ssh folder callback))
 
 (cl-defmethod orpheus-backend-capabilities ((_ssh orpheus-ssh))
   "Return what files on another machine can browse."

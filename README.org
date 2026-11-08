@@ -86,10 +86,11 @@ prove it is real.
 :CUSTOM_ID: the-player
 :END:
 
-- *Seven tabs, like rmpc.* :: Queue, Directories, Artists, Album Artists,
+- *The rmpc tabs.* :: MPD gets Queue, Directories, Artists, Album Artists,
   Albums, Playlists and Search, numbered 1 to 7, each keeping its own place in
-  the hierarchy while you move between them.  A backend with file transfers
-  adds a Downloads tab after Queue.
+  the hierarchy while you move between them.  Every backend gets Queue,
+  Directories, Playlists and Search, and one with file transfers adds Downloads
+  after Queue.
 - *A visible transfer queue.* :: SSH downloads run in the background, up to
   `orpheus-ssh-concurrency' at once.  A play request jumps ahead of prefetches,
   the next `orpheus-ssh-prefetch' queue entries arrive before you need them,
@@ -112,7 +113,7 @@ prove it is real.
   turns it off when the header line is enough.
 - *A queue you can edit.* :: Play a row, queue a row or everything on the tab,
   mark rows the way Dired does, queue or delete just the marked ones, clear the
-  queue, jump to what is playing, save the queue as a playlist.
+  queue, jump to what is playing, save the queue as a portable M3U8 playlist.
 - *Dired fingers and icons.* :: `RET' enters a directory, `^' leaves it, `m',
   `u', `U' and `t' mark rows, and every row starts with a glyph for what it is
   — a folder, a track, an album, an artist, a playlist.
@@ -122,9 +123,12 @@ prove it is real.
 - *A status line that does not steal the screen.* :: It lives in
   `header-line-format', so it redraws every second while the list, the point and
   the scroll position stay exactly where you left them.
-- *Cover art.* :: Read from the daemon or from next to the file, cached by URI
-  under `orpheus-cache-directory', drawn at `orpheus-ui-art-size' in a graphical
-  frame.
+- *Cover art.* :: For the current track and for the album folder being browsed.
+  Local and SSH look for `cover.jpg`, `Cover.PNG`, `cover.webp`, `folder.*`,
+  `front.*`, `album.*` and `artwork.*` regardless of case; SSH copies a remote
+  cover into the cache.  MPD uses its embedded `albumart` or `readpicture`.
+  Cached under `orpheus-cache-directory`, drawn at `orpheus-ui-art-size` in a
+  graphical frame, and skipped without a fetch in a terminal.
 - *Song change notifications.* :: Through `notifications-notify', with the cover
   as the icon, on by default and one flag away.
 - *A Greek palette.* :: Gold, marble, Aegean blue, iris and olive, chosen for a
@@ -136,6 +140,36 @@ prove it is real.
 - *Dired and URLs.* :: `orpheus-play-file' and `orpheus-add-file' take the file
   at point; `orpheus-play-url' takes a link, and mpv hands a video page to
   yt-dlp when it is installed.
+
+** Portable playlists
+:PROPERTIES:
+:CUSTOM_ID: portable-playlists
+:END:
+
+A playlist is an M3U8 file, not an object owned by a backend.  `C-x C-s` writes
+the current queue to `orpheus-playlist-directory` (by default
+`$XDG_DATA_HOME/orpheus/playlists`, or `~/.local/share/orpheus/playlists`), and
+the Playlists tab lists every playlist there: RET replaces the queue with it,
+`a` appends its tracks, `e` opens it in an editor buffer, and `d` deletes the
+file after asking.  MPD's own server playlists appear in the same tab, after
+the portable ones, and still open and play as they did before.
+
+Reading accepts M3U and PLS as well as M3U8, so a playlist exported by another
+player can be dropped into the directory.  Writing is always UTF-8 M3U8 with
+`#EXTM3U` and `#EXTINF` labels.
+
+The editor keeps the parsed tracks, not the M3U8 text, so moving a row with
+`M-<up>` or `M-<down>` and removing one with `d` preserve its tags; `C-x C-s`
+writes the file back.  It edits M3U and M3U8 files.  PLS is read-only there,
+because writing an M3U8 body under a `.pls` name would make the file unreadable
+next time; export it as M3U8 first.
+
+A portable playlist carries URIs, not a translation between backends.  The
+active backend receives each URI exactly as written, so a list of local paths
+plays with `local`, a list of MPD library paths plays with `mpd`, and a list of
+remote paths plays with `ssh`.  Moving a playlist between machines or backends
+means moving the files or rewriting their URIs; the M3U8 file itself does not
+guess.
 
 ** The visualizer
 :PROPERTIES:
@@ -375,7 +409,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 
 | Key                    | Meaning                                                  |
 |------------------------+----------------------------------------------------------|
-| `RET`                  | play the row, or open the album, artist or directory     |
+| `RET`                  | play the row or portable playlist, or open the album, artist or directory |
 | `n`, `C-n`, `j`        | next row                                                 |
 | `p`, `C-p`, `k`        | previous row                                             |
 | `C-v`, `M-v`           | one screen down, one screen up                           |
@@ -386,6 +420,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `m`, `u`               | mark the row, unmark it                                  |
 | `U`, `t`               | unmark everything, invert the marks                      |
 | `a`, `A`               | queue the marked rows (or this one), queue everything here |
+| `e`                    | edit the portable playlist at point (Playlists tab)       |
 | `d`, `C-k`             | delete from the queue, or cancel a download               |
 | `D`                    | clear the queue                                          |
 | `/`, `C-s`             | search                                                   |
@@ -397,7 +432,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `M-<up>`, `M-<down>`   | volume up, volume down (also `+` and `-`)                |
 | `z`, `x`, `c`, `v`     | repeat, random, consume, single                          |
 | `M-u`, `M-U`           | update the library, rescan it                            |
-| `C-x C-s`              | save the queue as a playlist                             |
+| `C-x C-s`              | save the queue as a portable M3U8 playlist               |
 | `g`                    | refresh the status and the current tab                   |
 | `V`                    | the spectrum visualizer                                  |
 | `?`                    | the key map in a buffer                                  |
@@ -407,7 +442,9 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 On the Downloads tab, RET plays a finished copy, retries a failed transfer, or
 waits for one that is still moving; `d` cancels the selected transfer.  The
 header line counts active and queued transfers and shows their aggregate
-throughput while they run.
+throughput while they run.  On the Playlists tab, `a` appends a portable
+playlist's tracks, `d` deletes the portable playlist file, and `e` opens its
+editor; RET loads it in place of the queue.
 
 Queueing is guarded: `A` (and `a` with many marks) asks before adding more than
 `orpheus-ui-add-confirm-threshold` rows, and a queue over
@@ -480,7 +517,7 @@ RET orpheus` shows the same list.
 | `orpheus-local-audio-driver` | `nil`       | what follows `--ao=`, or nil for the platform |
 | `orpheus-local-extra-args`   | `nil`       | more mpv arguments, as a list          |
 | `orpheus-local-socket`       | `nil`       | IPC socket path, or nil for a temporary one |
-| `orpheus-local-cover-names`  | `cover.jpg`, `front.jpg`, … | files looked for next to a track |
+| `orpheus-local-cover-names`  | `cover.jpg`, `front.jpg`, … | files looked for next to a track or album folder; local and SSH |
 | `orpheus-local-extensions`   | `mp3`, `flac`, `opus`, … | what the files tab shows |
 
 `orpheus-local-audio-driver` is the escape hatch for a machine that needs a
@@ -503,6 +540,19 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 | `orpheus-ssh-concurrency`       | `2`     | simultaneous ssh downloads                      |
 | `orpheus-ssh-prefetch`          | `2`     | upcoming queue tracks fetched in the background |
 | `orpheus-ssh-cache-count`       | `8`     | completed tracks kept in the cache              |
+
+** Playlists
+:PROPERTIES:
+:CUSTOM_ID: playlist-configuration
+:END:
+
+| Option                       | Default                           | Meaning                                             |
+|------------------------------+-----------------------------------+-----------------------------------------------------|
+| `orpheus-playlist-directory` | `$XDG_DATA_HOME/orpheus/playlists` | where portable playlists are read and written       |
+
+The default falls back to `~/.local/share/orpheus/playlists` when
+`XDG_DATA_HOME` is unset.  The directory is made on the first save; an empty
+one is a tab with no rows.
 
 ** The interface and the visualizer
 :PROPERTIES:
@@ -570,11 +620,13 @@ Three backends are shipped and are the reference implementations:
   and `readpicture` binary payloads for cover art.
 - =orpheus-local.el= — mpv over its JSON IPC socket, with the queue kept in
   Emacs, tags read from mpv's `metadata` property, cover art found next to the
-  file or extracted with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).
+  file or in its album folder, or extracted with ffmpeg, and URLs delegated to
+  mpv (and so to yt-dlp).
 - =orpheus-ssh.el= — remote files over ssh and mpv here: `ls -1p' fills the
   files tab, `find' fills Search, and `cat' streams the chosen track into a
-  private cache file; `sftp' takes over when the shell rejects `cat'.  A
-  one-time check reports the remote commands and shell features.  Transfers run
+  private cache file; a cover in the track's folder is copied to the same cache.
+  `sftp' takes over when the shell rejects `cat'.  A one-time check reports the
+  remote commands and shell features.  Transfers run
   in a queue of at most `orpheus-ssh-concurrency', a play request goes ahead of
   the background prefetches, and the Downloads tab shows each one.  The local
   backend plays a copy once it is complete.  There is no daemon on the far side,
@@ -640,12 +692,13 @@ metadata work where the extractor provides them.
 :CUSTOM_ID: graphics
 :END:
 
-- *In a graphical frame* the cover art is drawn above the list, scaled to
-  `orpheus-ui-art-size`, and the visualizer is an SVG bar graph with rounded
-  bars and a colour ramp.
-- *In a terminal* both are skipped and the list, the status line, the progress
-  bar and the faces are unchanged.  The visualizer falls back to block
-  characters, which is a real rendering, not a placeholder.
+- *In a graphical frame* the cover for the current track, or for the album
+  folder being browsed when the track has none, is drawn above the list at
+  `orpheus-ui-art-size`; an image Emacs cannot decode is skipped.  The
+  visualizer is an SVG bar graph with rounded bars and a colour ramp.
+- *In a terminal* no cover is fetched or drawn, and the list, the status line,
+  the progress bar and the faces are unchanged.  The visualizer falls back to
+  block characters, which is a real rendering, not a placeholder.
 - *In either* the status line is text and the progress bar is Unicode by
   default and ASCII with `orpheus-ui-plain-ascii`.
 - *Over SSH* nothing is different from a local terminal, because nothing needs

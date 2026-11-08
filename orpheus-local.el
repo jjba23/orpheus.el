@@ -54,9 +54,16 @@ The value is what follows `--ao=', for example \"pipewire\" or
   :group 'orpheus)
 
 (defcustom orpheus-local-cover-names
-  '("cover.jpg" "cover.png" "front.jpg" "front.png" "folder.jpg"
-    "folder.png" "album.jpg" "albumart.jpg" "artwork.jpg")
-  "File names looked for next to a track before extracting art."
+  '("cover.jpg" "cover.jpeg" "cover.png" "cover.webp" "cover.gif"
+    "front.jpg" "front.jpeg" "front.png" "front.webp"
+    "folder.jpg" "folder.jpeg" "folder.png" "folder.webp"
+    "album.jpg" "album.jpeg" "album.png" "album.webp"
+    "albumart.jpg" "albumart.jpeg" "albumart.png" "albumart.webp"
+    "artwork.jpg" "artwork.jpeg" "artwork.png" "artwork.webp"
+    "cover art.jpg" "cover art.png" "album art.jpg" "album art.png")
+  "File names looked for next to a track or inside an album folder.
+Matching is case-insensitive, so `Cover.JPG' matches `cover.jpg'.  The local
+and SSH backends share this list."
   :type '(repeat string) :group 'orpheus)
 
 (defcustom orpheus-local-extensions
@@ -470,13 +477,26 @@ CALLBACK is called with the error string, or nil, and the data."
                        (funcall callback
                                 (and (file-readable-p output) output)))))))))
 
+(defun orpheus-local--cover-file (dir)
+  "Return the first cover file in DIR, matching names case-insensitively."
+  (when (and dir (file-directory-p dir))
+    (let ((files (directory-files dir nil "\\`[^.]")))
+      (cl-loop
+       for name in orpheus-local-cover-names
+       for base = (file-name-nondirectory name)
+       for match = (cl-find-if
+                    (lambda (file)
+                      (and (equal (downcase file) (downcase base))
+                           (file-regular-p (expand-file-name file dir))))
+                    files)
+       when match return (expand-file-name match dir)))))
+
 (defun orpheus-local--album-art-file (file callback)
   "Find cover art for FILE next to it or inside it, then call CALLBACK."
-  (let* ((covers (when (and file (file-regular-p file))
-                   (mapcar (lambda (name)
-                             (expand-file-name name (file-name-directory file)))
-                           orpheus-local-cover-names)))
-         (found (cl-find-if #'file-readable-p covers)))
+  (let* ((dir (cond ((and file (file-directory-p file)) file)
+                    ((and file (file-regular-p file))
+                     (file-name-directory file))))
+         (found (orpheus-local--cover-file dir)))
     (cond
       (found (funcall callback found))
       ((and file (file-regular-p file))
@@ -486,6 +506,10 @@ CALLBACK is called with the error string, or nil, and the data."
 (cl-defmethod orpheus-backend-album-art ((_local orpheus-local) track callback)
   "Find cover art for TRACK next to the file or inside it, then call CALLBACK."
   (orpheus-local--album-art-file (orpheus-track-uri track) callback))
+
+(cl-defmethod orpheus-backend-folder-art ((_local orpheus-local) folder callback)
+  "Find cover art for FOLDER, then call CALLBACK with a path or nil."
+  (funcall callback (orpheus-local--cover-file folder)))
 
 ;;; Browsing files
 

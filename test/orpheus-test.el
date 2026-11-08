@@ -751,10 +751,194 @@ and the password with it."
   (should (equal (car (last orpheus-vis-colors)) (orpheus-vis--color 100))))
 
 
+;;; Portable playlists
+
+(defun orpheus-test--with-playlist-directory (function)
+  "Call FUNCTION with an empty `orpheus-playlist-directory'."
+  (let ((orpheus-playlist-directory (make-temp-file "orpheus-playlists" t)))
+    (unwind-protect
+        (funcall function)
+      (delete-directory orpheus-playlist-directory t))))
+
+(ert-deftest orpheus-test/playlist-roundtrip ()
+  "A portable playlist keeps URIs and tags across a write and read."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let* ((file (orpheus-playlist-file "Night Drive"))
+            (tracks (list (orpheus-track-create
+                           :uri "/music/01.mp3" :title "One" :artist "Band"
+                           :duration 125)
+                          (orpheus-track-create
+                           :uri "https://example.test/radio" :title "Radio")))
+            (read (progn (orpheus-playlist-write file tracks)
+                         (orpheus-playlist-read file))))
+       (should (equal (file-name-nondirectory file) "Night Drive.m3u8"))
+       (should (file-readable-p file))
+       (should (equal (mapcar #'orpheus-track-uri read)
+                      '("/music/01.mp3" "https://example.test/radio")))
+       (should (equal (orpheus-track-title (car read)) "One"))
+       (should (equal (orpheus-track-artist (car read)) "Band"))
+       (should (= (orpheus-track-duration (car read)) 125))
+       (with-temp-buffer
+         (insert-file-contents file)
+         (should (string-prefix-p "#EXTM3U\n" (buffer-string))))))))
+
+(ert-deftest orpheus-test/playlist-name-stays-inside-directory ()
+  "A playlist name cannot write outside the playlist directory."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let ((file (orpheus-playlist-file "../escape")))
+       (should (equal (file-name-nondirectory file) "escape.m3u8"))
+       (should (string-prefix-p
+                (file-name-as-directory
+                 (expand-file-name orpheus-playlist-directory))
+                file)))
+     (should-error (orpheus-playlist-file "")))))
+
+(ert-deftest orpheus-test/playlist-items ()
+  "Portable playlists become rows with a file and a track count."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (orpheus-playlist-write
+      (orpheus-playlist-file "Mix")
+      (list (orpheus-track-create :uri "/a.mp3")
+            (orpheus-track-create :uri "/b.mp3")))
+     (with-temp-file (expand-file-name "notes.txt"
+                                       orpheus-playlist-directory)
+       (insert "not a playlist"))
+     (let* ((items (orpheus-playlist-items))
+            (item (car items)))
+       (should (= (length items) 1))
+       (should (equal (orpheus-item-label item) "Mix"))
+       (should (eq (orpheus-item-kind item) 'playlist))
+       (should (equal (alist-get 'count (orpheus-item-data item)) 2))
+       (should (file-readable-p (alist-get 'file (orpheus-item-data item))))))))
+
+(ert-deftest orpheus-test/playlist-plays-in-order ()
+  "Playing a portable playlist clears the queue, plays its first track, then
+appends the rest."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let* ((file (progn
+                    (orpheus-playlist-write
+                     (orpheus-playlist-file "Mix")
+                     (list (orpheus-track-create :uri "/a.mp3")
+                           (orpheus-track-create :uri "/b.mp3")
+                           (orpheus-track-create :uri "/c.mp3")))
+                    (orpheus-playlist-file "Mix")))
+            (orpheus-backend-current 'fake)
+            (calls nil))
+       (cl-letf (((symbol-function 'orpheus-backend-command)
+                  (lambda (_backend action &optional value)
+                    (push (list action value) calls)))
+                 ((symbol-function 'orpheus-backend-play-uri)
+                  (lambda (_backend uri) (push (list 'play uri) calls)))
+                 ((symbol-function 'orpheus-backend-add)
+                  (lambda (_backend uris) (push (list 'add uris) calls))))
+         (should (= 3 (orpheus-playlist-play file))))
+       (should (equal (nreverse calls)
+                      '((clear nil) (play "/a.mp3")
+                        (add ("/b.mp3" "/c.mp3")))))))))
+
+(ert-deftest orpheus-test/playlist-add-queues-all ()
+  "Adding a portable playlist appends every URI without clearing the queue."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let ((file (progn
+                   (orpheus-playlist-write
+                    (orpheus-playlist-file "Mix")
+                    (list (orpheus-track-create :uri "/a.mp3")
+                          (orpheus-track-create :uri "/b.mp3")))
+                   (orpheus-playlist-file "Mix")))
+           (orpheus-backend-current 'fake)
+           (added nil))
+       (cl-letf (((symbol-function 'orpheus-backend-add)
+                  (lambda (_backend uris) (setq added uris))))
+         (should (= 2 (orpheus-playlist-add file))))
+       (should (equal added '("/a.mp3" "/b.mp3")))))))
+
+(ert-deftest orpheus-test/playlist-editor-reorders-and-keeps-tags ()
+  "The editor moves a track and saves it without losing its tags."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let* ((file (orpheus-playlist-file "Edit"))
+            (first (orpheus-track-create
+                    :uri "/a.mp3" :title "One" :artist "Band"
+                    :duration 125))
+            (second (orpheus-track-create
+                     :uri "/b.mp3" :title "Two" :artist "Other")))
+       (orpheus-playlist-write file (list first second))
+       (let ((buffer (save-window-excursion (orpheus-playlist-edit file))))
+         (unwind-protect
+             (with-current-buffer buffer
+               (goto-char (point-min))
+               (orpheus-playlist-editor-move-down)
+               (orpheus-playlist-editor-save))
+           (kill-buffer buffer)))
+       (let ((read (orpheus-playlist-read file)))
+         (should (equal (mapcar #'orpheus-track-uri read)
+                        '("/b.mp3" "/a.mp3")))
+         (should (equal (orpheus-track-title (car read)) "Two"))
+         (should (equal (orpheus-track-artist (car read)) "Other")))))))
+
+(ert-deftest orpheus-test/playlist-editor-refuses-pls ()
+  "The editor does not overwrite PLS with M3U8 content."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let ((file (expand-file-name "Imported.pls"
+                                   orpheus-playlist-directory)))
+       (with-temp-file file
+         (insert "[playlist]\nFile1=/a.mp3\nTitle1=A\nNumberOfEntries=1\n"))
+       (should-error (orpheus-playlist-edit file) :type 'user-error)))))
+
+(ert-deftest orpheus-test/playlist-editor-removes ()
+  "The editor removes the row at point and saves the rest."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let ((file (orpheus-playlist-file "Edit")))
+       (orpheus-playlist-write
+        file (list (orpheus-track-create :uri "/a.mp3")
+                   (orpheus-track-create :uri "/b.mp3")))
+       (let ((buffer (save-window-excursion (orpheus-playlist-edit file))))
+         (unwind-protect
+             (with-current-buffer buffer
+               (goto-char (point-min))
+               (orpheus-playlist-editor-delete)
+               (orpheus-playlist-editor-save))
+           (kill-buffer buffer)))
+       (should (equal (mapcar #'orpheus-track-uri
+                              (orpheus-playlist-read file))
+                      '("/b.mp3")))))))
+
 ;;; The interface, without a frame
 
+(ert-deftest orpheus-test/ui-edits-portable-playlist ()
+  "`e' opens the portable playlist file at point in the editor."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (orpheus-playlist-write
+      (orpheus-playlist-file "Mix")
+      (list (orpheus-track-create :uri "/a.mp3")))
+     (let* ((file (orpheus-playlist-file "Mix"))
+            (item (car (orpheus-playlist-items)))
+            (tab (orpheus-ui-tab-create
+                  :kind 'playlists :title "Playlists" :view 'playlists
+                  :items (list item)))
+            (opened nil))
+       (with-temp-buffer
+         (orpheus-ui-mode)
+         (should (eq (key-binding (kbd "e")) 'orpheus-ui-edit-playlist))
+         (setq orpheus-ui--tabs (vector tab) orpheus-ui--tab 0)
+         (orpheus-ui--render)
+         (goto-char (point-min))
+         (orpheus-ui--place-point)
+         (cl-letf (((symbol-function 'orpheus-playlist-edit)
+                    (lambda (path) (setq opened path) nil)))
+           (orpheus-ui-edit-playlist)
+           (should (equal opened file))))))))
+
 (ert-deftest orpheus-test/ui-tabs ()
-  "The tabs follow what the backend says it can do, in rmpc's order."
+  "The tabs follow what the backend says it can do, plus portable playlists."
   (should (equal (mapcar #'car
                          (orpheus-ui--tabs-for-capabilities
                           '(queue directories artists albumartists albums
@@ -764,14 +948,116 @@ and the password with it."
   (should (equal (mapcar #'car
                          (orpheus-ui--tabs-for-capabilities
                           '(queue downloads directories search)))
-                 '(queue downloads directories search)))
+                 '(queue downloads directories playlists search)))
   (should (equal (orpheus-ui-kind-title 'downloads) "Downloads"))
   (should (equal (mapcar #'car
                          (orpheus-ui--tabs-for-capabilities
                           '(queue directories)))
-                 '(queue directories)))
+                 '(queue directories playlists)))
   (should (equal (mapcar #'car (orpheus-ui--tabs-for-capabilities nil))
                  '(queue))))
+
+(ert-deftest orpheus-test/ui-plays-portable-playlist ()
+  "RET on a portable playlist row loads that playlist."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (orpheus-playlist-write
+      (orpheus-playlist-file "Mix")
+      (list (orpheus-track-create :uri "/a.mp3")))
+     (let* ((file (orpheus-playlist-file "Mix"))
+            (item (car (orpheus-playlist-items)))
+            (tab (orpheus-ui-tab-create
+                  :kind 'playlists :title "Playlists" :view 'playlists
+                  :items (list item)))
+            (loaded nil))
+       (with-temp-buffer
+         (orpheus-ui-mode)
+         (setq orpheus-ui--tabs (vector tab) orpheus-ui--tab 0)
+         (orpheus-ui--render)
+         (goto-char (point-min))
+         (orpheus-ui--place-point)
+         (cl-letf (((symbol-function 'orpheus-playlist-play)
+                    (lambda (path) (setq loaded path) 1)))
+           (orpheus-ui-confirm)
+           (should (equal loaded file))))))))
+
+(ert-deftest orpheus-test/ui-adds-portable-playlist ()
+  "`a' on a portable playlist queues every track it names."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (orpheus-playlist-write
+      (orpheus-playlist-file "Mix")
+      (list (orpheus-track-create :uri "/a.mp3")
+            (orpheus-track-create :uri "/b.mp3")))
+     (let* ((item (car (orpheus-playlist-items)))
+            (tab (orpheus-ui-tab-create
+                  :kind 'playlists :title "Playlists" :view 'playlists
+                  :items (list item)))
+            (orpheus-backend-current 'fake)
+            (added nil))
+       (with-temp-buffer
+         (orpheus-ui-mode)
+         (setq orpheus-ui--tabs (vector tab) orpheus-ui--tab 0)
+         (orpheus-ui--render)
+         (goto-char (point-min))
+         (orpheus-ui--place-point)
+         (cl-letf (((symbol-function 'orpheus-backend-add)
+                    (lambda (_backend uris) (setq added uris))))
+           (orpheus-ui-add)
+           (should (equal added '("/a.mp3" "/b.mp3")))))))))
+
+(ert-deftest orpheus-test/ui-saves-queue-as-portable-playlist ()
+  "The queue is written as a portable playlist, whichever backend owns it."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let* ((items (list (orpheus-item-create
+                          :kind 'track
+                          :data (list (cons 'uri "/a.mp3")
+                                      (cons 'track
+                                            (orpheus-track-create
+                                             :uri "/a.mp3" :title "A"
+                                             :artist "Band"))))
+                         (orpheus-item-create
+                          :kind 'track :data '((uri . "/b.mp3")))))
+            (orpheus-backend-current 'fake)
+            (message-text nil))
+       (cl-letf (((symbol-function 'orpheus-backend-queue)
+                  (lambda (_backend callback) (funcall callback items)))
+                 ((symbol-function 'message)
+                  (lambda (format &rest args)
+                    (setq message-text (apply #'format format args)))))
+         (orpheus-ui-save-playlist "Queue"))
+       (let ((file (orpheus-playlist-file "Queue")))
+         (should (file-readable-p file))
+         (should (equal (mapcar #'orpheus-track-uri
+                                (orpheus-playlist-read file))
+                        '("/a.mp3" "/b.mp3"))))
+       (should (string-match-p "Queue" message-text))))))
+
+(ert-deftest orpheus-test/ui-playlists-merge-server-rows ()
+  "Portable playlists and a backend's own playlists share the tab."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let ((portable (orpheus-item-create
+                      :label "Local" :kind 'playlist
+                      :data '((file . "/tmp/Local.m3u8"))))
+           (server (orpheus-item-create :label "Server" :kind 'playlist
+                                        :data '((browse . (playlists "Server")))))
+           (orpheus-backend-current 'fake)
+           (asked nil)
+           (rows nil))
+       (cl-letf (((symbol-function 'orpheus-playlist-items)
+                  (lambda () (list portable)))
+                 ((symbol-function 'orpheus-backend-capabilities)
+                  (lambda (_backend) '(queue playlists)))
+                 ((symbol-function 'orpheus-backend-browse)
+                  (lambda (_backend kind arg callback)
+                    (setq asked (list kind arg))
+                    (funcall callback (list server)))))
+         (orpheus-ui--playlist-items
+          (lambda (items) (setq rows items))))
+       (should (equal asked '(playlists nil)))
+       (should (equal rows (list portable server)))))))
 
 (ert-deftest orpheus-test/ui-elide ()
   "A long line is cut to the width, with an ellipsis, never widened."
@@ -1257,6 +1543,139 @@ so they are allowed by name."
         (orpheus-ui--insert-art 80)
         (should (string-match-p "\n" (buffer-string)))))))
 
+(ert-deftest orpheus-test/local-cover-detection ()
+  "Cover files are found by name regardless of case and extension."
+  (let* ((dir (make-temp-file "orpheus-cover" t))
+         (cover (expand-file-name "Cover.WEBP" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "01 Song.mp3" dir))
+          (with-temp-file cover)
+          (should (equal (orpheus-local--cover-file dir) cover))
+          (let ((found 'waiting))
+            (orpheus-backend-folder-art
+             (orpheus-make-backend 'local) dir
+             (lambda (file) (setq found file)))
+            (should (equal found cover))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/ui-folder-art ()
+  "A directory tab shows its folder cover when nothing is playing."
+  (let ((orpheus-ui-show-art t)
+        (orpheus-ui--art nil)
+        (orpheus-ui--art-cache (make-hash-table :test #'equal))
+        (orpheus-track-current nil)
+        (orpheus-backend-current (orpheus-make-backend 'local))
+        (folder "/tmp/orpheus-album"))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _frame) t))
+              ((symbol-function 'orpheus-ui--redraw) (lambda () nil))
+              ((symbol-function 'orpheus-backend-folder-art)
+               (lambda (_backend dir callback)
+                 (should (equal dir folder))
+                 (funcall callback "/tmp/orpheus-album/cover.jpg"))))
+      (with-temp-buffer
+        (orpheus-ui-mode)
+        (setq orpheus-ui--tabs
+              (vector (orpheus-ui-tab-create
+                       :kind 'directories :title "Directories"
+                       :view 'directories :arg (list folder))))
+        (orpheus-ui--update-context-art)
+        (should (equal (plist-get orpheus-ui--art :file)
+                       "/tmp/orpheus-album/cover.jpg"))))))
+
+(ert-deftest orpheus-test/ui-art-falls-back-to-folder ()
+  "A track without cover art falls back to the folder being browsed."
+  (let ((orpheus-ui-show-art t)
+        (orpheus-ui--art nil)
+        (orpheus-ui--art-cache (make-hash-table :test #'equal))
+        (orpheus-track-current
+         (orpheus-track-create :uri "/music/Album/01.mp3"))
+        (orpheus-backend-current (orpheus-make-backend 'local))
+        (folder "/music/Album"))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _frame) t))
+              ((symbol-function 'orpheus-ui--redraw) (lambda () nil))
+              ((symbol-function 'orpheus-backend-album-art)
+               (lambda (_backend _track callback) (funcall callback nil)))
+              ((symbol-function 'orpheus-backend-folder-art)
+               (lambda (_backend _dir callback)
+                 (funcall callback "/music/Album/folder.jpg"))))
+      (with-temp-buffer
+        (orpheus-ui-mode)
+        (setq orpheus-ui--tabs
+              (vector (orpheus-ui-tab-create
+                       :kind 'directories :title "Directories"
+                       :view 'directories :arg (list folder))))
+        (orpheus-ui--update-context-art)
+        (should (equal (plist-get orpheus-ui--art :file)
+                       "/music/Album/folder.jpg"))))))
+
+(ert-deftest orpheus-test/ui-art-for-album-view ()
+  "An MPD album folder uses its first song's embedded cover."
+  (let ((orpheus-ui-show-art t)
+        (orpheus-ui--art nil)
+        (orpheus-ui--art-cache (make-hash-table :test #'equal))
+        (orpheus-track-current nil)
+        (orpheus-backend-current (orpheus-make-backend 'mpd))
+        (asked nil))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _frame) t))
+              ((symbol-function 'orpheus-ui--redraw) (lambda () nil))
+              ((symbol-function 'orpheus-backend-album-art)
+               (lambda (_backend track callback)
+                 (setq asked (orpheus-track-uri track))
+                 (funcall callback "/tmp/orpheus-album/cover.jpg"))))
+      (with-temp-buffer
+        (orpheus-ui-mode)
+        (setq orpheus-ui--tabs
+              (vector (orpheus-ui-tab-create
+                       :kind 'albums :title "Albums" :view 'albums
+                       :arg '("Record")
+                       :items (list (orpheus-item-create
+                                     :label "01.mp3" :kind 'track
+                                     :data '((uri . "Music/Record/01.mp3")))))))
+        (orpheus-ui--update-context-art)
+        (should (equal asked "Music/Record/01.mp3"))
+        (should (equal (plist-get orpheus-ui--art :file)
+                       "/tmp/orpheus-album/cover.jpg"))))))
+
+(ert-deftest orpheus-test/ui-art-is-not-fetched-in-terminal ()
+  "A terminal has nowhere to draw art, so no backend work is wasted."
+  (let ((orpheus-ui-show-art t)
+        (orpheus-ui--art nil)
+        (orpheus-ui--art-cache (make-hash-table :test #'equal))
+        (orpheus-track-current nil)
+        (orpheus-backend-current (orpheus-make-backend 'local))
+        (calls 0))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _frame) nil))
+              ((symbol-function 'orpheus-ui--redraw) (lambda () nil))
+              ((symbol-function 'orpheus-backend-folder-art)
+               (lambda (&rest _args) (setq calls (1+ calls)))))
+      (with-temp-buffer
+        (orpheus-ui-mode)
+        (setq orpheus-ui--tabs
+              (vector (orpheus-ui-tab-create
+                       :kind 'directories :title "Directories"
+                       :view 'directories :arg '("/music/Album"))))
+        (orpheus-ui--update-context-art)
+        (should-not orpheus-ui--art)
+        (should (= calls 0))))))
+
+(ert-deftest orpheus-test/ui-art-image-rejects-non-image ()
+  "A file Emacs cannot draw is skipped instead of breaking a redraw."
+  (let ((file (make-temp-file "orpheus-not-an-image"))
+        (orpheus-ui--art nil))
+    (unwind-protect
+        (progn
+          (write-region "not an image" nil file nil 'silent)
+          (setq orpheus-ui--art (list :file file))
+          (cl-letf (((symbol-function 'display-graphic-p)
+                     (lambda (&optional _frame) t)))
+            (should-not (orpheus-ui--art-image))))
+      (delete-file file))))
+
 
 ;;; The mode line
 
@@ -1400,6 +1819,14 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
   (should (equal (orpheus-ssh--shell-quote "It's/")
                  "'It'\\''s/'")))
 
+(ert-deftest orpheus-test/ssh-cover-file ()
+  "A remote cover is found regardless of its case."
+  (should (equal (orpheus-ssh--cover-file
+                  "Music/Album" "Cover.JPG\nSong.mp3\nnotes.txt\n")
+                 "Music/Album/Cover.JPG"))
+  (should-not (orpheus-ssh--cover-file
+               "Music/Album" "Song.mp3\nnotes.txt\n")))
+
 (ert-deftest orpheus-test/ssh-browses-remote-directories ()
   "The files tab lists the remote directory and skips non-music files."
   (orpheus-test--with-fake-ssh
@@ -1419,6 +1846,47 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
                                        (orpheus-item-data (cadr items)))
                             "Music/Song.mp3")))
          (orpheus-backend-disconnect ssh))))))
+
+(ert-deftest orpheus-test/ssh-fetches-folder-cover ()
+  "Browsing an album fetches its cover file over ssh."
+  (let ((orpheus-cache-directory (make-temp-file "orpheus-cover-cache" t)))
+    (unwind-protect
+        (orpheus-test--with-fake-ssh
+         (lambda ()
+           (let ((ssh (orpheus-make-backend 'ssh))
+                 (file 'waiting))
+             (unwind-protect
+                 (progn
+                   (orpheus-backend-folder-art
+                    ssh "Music/Album"
+                    (lambda (result) (setq file result)))
+                   (should (orpheus-test--wait
+                            (lambda () (not (eq file 'waiting))) 20))
+                   (should (file-readable-p file))
+                   (should (string-match-p "Cover" file)))
+               (orpheus-backend-disconnect ssh)))))
+      (delete-directory orpheus-cache-directory t))))
+
+(ert-deftest orpheus-test/ssh-fetches-folder-cover-over-sftp ()
+  "A remote cover uses sftp when the shell cannot run cat."
+  (let ((orpheus-cache-directory (make-temp-file "orpheus-cover-cache" t)))
+    (unwind-protect
+        (orpheus-test--with-fake-ssh
+         (lambda ()
+           (let ((ssh (orpheus-make-backend 'ssh))
+                 (file 'waiting))
+             (unwind-protect
+                 (progn
+                   (orpheus-backend-folder-art
+                    ssh "Music/Album"
+                    (lambda (result) (setq file result)))
+                   (should (orpheus-test--wait
+                            (lambda () (not (eq file 'waiting))) 20))
+                   (should (file-readable-p file))
+                   (should (orpheus-ssh-instance-cat-failed ssh)))
+               (orpheus-backend-disconnect ssh))))
+         "nocat")
+      (delete-directory orpheus-cache-directory t))))
 
 (ert-deftest orpheus-test/ssh-searches-remote-library ()
   "The search tab finds tracks below the remote start directory."

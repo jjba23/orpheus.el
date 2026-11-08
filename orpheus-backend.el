@@ -228,6 +228,12 @@ The actions are `play', `pause', `resume', `toggle', `stop', `next',
   (ignore backend track)
   (funcall callback nil))
 
+(cl-defgeneric orpheus-backend-folder-art (backend folder callback)
+  "Fetch cover art for FOLDER from BACKEND, then call CALLBACK with a path.
+FOLDER is the backend's own path to a directory or album."
+  (ignore backend folder)
+  (funcall callback nil))
+
 (cl-defgeneric orpheus-backend-outputs (backend callback)
   "Ask BACKEND for its audio outputs, then call CALLBACK with items."
   (ignore backend)
