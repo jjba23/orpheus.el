@@ -228,14 +228,15 @@ Return PREDICATE's last value, so a test can assert on it."
   (should-error (orpheus-make-backend 'nonsense)))
 
 (ert-deftest orpheus-test/backend-capabilities ()
-  "MPD can browse everything; local files at least the filesystem."
+  "MPD can browse everything; local files can walk and search the filesystem."
   (let ((mpd (orpheus-make-backend 'mpd))
         (local (orpheus-make-backend 'local)))
     (dolist (kind '(queue directories artists albumartists albums playlists
                     search))
       (should (memq kind (orpheus-backend-capabilities mpd))))
     (should (memq 'queue (orpheus-backend-capabilities local)))
-    (should (memq 'directories (orpheus-backend-capabilities local)))))
+    (should (memq 'directories (orpheus-backend-capabilities local)))
+    (should (memq 'search (orpheus-backend-capabilities local)))))
 
 
 ;;; MPD, the pure parts
@@ -762,6 +763,11 @@ and the password with it."
                    search)))
   (should (equal (mapcar #'car
                          (orpheus-ui--tabs-for-capabilities
+                          '(queue downloads directories search)))
+                 '(queue downloads directories search)))
+  (should (equal (orpheus-ui-kind-title 'downloads) "Downloads"))
+  (should (equal (mapcar #'car
+                         (orpheus-ui--tabs-for-capabilities
                           '(queue directories)))
                  '(queue directories)))
   (should (equal (mapcar #'car (orpheus-ui--tabs-for-capabilities nil))
@@ -794,6 +800,39 @@ and the password with it."
     (should (string-match-p "vol 80" line))
     (should (string-match-p "R" line))
     (should (string-match-p "Z" line))))
+
+(ert-deftest orpheus-test/ui-download-summary ()
+  "The header counts active and queued transfers and their aggregate speed."
+  (let ((orpheus-ui-plain-ascii t)
+        (orpheus-ui--downloads
+         (list (orpheus-item-create
+                :kind 'download
+                :data '((state . downloading) (speed . 1024)))
+               (orpheus-item-create
+                :kind 'download
+                :data '((state . queued))))))
+    (let ((summary (orpheus-ui--download-summary-string)))
+      (should (string-match-p "v 2" summary))
+      (should (string-match-p "1KiB/s" summary))))
+  (let ((orpheus-ui--downloads
+         (list (orpheus-item-create
+                :kind 'download
+                :data '((state . done) (bytes . 2048))))))
+    (should-not (orpheus-ui--download-summary-string))))
+
+(ert-deftest orpheus-test/ui-now-playing-card ()
+  "The now-playing card names the track, its artist and the progress."
+  (let ((orpheus-ui-plain-ascii t)
+        (orpheus-track-current (orpheus-track-create :title "Song"
+                                                     :artist "Band"))
+        (orpheus-status-current (orpheus-status-create
+                                :state 'play :elapsed 30 :total 60)))
+    (with-temp-buffer
+      (orpheus-ui--insert-now-playing 40)
+      (let ((text (buffer-string)))
+        (should (string-match-p "Song" text))
+        (should (string-match-p "Band" text))
+        (should (string-match-p "0:30 / 1:00" text))))))
 
 (ert-deftest orpheus-test/ui-row-indexed ()
   "Each row carries its index, so a click or RET knows the item."
@@ -946,8 +985,8 @@ keystroke doubles it and a few of them fill it with copies."
 
 (ert-deftest orpheus-test/browse-kinds-are-known ()
   "Every browse kind has a tab title and a key."
-  (dolist (kind '(queue directories artists albumartists albums playlists
-                  search))
+  (dolist (kind '(queue downloads directories artists albumartists albums
+                  playlists search))
     (should (orpheus-ui-kind-title kind))
     ;; The kind is documented in the backend protocol, so it must be reachable
     ;; from a method that handles `orpheus-backend-browse'.
@@ -1332,7 +1371,7 @@ so they are allowed by name."
     (should (orpheus-local-p ssh))
     (should-not (orpheus-mpd-p ssh))
     (should (equal (orpheus-backend-capabilities ssh)
-                   '(queue directories)))))
+                   '(queue downloads directories search)))))
 
 (ert-deftest orpheus-test/ssh-directory-command ()
   "A remote path is one quoted shell word, joined without doubled slashes."
@@ -1366,6 +1405,147 @@ so they are allowed by name."
                             "Music/Song.mp3")))
          (orpheus-backend-disconnect ssh))))))
 
+(ert-deftest orpheus-test/ssh-searches-remote-library ()
+  "The search tab finds tracks below the remote start directory."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((orpheus-ssh-directory "Music")
+           (ssh (orpheus-make-backend 'ssh))
+           (items nil))
+       (unwind-protect
+           (progn
+             (orpheus-backend-browse ssh 'search '("song")
+                                     (lambda (result) (setq items result)))
+             (should (orpheus-test--wait (lambda () items) 20))
+             (should (equal (mapcar #'orpheus-item-label items)
+                            '("Song.mp3")))
+             (should (equal (alist-get 'uri
+                                       (orpheus-item-data (car items)))
+                            "Music/Song.mp3"))
+             (should (orpheus-item-playable (car items))))
+         (orpheus-backend-disconnect ssh))))))
+
+(ert-deftest orpheus-test/ssh-download-command-reports-size ()
+  "The copy command announces the remote size before the file bytes."
+  (let ((command (orpheus-ssh--download-command "Music/It's.mp3")))
+    (should (string-match-p "ORPHEUS-SIZE" command))
+    (should (string-match-p "stat -c %s" command))
+    (should (string-match-p (regexp-quote "'Music/It'\\''s.mp3'")
+                            command))))
+
+(ert-deftest orpheus-test/ssh-transfer-reads-a-split-size-header ()
+  "A size header split across chunks is read, not written to the file."
+  (let ((transfer (orpheus-ssh-transfer-create :header "")))
+    (should (equal (orpheus-ssh--transfer-data transfer "ORPHEUS-SIZE 1") ""))
+    (should (equal (orpheus-ssh--transfer-data transfer "0\nabc") "abc"))
+    (should (= (orpheus-ssh-transfer-total transfer) 10))
+    (should-not (orpheus-ssh-transfer-header transfer))))
+
+(ert-deftest orpheus-test/ssh-download-rows-show-their-state ()
+  "A transfer becomes a row with its state, size and URI."
+  (let* ((ssh (orpheus-make-backend 'ssh))
+         (transfer (orpheus-ssh-transfer-create
+                    :uri "Music/Song.mp3" :state 'downloading :bytes 2048)))
+    (setf (orpheus-ssh-instance-transfers ssh) (list transfer))
+    (unwind-protect
+        (let ((row (car (orpheus-ssh--download-items ssh))))
+          (should (equal (orpheus-item-label row) "Song.mp3"))
+          (should (string-prefix-p "downloading" (orpheus-item-detail row)))
+          (should (equal (alist-get 'state (orpheus-item-data row))
+                         'downloading))
+          (should (equal (alist-get 'uri (orpheus-item-data row))
+                         "Music/Song.mp3")))
+      (orpheus-backend-disconnect ssh))))
+
+(ert-deftest orpheus-test/ssh-transfer-speed-uses-recent-samples ()
+  "The speed reflects the last few seconds, not the whole transfer."
+  (let* ((now (float-time))
+         (transfer (orpheus-ssh-transfer-create
+                    :state 'downloading :bytes 2048
+                    :started (- now 10)
+                    :samples (list (cons now 2048)
+                                   (cons (- now 2) 1024)))))
+    (should (= (round (orpheus-ssh--transfer-speed transfer)) 512))))
+
+(ert-deftest orpheus-test/ssh-transfer-records-speed-samples ()
+  "Each received chunk records a byte sample for the rolling speed."
+  (let* ((ssh (orpheus-make-backend 'ssh))
+         (path (make-temp-file "orpheus-sample-"))
+         (transfer (orpheus-ssh-transfer-create
+                    :uri "Music/Song.mp3" :path path
+                    :state 'downloading :header nil)))
+    (unwind-protect
+        (progn
+          (orpheus-ssh--transfer-filter ssh transfer "abc")
+          (should (= (cdr (car (orpheus-ssh-transfer-samples transfer))) 3))
+          (should (equal (with-temp-buffer
+                           (insert-file-contents path)
+                           (buffer-string))
+                         "abc")))
+      (when (file-exists-p path) (delete-file path))
+      (orpheus-backend-disconnect ssh))))
+
+(ert-deftest orpheus-test/ssh-download-rows-show-progress-and-eta ()
+  "A downloading row reports its completion, speed and ETA."
+  (let* ((ssh (orpheus-make-backend 'ssh))
+         (now (float-time))
+         (transfer (orpheus-ssh-transfer-create
+                    :uri "Music/Song.mp3" :state 'downloading
+                    :bytes 1024 :total 3072
+                    :started (- now 10)
+                    :samples (list (cons now 1024)
+                                   (cons (- now 2) 0)))))
+    (setf (orpheus-ssh-instance-transfers ssh) (list transfer))
+    (unwind-protect
+        (let* ((row (car (orpheus-ssh--download-items ssh)))
+               (data (orpheus-item-data row))
+               (detail (orpheus-item-detail row)))
+          (should (string-match-p "33%" detail))
+          (should (string-match-p "512B/s" detail))
+          (should (string-match-p "ETA 0:04" detail))
+          (should (= (alist-get 'total data) 3072))
+          (should (= (alist-get 'percent data) 33))
+          (should (= (alist-get 'speed data) 512))
+          (should (= (alist-get 'eta data) 4)))
+      (orpheus-backend-disconnect ssh))))
+
+(ert-deftest orpheus-test/ssh-cancel-removes-a-partial-copy ()
+  "Cancelling a transfer deletes the bytes it had already written."
+  (let* ((ssh (orpheus-make-backend 'ssh))
+         (partial (make-temp-file "orpheus-partial-"))
+         (transfer (orpheus-ssh-transfer-create
+                    :uri "Music/Song.mp3" :path partial :state 'downloading)))
+    (setf (orpheus-ssh-instance-transfers ssh) (list transfer))
+    (unwind-protect
+        (progn
+          (orpheus-ssh--cancel ssh "Music/Song.mp3")
+          (should-not (file-exists-p partial))
+          (should-not (orpheus-ssh--transfer-for-uri ssh "Music/Song.mp3")))
+      (when (file-exists-p partial) (delete-file partial))
+      (orpheus-backend-disconnect ssh))))
+
+(ert-deftest orpheus-test/local-searches-files-asynchronously ()
+  "The local backend finds tracks with find, without blocking."
+  (let* ((root (file-name-as-directory
+                (make-temp-file "orpheus-search-" t)))
+         (song (expand-file-name "Song.mp3" root))
+         (notes (expand-file-name "notes.txt" root))
+         (orpheus-local-directory root)
+         (items 'waiting))
+    (unwind-protect
+        (progn
+          (write-region "audio" nil song)
+          (write-region "notes" nil notes)
+          (orpheus-local--search "song"
+                                 (lambda (result) (setq items result)))
+          (should (orpheus-test--wait
+                   (lambda () (not (eq items 'waiting))) 20))
+          (should (equal (mapcar #'orpheus-item-label items)
+                         '("Song.mp3")))
+          (should (equal (alist-get 'uri (orpheus-item-data (car items)))
+                         song)))
+      (delete-directory root t))))
+
 (ert-deftest orpheus-test/ssh-plays-a-downloaded-copy ()
   "Playing a remote file downloads it, loads the copy, and cleans up."
   (orpheus-test--with-fake-ssh
@@ -1390,6 +1570,11 @@ so they are allowed by name."
                                 (insert-file-contents (cadr loaded))
                                 (buffer-string))
                               "fake audio\n"))
+               (let ((transfer (orpheus-ssh--transfer-for-uri
+                                ssh "Music/Song.mp3")))
+                 (should transfer)
+                 (should (= (orpheus-ssh-transfer-total transfer) 11))
+                 (should (= (orpheus-ssh-transfer-bytes transfer) 11)))
                (should (eq (orpheus-status-state
                             (orpheus-local-instance-status ssh))
                            'play))))

@@ -160,6 +160,14 @@ REPEAT wraps around; RANDOM picks another entry."
   "Play URI as it is and call CALLBACK with it."
   (funcall callback uri))
 
+(cl-defgeneric orpheus-local--prefetch (backend)
+  "Fetch what BACKEND expects to play next."
+  (ignore backend))
+
+(cl-defmethod orpheus-local--prefetch ((_local orpheus-local))
+  "A local queue needs no prefetching."
+  nil)
+
 (defun orpheus-local--play-index (local index)
   "Play the queue entry at INDEX on LOCAL.
 A backend that keeps its files elsewhere can make the entry playable first;
@@ -190,7 +198,8 @@ see `orpheus-local--resolve-uri'."
                    (orpheus-local--send local (list "loadfile" path "replace"))
                    (orpheus-local--send
                     local (list "set_property" "pause"
-                                (if paused :true :false))))
+                                (if paused :true :false)))
+                   (orpheus-local--prefetch local))
                (setf (orpheus-status-state status) 'stop)
                (message "orpheus: cannot play %s" uri)))))))))
 
@@ -486,6 +495,52 @@ CALLBACK is called with the error string, or nil, and the data."
        (member (downcase (or (file-name-extension path) ""))
                orpheus-local-extensions)))
 
+(defun orpheus-local--search-items (dir query output)
+  "Return tracks below DIR from find OUTPUT that match QUERY."
+  (let ((needle (downcase query))
+        (root (file-name-as-directory (expand-file-name dir))))
+    (delq nil
+          (mapcar
+           (lambda (path)
+             (when (and (orpheus-local--media-file-p path)
+                        (string-match-p (regexp-quote needle)
+                                        (downcase path)))
+               (orpheus-item-create
+                :label (if (string-prefix-p root path)
+                           (substring path (length root))
+                         path)
+                :kind 'track
+                :detail (upcase (or (file-name-extension path) "file"))
+                :data (list (cons 'uri path)))))
+           (split-string output "\n" t)))))
+
+(defun orpheus-local--search (query callback)
+  "Find local files matching QUERY, then call CALLBACK with the rows."
+  (let* ((dir (expand-file-name (or orpheus-local-directory "~")))
+         (buffer (generate-new-buffer " *orpheus-find*"))
+         (program (or (executable-find "find") "find")))
+    (condition-case err
+        (make-process
+         :name "orpheus-find"
+         :command (list program dir "-type" "f" "-print")
+         :buffer buffer
+         :stderr (get-buffer-create "*orpheus find*")
+         :noquery t
+         :sentinel
+         (lambda (process _event)
+           (unless (process-live-p process)
+             (let ((output (and (eq (process-status process) 'exit)
+                                (zerop (process-exit-status process))
+                                (with-current-buffer buffer (buffer-string)))))
+               (when (buffer-live-p buffer) (kill-buffer buffer))
+               (funcall callback
+                        (and output
+                             (orpheus-local--search-items dir query output)))))))
+      (error
+       (when (buffer-live-p buffer) (kill-buffer buffer))
+       (message "orpheus: cannot search %s: %s" dir (error-message-string err))
+       (funcall callback nil)))))
+
 (defun orpheus-local--directory-items (dir)
   "Return the rows of DIR, one per directory and playable file.
 The row that leaves DIR is added by the interface, as it is for every
@@ -656,13 +711,14 @@ backend, so a parent row here would show the way up twice."
           (funcall callback
                    (orpheus-local--directory-items (or (car arg)
                                                        orpheus-local-directory))))
+         ('search (orpheus-local--search (car arg) callback))
          (_ (funcall callback nil))))
 
 (cl-defmethod orpheus-backend-capabilities ((_local orpheus-local))
   "Return what mpv can browse.
 `paths' is not a tab: it says this backend takes file names and URLs, which
 is what `orpheus-play-file' and `orpheus-play-url' look for."
-  '(queue directories paths))
+  '(queue directories search paths))
 
 (provide 'orpheus-local)
 

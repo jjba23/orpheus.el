@@ -101,6 +101,32 @@
   "Face of the mark column of a marked row."
   :group 'orpheus)
 
+(defface orpheus-progress-filled-face
+  '((((background dark)) :foreground "#e6c78a" :weight bold)
+    (((background light)) :foreground "#8a6420" :weight bold)
+    (t :inherit bold))
+  "Face of the played part of the progress bar."
+  :group 'orpheus)
+
+(defface orpheus-progress-empty-face
+  '((t :inherit shadow))
+  "Face of the remaining part of the progress bar."
+  :group 'orpheus)
+
+(defface orpheus-download-face
+  '((((background dark)) :foreground "#7fd1c8")
+    (((background light)) :foreground "#236e67")
+    (t :inherit default))
+  "Face of a completed download."
+  :group 'orpheus)
+
+(defface orpheus-download-active-face
+  '((((background dark)) :inherit bold :foreground "#a8e6df")
+    (((background light)) :inherit bold :foreground "#155b55")
+    (t :inherit bold))
+  "Face of a download that is still running."
+  :group 'orpheus)
+
 (defcustom orpheus-ui-buffer-name "*orpheus*"
   "Name of the player's buffer."
   :type 'string :group 'orpheus)
@@ -112,6 +138,10 @@ Set it in a terminal whose font has no play, pause or block characters."
 
 (defcustom orpheus-ui-show-art t
   "Whether to draw cover art in a graphical frame."
+  :type 'boolean :group 'orpheus)
+
+(defcustom orpheus-ui-show-now-playing t
+  "Whether to draw the now-playing card above the list."
   :type 'boolean :group 'orpheus)
 
 (defcustom orpheus-ui-art-size 220
@@ -138,6 +168,9 @@ one keystroke is what turns a queue into thousands of rows."
   "Track count at which loading the queue says how to clear it."
   :type 'integer :group 'orpheus)
 
+(defvar-local orpheus-ui--downloads nil
+  "Rows in the downloads tab, kept for the header summary.")
+
 ;;; Glyphs and strings
 
 (defun orpheus-status-glyph (status)
@@ -155,7 +188,9 @@ one keystroke is what turns a queue into thousands of rows."
     (artist . ("🎤" . "@"))
     (albumartist . ("🎤" . "@"))
     (playlist . ("🎶" . "p"))
-    (output . ("🔈" . "o")))
+    (output . ("🔈" . "o"))
+    (download . ("⬇" . "v"))
+    (search . ("🔎" . "?")))
   "Glyph of each row kind, as (UNICODE . ASCII).")
 
 (defun orpheus-ui--icon (kind)
@@ -168,6 +203,42 @@ one keystroke is what turns a queue into thousands of rows."
   "Return LETTER when ON, and a blank column otherwise."
   (if on letter " "))
 
+(defun orpheus-ui--download-summary-string ()
+  "Return a short live summary of the rows in `orpheus-ui--downloads'."
+  (let* ((items orpheus-ui--downloads)
+         (active (cl-count-if
+                  (lambda (item)
+                    (eq (alist-get 'state (orpheus-item-data item))
+                        'downloading))
+                  items))
+         (queued (cl-count-if
+                  (lambda (item)
+                    (eq (alist-get 'state (orpheus-item-data item)) 'queued))
+                  items))
+         (speed (cl-loop for item in items
+                         when (eq (alist-get 'state (orpheus-item-data item))
+                                  'downloading)
+                         sum (or (alist-get 'speed (orpheus-item-data item)) 0))))
+    (when (> (+ active queued) 0)
+      (concat "  " (if orpheus-ui-plain-ascii "v" "↓") " "
+              (number-to-string (+ active queued))
+              (when (> active 0)
+                (format " %s/s"
+                        (file-size-human-readable (round speed) 'iec)))))))
+
+(defun orpheus-ui--progress-string (elapsed total width)
+  "Return a two-face progress bar WIDTH columns wide, from ELAPSED and TOTAL."
+  (let* ((width (max 1 width))
+         (bar (orpheus-progress-bar elapsed total width))
+         (filled (min width
+                      (round (* width
+                                (/ (orpheus-progress-percent elapsed total)
+                                   100.0))))))
+    (concat (propertize (substring bar 0 filled)
+                        'face 'orpheus-progress-filled-face)
+            (propertize (substring bar filled)
+                        'face 'orpheus-progress-empty-face))))
+
 (defun orpheus-ui--status-string (status track)
   "Return the one-line status of STATUS and TRACK."
   (let ((elapsed (and status (orpheus-status-elapsed status)))
@@ -176,17 +247,18 @@ one keystroke is what turns a queue into thousands of rows."
                        (orpheus-ui--flag (and status (orpheus-status-random status)) "Z")
                        (orpheus-ui--flag (and status (orpheus-status-single status)) "S")
                        (orpheus-ui--flag (and status (orpheus-status-consume status)) "C"))))
-    (format " %s  %s  %s / %s  [%s] %3d%%  vol %d  %s"
+    (format " %s  %s  %s / %s  [%s] %3d%%  vol %d  %s%s"
             (orpheus-status-glyph status)
             (if (and track (not (string-empty-p (orpheus-track-label track))))
               (orpheus-track-label track)
               (if status "nothing playing" "connecting…"))
             (orpheus-format-time elapsed)
             (orpheus-format-time total)
-            (orpheus-progress-bar elapsed total orpheus-ui-progress-width)
+            (orpheus-ui--progress-string elapsed total orpheus-ui-progress-width)
             (orpheus-progress-percent elapsed total)
             (if status (orpheus-status-volume status) 0)
-            flags)))
+            flags
+            (or (orpheus-ui--download-summary-string) ""))))
 
 (defun orpheus-ui--elide (string width)
   "Return STRING fitted into WIDTH columns, cut with an ellipsis."
@@ -207,6 +279,7 @@ one keystroke is what turns a queue into thousands of rows."
   "Return the tab title for the browse KIND."
   (pcase kind
          ('queue "Queue")
+         ('downloads "Downloads")
          ('directories "Directories")
          ('artists "Artists")
          ('albumartists "Album Artists")
@@ -214,6 +287,24 @@ one keystroke is what turns a queue into thousands of rows."
          ('playlists "Playlists")
          ('search "Search")
          (_ (capitalize (symbol-name kind)))))
+
+(defconst orpheus-ui--tab-icons
+  '((queue . ("♫" . "Q"))
+    (downloads . ("⬇" . "D"))
+    (directories . ("📁" . "d"))
+    (artists . ("🎤" . "@"))
+    (albumartists . ("🎤" . "@"))
+    (albums . ("💿" . "a"))
+    (playlists . ("🎶" . "p"))
+    (search . ("🔎" . "s")))
+  "Glyph of each tab kind, as (UNICODE . ASCII).")
+
+(defun orpheus-ui--tab-label (kind title)
+  "Return TITLE for KIND with its tab glyph when icons are on."
+  (let ((pair (and orpheus-ui-icons (alist-get kind orpheus-ui--tab-icons))))
+    (if pair
+        (format "%s %s" (if orpheus-ui-plain-ascii (cdr pair) (car pair)) title)
+      title)))
 
 (defun orpheus-ui--tabs-for-capabilities (capabilities)
   "Return the tabs a backend with CAPABILITIES gets, as (KIND . TITLE).
@@ -340,6 +431,13 @@ backend."
     map)
   "Keymap put on each row, so the mouse works on it.")
 
+(defvar orpheus-ui-tab-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] 'orpheus-ui-mouse-tab)
+    (define-key map [follow-link] 'mouse-face)
+    map)
+  "Keymap put on each tab, so the mouse can select it.")
+
 (defun orpheus-ui--header-line ()
   "Return the header line of the player."
   (if (and orpheus-backend-current
@@ -352,10 +450,16 @@ backend."
   (let ((index 0)
         (parts nil))
     (dolist (tab (append orpheus-ui--tabs nil))
-      (push (propertize (format "%d %s" (1+ index) (orpheus-ui-tab-title tab))
+      (push (propertize (format "%d %s" (1+ index)
+                                (orpheus-ui--tab-label
+                                 (orpheus-ui-tab-kind tab)
+                                 (orpheus-ui-tab-title tab)))
                         'face (if (= index orpheus-ui--tab)
                                 'orpheus-tab-active-face
-                                'orpheus-tab-face))
+                                'orpheus-tab-face)
+                        'orpheus-tab index
+                        'local-map orpheus-ui-tab-map
+                        'mouse-face 'highlight)
             parts)
       (setq index (1+ index)))
     (concat " " (string-join (nreverse parts) "    "))))
@@ -394,6 +498,40 @@ backend."
                            (list 'space :width 1 :height orpheus-ui-art-size))
                "\n")))))
 
+(defun orpheus-ui--center-line (text width face)
+  "Return TEXT centred in WIDTH, with FACE."
+  (let* ((text (orpheus-ui--elide text width))
+         (indent (max 0 (/ (- width (string-width text)) 2))))
+    (concat (make-string indent ?\s) (propertize text 'face face))))
+
+(defun orpheus-ui--insert-now-playing (width)
+  "Insert a centered now-playing card in WIDTH."
+  (let* ((track orpheus-track-current)
+         (status orpheus-status-current)
+         (title (or (and track (orpheus-track-title track))
+                    (and track (orpheus-track-label track))
+                    "unknown track"))
+         (artist (and track (orpheus-track-artist track)))
+         (album (and track (orpheus-track-album track)))
+         (sub (string-join (delq nil (list artist album))
+                           (if orpheus-ui-plain-ascii " - " " · ")))
+         (elapsed (and status (orpheus-status-elapsed status)))
+         (total (and status (orpheus-status-total status))))
+    (insert (orpheus-ui--center-line
+             (format "%s  %s" (orpheus-status-glyph status) title)
+             width 'orpheus-title-face)
+            "\n")
+    (unless (string-empty-p sub)
+      (insert (orpheus-ui--center-line sub width 'orpheus-artist-face) "\n"))
+    (insert (orpheus-ui--center-line
+             (format "%s  %s / %s"
+                     (orpheus-ui--progress-string
+                      elapsed total orpheus-ui-progress-width)
+                     (orpheus-format-time elapsed)
+                     (orpheus-format-time total))
+             width 'orpheus-muted-face)
+            "\n\n")))
+
 (defun orpheus-ui--current-p (item)
   "Return non-nil when ITEM is the row playing now."
   (let* ((data (orpheus-item-data item))
@@ -420,6 +558,11 @@ folder are read at a glance the way Dired shows them."
                       ('artist 'orpheus-artist-face)
                       ('albumartist 'orpheus-artist-face)
                       ('output 'orpheus-muted-face)
+                      ('download
+                       (pcase (alist-get 'state (orpheus-item-data item))
+                         ('downloading 'orpheus-download-active-face)
+                         ('failed 'orpheus-error-face)
+                         (_ 'orpheus-download-face)))
                       (_ 'orpheus-title-face)))
          (row (orpheus-ui--columns (concat prefix
                                            (or (orpheus-item-label item) ""))
@@ -439,6 +582,16 @@ folder are read at a glance the way Dired shows them."
     (add-text-properties start (1- (point))
                          (list 'keymap orpheus-ui-item-map))))
 
+(defun orpheus-ui--footer (kind)
+  "Return the hint line for the current tab KIND."
+  (pcase kind
+         ('downloads
+          " RET play or retry  d cancel  g refresh  ? help  q bury")
+         ('search
+          " RET play  a add  m mark  / search again  g refresh  ? help  q bury")
+         (_
+          " RET play  a add  m mark  d delete  / search  g refresh  ? help  q bury")))
+
 (defun orpheus-ui--render ()
   "Draw the buffer from the tabs and rows it holds.
 The window start is put back afterwards, so a redraw while a cover arrives
@@ -455,6 +608,8 @@ does not scroll the list under the reader."
               "\n"))
     (when orpheus-ui-show-art
       (orpheus-ui--insert-art width))
+    (when (and orpheus-ui-show-now-playing orpheus-track-current)
+      (orpheus-ui--insert-now-playing width))
     (insert (propertize (make-string width ?─) 'face 'orpheus-muted-face) "\n")
     (let ((items (orpheus-ui-tab-items tab)))
       (if (null items)
@@ -468,9 +623,8 @@ does not scroll the list under the reader."
           (dolist (item items)
             (orpheus-ui--insert-item item index width)
             (setq index (1+ index))))))
-    (insert (propertize
-             " RET play  a add  m mark  d delete  / search  g refresh  ? help  q bury"
-             'face 'orpheus-muted-face))
+    (insert (propertize (orpheus-ui--footer (and tab (orpheus-ui-tab-kind tab)))
+                        'face 'orpheus-muted-face))
     (orpheus-ui--place-point)
     (when (and window start (<= start (point-max)))
       (set-window-start window start))
@@ -489,7 +643,9 @@ which row is highlighted."
           (and tab (orpheus-ui-tab-loading tab))
           (and orpheus-status-current
                (orpheus-status-songid orpheus-status-current))
-          (plist-get orpheus-ui--art :file))))
+          (plist-get orpheus-ui--art :file)
+          (orpheus-ui--download-summary-string)
+          orpheus-ui--downloads)))
 
 (defun orpheus-ui--redraw ()
   "Draw the buffer again, but only when what it shows has changed."
@@ -526,6 +682,30 @@ which row is highlighted."
       (message "orpheus: the queue has %d tracks; D clears it"
                (length items)))))
 
+(defun orpheus-ui--set-downloads (items)
+  "Remember ITEMS as the current transfer rows and redraw."
+  (setq orpheus-ui--downloads items)
+  (let ((tab (orpheus-ui--current-tab)))
+    (when (and tab (eq (orpheus-ui-tab-view tab) 'downloads))
+      (setf (orpheus-ui-tab-items tab) items
+            (orpheus-ui-tab-loading tab) nil
+            (orpheus-ui-tab-loaded tab) t)))
+  (orpheus-ui--redraw))
+
+(defun orpheus-ui--refresh-downloads ()
+  "Refresh the transfer rows and the header summary."
+  (let ((backend orpheus-backend-current)
+        (buffer (current-buffer)))
+    (when (and backend
+               (memq 'downloads (orpheus-backend-capabilities backend))
+               (orpheus-backend-connected-p backend))
+      (orpheus-backend-downloads
+       backend
+       (lambda (items)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (orpheus-ui--set-downloads items))))))))
+
 (defun orpheus-ui--load-tab (tab callback)
   "Read TAB's rows and then call CALLBACK, in this buffer.
 Return non-nil when a read was asked for.  A reply that arrives after a newer
@@ -540,13 +720,19 @@ an older one."
                                (= seq (orpheus-ui-tab-seq tab)))
                       (with-current-buffer buffer
                         (orpheus-ui--set-items tab items)
+                        (when (eq (orpheus-ui-tab-view tab) 'downloads)
+                          (setq orpheus-ui--downloads items))
                         (funcall callback))))))
         (setf (orpheus-ui-tab-seq tab) seq
               (orpheus-ui-tab-loading tab) t)
-        (if (eq (orpheus-ui-tab-view tab) 'queue)
-          (orpheus-backend-queue backend done)
+        (cond
+         ((eq (orpheus-ui-tab-view tab) 'queue)
+          (orpheus-backend-queue backend done))
+         ((eq (orpheus-ui-tab-view tab) 'downloads)
+          (orpheus-backend-downloads backend done))
+         (t
           (orpheus-backend-browse backend (orpheus-ui-tab-view tab)
-                                  (orpheus-ui-tab-arg tab) done))
+                                  (orpheus-ui-tab-arg tab) done)))
         t))))
 
 (defun orpheus-ui-refresh (&optional force)
@@ -568,10 +754,12 @@ ask is what makes an editor stutter."
 (defun orpheus-ui-tick ()
   "Bring the player buffer in step with the status.
 The rows are read only when something invalidated them; otherwise one redraw
-of the tab that is already there is the whole tick."
+of the tab that is already there is the whole tick.  Transfers are cheap to
+read and are refreshed every tick so their bytes and the header summary move."
   (let ((buffer (get-buffer orpheus-ui-buffer-name)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
+        (orpheus-ui--refresh-downloads)
         (if orpheus-ui--needs-refresh
             (orpheus-ui-refresh)
           (orpheus-ui--redraw))))))
@@ -743,6 +931,19 @@ of the tab that is already there is the whole tick."
          (orpheus-ui-invalidate)
          (orpheus-ui--render)
          (orpheus-ui-refresh)))
+      ((eq (orpheus-ui-tab-view tab) 'downloads)
+       (let ((uri (alist-get 'uri (orpheus-item-data item)))
+             (state (alist-get 'state (orpheus-item-data item))))
+         (if uri
+             (progn
+               (orpheus-backend-play-uri orpheus-backend-current uri)
+               (message "orpheus: %s"
+                        (pcase state
+                          ('downloading "will play when the download finishes")
+                          ('queued "queued to play")
+                          ('failed "retrying the download")
+                          (_ "playing from the cache"))))
+           (message "orpheus: this transfer has no track"))))
       ((eq (orpheus-ui-tab-view tab) 'queue)
        (orpheus-backend-command orpheus-backend-current 'playpos
                                 (alist-get 'pos (orpheus-item-data item))))
@@ -819,13 +1020,19 @@ is a copy of a row that is there already."
       (t (message "orpheus: nothing to queue here")))))
 
 (defun orpheus-ui-delete ()
-  "Remove the marked rows, or the row at point, from the queue."
+  "Remove queue rows, or cancel transfer rows, at point or marked."
   (interactive)
   (let* ((tab (orpheus-ui--current-tab))
          (items (or (orpheus-ui--marked-items)
                     (delq nil (list (orpheus-ui--item-at-point))))))
     (cond
       ((null items) (message "orpheus: no row here"))
+      ((eq (orpheus-ui-tab-view tab) 'downloads)
+       (dolist (item items)
+         (when-let* ((uri (alist-get 'uri (orpheus-item-data item))))
+                    (orpheus-backend-cancel-download orpheus-backend-current uri)))
+       (orpheus-ui-invalidate)
+       (orpheus-ui-refresh t))
       ((not (eq (orpheus-ui-tab-view tab) 'queue))
        (message "orpheus: only the queue can be edited here"))
       (t
@@ -901,6 +1108,15 @@ is a copy of a row that is there already."
   (orpheus-ui-mouse-select event)
   (orpheus-ui-confirm))
 
+(defun orpheus-ui-mouse-tab (event)
+  "Select the tab clicked on in EVENT."
+  (interactive "e")
+  (let* ((position (posn-point (event-start event)))
+         (index (and (integer-or-marker-p position)
+                     (get-text-property position 'orpheus-tab))))
+    (when (integerp index)
+      (orpheus-ui-select-tab (1+ index)))))
+
 ;;; Help
 
 (defconst orpheus-ui--help-lines
@@ -910,13 +1126,14 @@ is a copy of a row that is there already."
     ("C-v / M-v" "one screen down and up")
     ("M-< / M->" "first and last row")
     ("TAB / S-TAB" "next and previous tab")
-    ("1 … 7" "queue, directories, artists, album artists, albums, playlists, search")
+    ("1 … 7" "the tabs, in the order shown; SSH adds Downloads")
+    ("Downloads tab" "transfers: RET plays or retries, d cancels")
     ("^ / C-b" "back up one level")
     ("m / u" "mark and unmark the row")
     ("U" "unmark every row")
     ("t" "invert the marks")
     ("a / A" "queue the marked rows, or this row; queue everything here")
-    ("d / C-k" "delete the marked rows, or this one (from the queue, on the queue tab)")
+    ("d / C-k" "delete from the queue, or cancel a download")
     ("D" "clear the queue")
     ("/ / C-s" "search")
     ("C" "jump to the playing row")
@@ -1023,6 +1240,7 @@ is a copy of a row that is there already."
   (buffer-disable-undo)
   (setq-local orpheus-ui--tabs nil)
   (setq-local orpheus-ui--tab 0)
+  (setq-local orpheus-ui--downloads nil)
   (setq-local orpheus-ui--render-key nil))
 
 ;;; Opening

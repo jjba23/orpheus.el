@@ -9,6 +9,36 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- SSH transfers have a visible Downloads tab.  Every request is a row, whether
+  it is queued, downloading, finished or failed, with its byte count.  A
+  running transfer also shows its completion percentage, rolling speed and
+  ETA; RET plays a finished copy or retries a failure, and `d' cancels a
+  transfer.
+- SSH searches the remote library with `find' and the local backend searches
+  below `orpheus-local-directory', both asynchronously and in the existing
+  Search tab.  MPD search is unchanged.
+- A now-playing card above the list shows the track, artist, album and a
+  coloured progress bar.  `orpheus-ui-show-now-playing' turns it off.
+
+*** Changed
+
+- SSH downloads stream to a cache file as bytes arrive instead of collecting a
+  whole track in an Emacs buffer and writing it from a sentinel.  Up to
+  `orpheus-ssh-concurrency' transfers run at once, a play request goes ahead of
+  background prefetches, the next `orpheus-ssh-prefetch' queue entries are
+  fetched early, and the last `orpheus-ssh-cache-count' completed tracks stay
+  cached.  The header line counts active and queued transfers and shows their
+  aggregate throughput.
+
+*** Fixed
+
+- Starting a second SSH download while a track plays no longer freezes Emacs,
+  and the previous track is no longer deleted on every new transfer.
+
 * 0.4.1 (2026-11-08)
 
 *** Added

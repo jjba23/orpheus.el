@@ -147,7 +147,7 @@ cache directory; NAME only contributes its base name."
 Add one with `orpheus-register-backend' rather than by hand.")
 
 (defconst orpheus-backend-browse-kinds
-  '(queue directories artists albumartists albums playlists search)
+  '(queue downloads directories artists albumartists albums playlists search)
   "Browse kinds a backend may implement, in rmpc's tab order.")
 
 (defun orpheus-register-backend (name constructor &optional doc)
@@ -199,6 +199,17 @@ usually a list of strings, the path down the hierarchy.")
 (cl-defgeneric orpheus-backend-search (backend query callback)
   "Search BACKEND for QUERY, then call CALLBACK with the matches."
   (orpheus-backend-browse backend 'search (list query) callback))
+
+(cl-defgeneric orpheus-backend-downloads (backend callback)
+  "Ask BACKEND for its transfers and call CALLBACK with rows.
+A backend with a `downloads' capability implements this; the rows have a
+`download' kind and carry `uri', `state', `bytes' and `path' in their data."
+  (ignore backend)
+  (funcall callback nil))
+
+(cl-defgeneric orpheus-backend-cancel-download (backend uri)
+  "Cancel BACKEND's transfer for URI and forget its cached copy."
+  (ignore backend uri))
 
 (cl-defgeneric orpheus-backend-add (backend uris)
   "Append URIS to BACKEND's queue.")

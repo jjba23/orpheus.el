@@ -21,11 +21,13 @@ fourth.
 
 Everything is asynchronous: replies arrive in process filters and the status is
 read on a timer, so a slow server, a starting player or a hanging stream never
-blocks the editor.  The list is read when something changed, not on every tick,
-so a queue of thousands costs nothing while it plays.  The interface is text, so
-it is the same in a terminal, in a graphical frame and over SSH; in a frame
-that can draw, it adds cover art and an SVG visualizer, and in one that cannot,
-nothing breaks.
+blocks the editor.  SSH downloads stream straight to disk, run a small queue
+with background prefetch and keep recent tracks cached, so a slow link does not
+stop the interface.  The list is read when something changed, not on every
+tick, so a queue of thousands costs nothing while it plays.  The interface is
+text, so it is the same in a terminal, in a graphical frame and over SSH; in a
+frame that can draw, it adds cover art and an SVG visualizer, and in one that
+cannot, nothing breaks.
 
 #+begin_src text
  1 Queue    2 Directories    3 Artists    4 Album Artists    5 Albums    6 Playlists    7 Search
@@ -37,7 +39,8 @@ nothing breaks.
 
 The line above the rule is the header line: state, artist and title, elapsed
 and total, a progress bar, the volume and the four flags (repeat, random,
-single, consume).
+single, consume).  The SSH backend adds a Downloads tab after Queue, with a
+row for every active, queued, finished or failed transfer.
 
 * Why orpheus?
 :PROPERTIES:
@@ -85,7 +88,22 @@ prove it is real.
 
 - *Seven tabs, like rmpc.* :: Queue, Directories, Artists, Album Artists,
   Albums, Playlists and Search, numbered 1 to 7, each keeping its own place in
-  the hierarchy while you move between them.
+  the hierarchy while you move between them.  A backend with file transfers
+  adds a Downloads tab after Queue.
+- *A visible transfer queue.* :: SSH downloads run in the background, up to
+  `orpheus-ssh-concurrency' at once.  A play request jumps ahead of prefetches,
+  the next `orpheus-ssh-prefetch' queue entries arrive before you need them,
+  and the Downloads tab shows every transfer's state, completion, rolling
+  speed, ETA and bytes.  The header line counts active and queued transfers and
+  shows their aggregate throughput.  `d' cancels one and `RET' plays a finished
+  copy or retries a failure.
+- *Search close to home.* :: MPD searches its library, the local backend runs
+  `find' below `orpheus-local-directory', and SSH runs `find' below
+  `orpheus-ssh-directory'.  All three answer asynchronously and put the results
+  in the same Search tab.
+- *A now-playing card.* :: Above the list, a centred card shows the track, its
+  artist and album, and a coloured progress bar.  `orpheus-ui-show-now-playing'
+  turns it off when the header line is enough.
 - *A queue you can edit.* :: Play a row, queue a row or everything on the tab,
   mark rows the way Dired does, queue or delete just the marked ones, clear the
   queue, jump to what is playing, save the queue as a playlist.
@@ -300,11 +318,17 @@ Music on another machine is copied over ssh and played by mpv here:
 (orpheus)
 #+end_src
 
-There is no daemon on the far side: `ls -1p` fills the files tab, and RET
-downloads the chosen track.  Playback begins once the copy is complete, so a
-large track spends its transfer time downloading rather than playing.  The copy
-lives in a private temporary directory, which is deleted when the backend
-disconnects and when Emacs exits.  Your key
+There is no daemon on the far side: `ls -1p` fills the files tab, a remote
+`find` fills Search, and RET starts a transfer.  Bytes go straight to a private
+cache file as they arrive, so another download never freezes Emacs; the
+Downloads tab shows what is queued and what is moving, and `d' cancels a row.
+Playback begins once the copy is complete, so a large track spends its transfer
+time downloading rather than playing.  While the current track plays, the next
+`orpheus-ssh-prefetch' queue entries are fetched in the background, and the last
+`orpheus-ssh-cache-count' completed tracks stay on disk, so replaying one or
+moving to the next needs no second transfer.  A play request always goes ahead
+of a prefetch.  The cache lives in a private temporary directory, which is
+deleted when the backend disconnects and when Emacs exits.  Your key
 must already let you in, because ssh has no terminal in which to ask for a
 passphrase.  A host whose key is not in `~/.ssh/known_hosts' needs one
 `ssh music.example.org' from a terminal first, or
@@ -345,12 +369,12 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `C-v`, `M-v`           | one screen down, one screen up                           |
 | `M-<`, `M->`           | first row, last row                                      |
 | `TAB`, `S-TAB`         | next tab, previous tab                                   |
-| `1` … `7`              | queue, directories, artists, album artists, albums, playlists, search |
+| `1` … `7`              | the tabs, in the order shown; SSH adds Downloads after Queue |
 | `^`, `C-b`             | back up one level in the tab                             |
 | `m`, `u`               | mark the row, unmark it                                  |
 | `U`, `t`               | unmark everything, invert the marks                      |
 | `a`, `A`               | queue the marked rows (or this one), queue everything here |
-| `d`, `C-k`             | delete the marked rows (or this one) from the queue      |
+| `d`, `C-k`             | delete from the queue, or cancel a download               |
 | `D`                    | clear the queue                                          |
 | `/`, `C-s`             | search                                                   |
 | `C`                    | jump to the playing row                                  |
@@ -367,6 +391,11 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `?`                    | the key map in a buffer                                  |
 | `q`                    | bury the player                                          |
 | `mouse-1`, `mouse-2`   | select a row, play it                                    |
+
+On the Downloads tab, RET plays a finished copy, retries a failed transfer, or
+waits for one that is still moving; `d` cancels the selected transfer.  The
+header line counts active and queued transfers and shows their aggregate
+throughput while they run.
 
 Queueing is guarded: `A` (and `a` with many marks) asks before adding more than
 `orpheus-ui-add-confirm-threshold` rows, and a queue over
@@ -456,6 +485,9 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 | `orpheus-ssh-directory`   | `nil`   | remote start directory; nil is the login home  |
 | `orpheus-ssh-program`     | `"ssh"` | the ssh program                                |
 | `orpheus-ssh-extra-args`  | `nil`   | more ssh arguments, as a list                  |
+| `orpheus-ssh-concurrency` | `2`     | simultaneous ssh downloads                      |
+| `orpheus-ssh-prefetch`    | `2`     | upcoming queue tracks fetched in the background |
+| `orpheus-ssh-cache-count` | `8`     | completed tracks kept in the cache              |
 
 ** The interface and the visualizer
 :PROPERTIES:
@@ -468,6 +500,7 @@ Left nil, the platform decides (see [[#platforms][Platforms]]).
 | `orpheus-ui-plain-ascii`    | `nil`     | ASCII glyphs instead of Unicode          |
 | `orpheus-ui-icons`          | `t`       | a glyph for each row's kind              |
 | `orpheus-ui-show-art`       | `t`       | draw cover art in a graphical frame      |
+| `orpheus-ui-show-now-playing` | `t`     | draw the now-playing card above the list |
 | `orpheus-ui-art-size`       | `220`     | longest side of the art, in pixels       |
 | `orpheus-ui-progress-width` | `16`      | columns of the progress bar              |
 | `orpheus-progress-filled-char` | `━`    | the played part of the bar               |
@@ -505,11 +538,13 @@ these generics from =orpheus-backend.el=:
 | `orpheus-backend-play-uri`       | play a URI now                                 |
 | `orpheus-backend-command`        | play, pause, toggle, stop, next, previous, seek, volume, repeat, random, single, consume, update, rescan, clear, shuffle, delete, save, playpos, playid, load |
 | `orpheus-backend-album-art`      | a file path to the cover, or nil               |
+| `orpheus-backend-downloads`      | active and recent transfers as rows, when it has a `downloads` capability |
+| `orpheus-backend-cancel-download` | cancel the transfer for a URI                 |
 | `orpheus-backend-capabilities`   | which of the browse kinds it can do            |
 
-The browse kinds are `queue`, `directories`, `artists`, `albumartists`,
-`albums`, `playlists` and `search`; the interface draws a tab per kind a
-backend claims.  A row is an `orpheus-item` with a label, a detail column, a
+The browse kinds are `queue`, `downloads`, `directories`, `artists`,
+`albumartists`, `albums`, `playlists` and `search`; the interface draws a tab
+per kind a backend claims.  A row is an `orpheus-item` with a label, a detail column, a
 kind, and an alist whose `uri` makes it playable and whose `browse` is a
 `(KIND . ARG)` to descend into.
 
@@ -522,10 +557,12 @@ Three backends are shipped and are the reference implementations:
   Emacs, tags read from mpv's `metadata` property, cover art found next to the
   file or extracted with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).
 - =orpheus-ssh.el= — remote files over ssh and mpv here: `ls -1p' fills the
-  files tab, `cat' copies the chosen track into a temporary directory, and the
-  local backend plays it once the copy is complete.  There is no daemon on the
-  far side, and the temporary directory goes away on disconnect and when Emacs
-  exits.
+  files tab, `find' fills Search, and `cat' streams the chosen track into a
+  private cache file.  Transfers run in a queue of at most
+  `orpheus-ssh-concurrency', a play request goes ahead of the background
+  prefetches, and the Downloads tab shows each one.  The local backend plays a
+  copy once it is complete.  There is no daemon on the far side, and the cache
+  goes away on disconnect and when Emacs exits.
 
 ** Adding one
 :PROPERTIES:
@@ -651,7 +688,7 @@ maak            # the whole gate: clean, lint, unit suite
 maak lint       # byte-compile with warnings as errors, then checkdoc
 maak test       # the unit suite
 maak integration # the same checks against a real MPD and a real mpv
-maak release -- 0.4.1 # bump, close NEWS, gate, commit, tag, push, publish
+maak release -- minor # bump, close NEWS, gate, commit, tag, push, publish
 maak repl       # Emacs with the package loaded and the player open
 #+end_src
 

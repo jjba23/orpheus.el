@@ -533,7 +533,7 @@ BUMP is an explicit X.Y.Z, or patch, minor or major."
 (define (release . args)
   "Cut a release: bump VERSION, close NEWS, gate, commit, tag, push and publish.
 VERSION is an explicit X.Y.Z, or patch, minor or major.
-Usage: maak release -- 0.4.1"
+Usage: maak release -- minor"
   (when (dry-run?)
     (error "release: refusing to run under --dry-run"))
   (unless (= (length args) 1)
