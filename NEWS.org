@@ -9,6 +9,25 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- Portable playlists store library-relative paths when the queue names a file
+  below the backend's library root.  `local` strips
+  `orpheus-local-directory`, SSH strips `orpheus-ssh-directory`, and MPD strips
+  the local music root; playback expands the relative path for the active
+  backend.  A playlist saved from one backend can therefore play on another
+  when the libraries mirror.  An absolute path outside the configured roots is
+  still passed through unchanged.
+
+*** Changed
+
+- Playlist playback and append resolve relative URIs through the active
+  backend instead of sending them to every backend unchanged.
+- MPD's backend-level `save' and `load' actions remain for server-playlist
+  compatibility; the player continues to save and open portable files.
+
 * 0.7.0 (2026-11-08)
 
 *** Added

@@ -738,6 +738,16 @@ backend, so a parent row here would show the way up twice."
          ('search (orpheus-local--search (car arg) callback))
          (_ (funcall callback nil))))
 
+(cl-defmethod orpheus-backend-portable-uri ((_local orpheus-local) uri)
+  "Return URI relative to `orpheus-local-directory' when it is below it."
+  (or (orpheus-backend--relative-uri uri orpheus-local-directory) uri))
+
+(cl-defmethod orpheus-backend-playlist-uri ((_local orpheus-local) uri)
+  "Return URI as a path below `orpheus-local-directory'."
+  (cond ((null uri) nil)
+        ((orpheus-backend--absolute-uri-p uri) uri)
+        (t (expand-file-name uri orpheus-local-directory))))
+
 (cl-defmethod orpheus-backend-capabilities ((_local orpheus-local))
   "Return what mpv can browse.
 `paths' is not a tab: it says this backend takes file names and URLs, which

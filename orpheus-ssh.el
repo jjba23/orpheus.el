@@ -1209,6 +1209,38 @@ user's request and never becomes the current playing file."
   "Find cover art for remote FOLDER on SSH, then call CALLBACK with a path."
   (orpheus-ssh--folder-art ssh folder callback))
 
+(defun orpheus-ssh--playlist-root ()
+  "Return the remote directory playlist URIs are relative to."
+  (and orpheus-ssh-directory
+       (not (string-empty-p orpheus-ssh-directory))
+       orpheus-ssh-directory))
+
+(defun orpheus-ssh--join-playlist-uri (uri)
+  "Return URI below SSH's playlist root, unless it already names the root."
+  (let ((root (orpheus-ssh--playlist-root)))
+    (cond ((null root) uri)
+          ((file-name-absolute-p uri) uri)
+          ((string-prefix-p (file-name-as-directory root) uri) uri)
+          (t (orpheus-ssh--join root uri)))))
+
+(cl-defmethod orpheus-backend-portable-uri ((_ssh orpheus-ssh) uri)
+  "Return URI relative to SSH's or the local library root when possible."
+  (or (orpheus-backend--relative-uri uri (orpheus-ssh--playlist-root))
+      (orpheus-backend--relative-uri uri orpheus-local-directory)
+      uri))
+
+(cl-defmethod orpheus-backend-playlist-uri ((_ssh orpheus-ssh) uri)
+  "Return URI as a remote path for SSH, or URI when it is absolute."
+  (cond ((null uri) nil)
+        ((orpheus-backend--url-p uri) uri)
+        ((file-name-absolute-p uri)
+         (let ((relative (orpheus-backend--relative-uri
+                          uri orpheus-local-directory)))
+           (if relative
+               (orpheus-ssh--join-playlist-uri relative)
+             uri)))
+        (t (orpheus-ssh--join-playlist-uri uri))))
+
 (cl-defmethod orpheus-backend-capabilities ((_ssh orpheus-ssh))
   "Return what files on another machine can browse."
   '(queue downloads directories search))

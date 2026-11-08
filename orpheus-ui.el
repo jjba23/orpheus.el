@@ -404,7 +404,7 @@ its own URI.  A server playlist has no URI list until it is opened."
     (cond
      (file
       (condition-case err
-          (orpheus-playlist-uris file)
+          (orpheus-playlist-uris file orpheus-backend-current)
         (error
          (message "orpheus: cannot read %s: %s" file
                   (error-message-string err))

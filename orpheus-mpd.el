@@ -841,6 +841,25 @@ exactly, or `search', where a value may appear anywhere in the tag."
                     :data (list (cons 'id (alist-get "outputid" output)))))
                  (orpheus-mpd--blocks (plist-get reply :lines) "outputid")))))))
 
+(defun orpheus-mpd--playlist-root ()
+  "Return the local library root used to make MPD playlist paths portable."
+  (and (boundp 'orpheus-local-directory)
+       (symbol-value 'orpheus-local-directory)))
+
+(cl-defmethod orpheus-backend-portable-uri ((_mpd orpheus-mpd) uri)
+  "Return URI relative to the local library root when it is below it."
+  (or (orpheus-backend--relative-uri uri (orpheus-mpd--playlist-root)) uri))
+
+(cl-defmethod orpheus-backend-playlist-uri ((_mpd orpheus-mpd) uri)
+  "Return URI as MPD's library path.
+An absolute local path under the local music directory becomes relative;
+relative paths stay in MPD's own namespace."
+  (cond ((null uri) nil)
+        ((orpheus-backend--absolute-uri-p uri)
+         (or (orpheus-backend--relative-uri uri (orpheus-mpd--playlist-root))
+             uri))
+        (t uri)))
+
 (cl-defmethod orpheus-backend-capabilities ((_mpd orpheus-mpd))
   "Return what MPD can browse."
   '(queue directories artists albumartists albums playlists search))

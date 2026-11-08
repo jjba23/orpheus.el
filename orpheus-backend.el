@@ -217,6 +217,46 @@ A backend with a `downloads' capability implements this; the rows have a
 (cl-defgeneric orpheus-backend-play-uri (backend uri)
   "Play URI on BACKEND now, without discarding what is queued.")
 
+(cl-defgeneric orpheus-backend-portable-uri (backend uri)
+  "Return URI as a library-relative path for BACKEND's playlists.
+The default keeps URI as written; a backend with a library root overrides it."
+  (ignore backend)
+  uri)
+
+(cl-defgeneric orpheus-backend-playlist-uri (backend uri)
+  "Return the URI BACKEND plays for portable playlist URI.
+The default keeps URI as written; a backend with a library root overrides it."
+  (ignore backend)
+  uri)
+
+(defun orpheus-backend--url-p (uri)
+  "Return non-nil when URI names a URL rather than a file."
+  (and (stringp uri)
+       (string-match-p "\\`[a-z][a-z0-9+.-]*://" uri)))
+
+(defun orpheus-backend--absolute-uri-p (uri)
+  "Return non-nil when URI is an absolute path or a URL."
+  (and (stringp uri)
+       (or (orpheus-backend--url-p uri)
+           (file-name-absolute-p uri))))
+
+(defun orpheus-backend--relative-uri (uri root)
+  "Return URI below ROOT as a relative path, or nil.
+ROOT may be an absolute local directory or a relative remote one.  URLs are
+never rewritten."
+  (when (and (stringp uri) (stringp root)
+             (not (string-empty-p uri))
+             (not (string-empty-p root))
+             (not (orpheus-backend--url-p uri)))
+    (let ((directory (file-name-as-directory root)))
+      (if (file-name-absolute-p directory)
+          (let ((path (expand-file-name uri directory)))
+            (when (and (not (equal directory path))
+                       (string-prefix-p directory path))
+              (substring path (length directory))))
+        (when (string-prefix-p directory uri)
+          (substring uri (length directory)))))))
+
 (cl-defgeneric orpheus-backend-command (backend action &optional value)
   "Perform ACTION on BACKEND, with VALUE when the action takes one.
 The actions are `play', `pause', `resume', `toggle', `stop', `next',

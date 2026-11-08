@@ -205,6 +205,12 @@ FILE must stay inside `orpheus-playlist-directory'."
            :uri uri
            :title (or (file-name-nondirectory uri) uri))))))
 
+(defun orpheus-playlist--track-with-uri (track uri)
+  "Return a copy of TRACK carrying URI."
+  (let ((copy (copy-orpheus-track track)))
+    (setf (orpheus-track-uri copy) uri)
+    copy))
+
 (defun orpheus-playlist-save-queue (name callback)
   "Save the current queue as portable playlist NAME.
 Call CALLBACK with the file path, or nil when the queue is empty."
@@ -216,18 +222,33 @@ Call CALLBACK with the file path, or nil when the queue is empty."
      (lambda (items)
        (let* ((tracks (delq nil (mapcar #'orpheus-playlist--track-from-item
                                        items)))
+              (tracks (mapcar
+                       (lambda (track)
+                         (let ((uri (orpheus-track-uri track)))
+                           (if uri
+                               (orpheus-playlist--track-with-uri
+                                track
+                                (orpheus-backend-portable-uri backend uri))
+                             track)))
+                       tracks))
               (file (and tracks (orpheus-playlist-save name tracks))))
          (when callback (funcall callback file)))))))
 
-(defun orpheus-playlist-uris (file)
-  "Return the URIs in portable playlist FILE."
-  (delq nil (mapcar #'orpheus-track-uri (orpheus-playlist-read file))))
+(defun orpheus-playlist-uris (file &optional backend)
+  "Return the URIs in portable playlist FILE.
+With BACKEND, resolve each URI for that backend's library root."
+  (let ((uris (delq nil (mapcar #'orpheus-track-uri
+                               (orpheus-playlist-read file)))))
+    (if backend
+        (mapcar (lambda (uri) (orpheus-backend-playlist-uri backend uri))
+                uris)
+      uris)))
 
 (defun orpheus-playlist-play (file)
   "Replace the queue with portable playlist FILE and play its first track.
 Return the number of tracks loaded."
   (let* ((backend orpheus-backend-current)
-         (uris (orpheus-playlist-uris file)))
+         (uris (orpheus-playlist-uris file backend)))
     (unless backend
       (user-error "No backend is connected"))
     (when uris
@@ -240,8 +261,8 @@ Return the number of tracks loaded."
 (defun orpheus-playlist-add (file)
   "Append the tracks in portable playlist FILE to the current queue.
 Return the number of tracks added."
-  (let ((backend orpheus-backend-current)
-        (uris (orpheus-playlist-uris file)))
+  (let* ((backend orpheus-backend-current)
+         (uris (orpheus-playlist-uris file backend)))
     (unless backend
       (user-error "No backend is connected"))
     (when uris

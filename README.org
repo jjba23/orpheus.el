@@ -152,7 +152,10 @@ the current queue to `orpheus-playlist-directory` (by default
 the Playlists tab lists every playlist there: RET replaces the queue with it,
 `a` appends its tracks, `e` opens it in an editor buffer, and `d` deletes the
 file after asking.  MPD's own server playlists appear in the same tab, after
-the portable ones, and still open and play as they did before.
+the portable ones, and still open and play as they did before.  MPD's
+backend-level `save' and `load' command actions remain for server-playlist
+compatibility; the player never uses them, so the queue is always written as a
+portable file.
 
 Reading accepts M3U and PLS as well as M3U8, so a playlist exported by another
 player can be dropped into the directory.  Writing is always UTF-8 M3U8 with
@@ -164,12 +167,14 @@ writes the file back.  It edits M3U and M3U8 files.  PLS is read-only there,
 because writing an M3U8 body under a `.pls` name would make the file unreadable
 next time; export it as M3U8 first.
 
-A portable playlist carries URIs, not a translation between backends.  The
-active backend receives each URI exactly as written, so a list of local paths
-plays with `local`, a list of MPD library paths plays with `mpd`, and a list of
-remote paths plays with `ssh`.  Moving a playlist between machines or backends
-means moving the files or rewriting their URIs; the M3U8 file itself does not
-guess.
+A portable playlist stores library-relative paths whenever the queue names a
+file below a backend's root.  Saving strips `orpheus-local-directory` for the
+local backend, `orpheus-ssh-directory` for SSH, and the same local root for
+MPD; playing expands a relative path through the active backend.  A playlist
+saved from `local` therefore plays through `mpd` or `ssh` when those libraries
+mirror it, and one saved from either of those plays locally.  An absolute path
+outside the configured roots is still passed through unchanged, because no
+format can know where another machine keeps it.
 
 ** The visualizer
 :PROPERTIES:
@@ -601,6 +606,8 @@ these generics from =orpheus-backend.el=:
 | `orpheus-backend-browse`         | one tab's rows, for a kind and a path           |
 | `orpheus-backend-add`            | append URIs to the queue                       |
 | `orpheus-backend-play-uri`       | play a URI now                                 |
+| `orpheus-backend-portable-uri`   | store a URI as a library-relative path          |
+| `orpheus-backend-playlist-uri`   | resolve a playlist URI for the backend          |
 | `orpheus-backend-command`        | play, pause, toggle, stop, next, previous, seek, volume, repeat, random, single, consume, update, rescan, clear, shuffle, delete, save, playpos, playid, load |
 | `orpheus-backend-album-art`      | a file path to the cover, or nil               |
 | `orpheus-backend-downloads`      | active and recent transfers as rows, when it has a `downloads` capability |

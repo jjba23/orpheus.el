@@ -857,6 +857,79 @@ appends the rest."
          (should (= 2 (orpheus-playlist-add file))))
        (should (equal added '("/a.mp3" "/b.mp3")))))))
 
+(ert-deftest orpheus-test/playlist-save-queue-uses-relative-paths ()
+  "Saving a local queue below its root stores a library-relative URI."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let* ((root (make-temp-file "orpheus-music" t))
+            (orpheus-local-directory root)
+            (orpheus-backend-current (orpheus-local--make))
+            (uri (expand-file-name "Album/a.mp3" root))
+            (items (list (orpheus-item-create
+                          :kind 'track
+                          :data (list (cons 'uri uri)
+                                      (cons 'track
+                                            (orpheus-track-create
+                                             :uri uri :title "A")))))))
+       (unwind-protect
+           (progn
+             (cl-letf (((symbol-function 'orpheus-backend-queue)
+                        (lambda (_backend callback)
+                          (funcall callback items))))
+               (orpheus-playlist-save-queue "Portable" #'ignore))
+             (should
+              (equal (mapcar #'orpheus-track-uri
+                             (orpheus-playlist-read
+                              (orpheus-playlist-file "Portable")))
+                     '("Album/a.mp3"))))
+         (delete-directory root t))))))
+
+(ert-deftest orpheus-test/playlist-uris-resolve-across-backends ()
+  "Relative playlist paths resolve for local, MPD and SSH."
+  (let ((root (make-temp-file "orpheus-music" t))
+        (mpd (make-orpheus-mpd :name 'mpd))
+        (ssh (orpheus-ssh--create :name 'ssh :volume 100)))
+    (unwind-protect
+        (let ((orpheus-local-directory root)
+              (orpheus-ssh-directory "Music")
+              (local (orpheus-local--make)))
+          (should (equal (orpheus-backend-playlist-uri local "Album/a.mp3")
+                         (expand-file-name "Album/a.mp3" root)))
+          (should (equal (orpheus-backend-playlist-uri
+                          mpd (expand-file-name "Album/a.mp3" root))
+                         "Album/a.mp3"))
+          (should (equal (orpheus-backend-playlist-uri ssh "Album/a.mp3")
+                         "Music/Album/a.mp3"))
+          (should (equal (orpheus-backend-portable-uri
+                          ssh "Music/Album/a.mp3")
+                         "Album/a.mp3")))
+      (delete-directory root t))))
+
+(ert-deftest orpheus-test/playlist-play-resolves-relative-paths ()
+  "Playing a relative playlist asks the backend for the resolved URI."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let* ((root (make-temp-file "orpheus-music" t))
+            (file (orpheus-playlist-file "Portable"))
+            (orpheus-local-directory root)
+            (local (orpheus-local--make))
+            (orpheus-backend-current local)
+            (played nil))
+       (unwind-protect
+           (progn
+             (orpheus-playlist-write
+              file (list (orpheus-track-create :uri "Album/a.mp3")))
+             (cl-letf (((symbol-function 'orpheus-backend-command)
+                        (lambda (_backend action &optional value)
+                          (ignore action value)))
+                       ((symbol-function 'orpheus-backend-play-uri)
+                        (lambda (_backend uri) (setq played uri)))
+                       ((symbol-function 'orpheus-backend-add)
+                        (lambda (_backend uris) (ignore uris))))
+               (should (= 1 (orpheus-playlist-play file))))
+             (should (equal played (expand-file-name "Album/a.mp3" root))))
+         (delete-directory root t))))))
+
 (ert-deftest orpheus-test/playlist-editor-reorders-and-keeps-tags ()
   "The editor moves a track and saves it without losing its tags."
   (orpheus-test--with-playlist-directory
