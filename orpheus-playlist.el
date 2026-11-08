@@ -17,6 +17,8 @@
 (require 'subr-x)
 (require 'orpheus-backend)
 
+(declare-function orpheus-ui-selected-tracks "orpheus-ui" ())
+
 (defcustom orpheus-playlist-directory
   (expand-file-name "orpheus/playlists"
                     (or (getenv "XDG_DATA_HOME") "~/.local/share"))
@@ -288,6 +290,46 @@ Return the number of tracks added."
   "Return the playlist row index at point, or nil."
   (get-text-property (line-beginning-position) 'orpheus-playlist-index))
 
+(defvar orpheus-playlist-editor-item-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'orpheus-playlist-editor--select)
+    (define-key map [mouse-3] #'orpheus-playlist-editor-mouse-menu)
+    (define-key map [follow-link] 'mouse-face)
+    map)
+  "Keymap put on each playlist row, so the mouse can select and act on it.")
+
+(defvar orpheus-playlist-editor-menu
+  (let ((map (make-sparse-keymap "Playlist")))
+    (define-key-after map [insert]
+      '(menu-item "Insert from player" orpheus-playlist-editor-insert))
+    (define-key-after map [move-up]
+      '(menu-item "Move up" orpheus-playlist-editor-move-up))
+    (define-key-after map [move-down]
+      '(menu-item "Move down" orpheus-playlist-editor-move-down))
+    (define-key-after map [delete]
+      '(menu-item "Remove" orpheus-playlist-editor-delete))
+    (define-key-after map [save]
+      '(menu-item "Save" orpheus-playlist-editor-save))
+    map)
+  "Menu opened by a right click on a playlist editor row.")
+
+(defun orpheus-playlist-editor--select (event)
+  "Move point to the playlist row clicked in EVENT."
+  (interactive "e")
+  (let ((position (posn-point (event-start event))))
+    (when (integer-or-marker-p position)
+      (goto-char position)
+      (goto-char (line-beginning-position))
+      (let ((index (orpheus-playlist-editor--index)))
+        (when index
+          (setq orpheus-playlist-editor--index index))))))
+
+(defun orpheus-playlist-editor-mouse-menu (event)
+  "Open the row menu for the playlist row clicked in EVENT."
+  (interactive "e")
+  (orpheus-playlist-editor--select event)
+  (popup-menu orpheus-playlist-editor-menu (event-start event)))
+
 (defun orpheus-playlist-editor--render ()
   "Draw the tracks of the playlist editor."
   (let ((inhibit-read-only t)
@@ -301,7 +343,10 @@ Return the number of tracks added."
                          (1+ index)
                          (or (orpheus-track-label track) "")
                          (or (orpheus-track-uri track) ""))
-                 'orpheus-playlist-index index))
+                 'orpheus-playlist-index index
+                 'mouse-face 'highlight
+                 'keymap orpheus-playlist-editor-item-map
+                 'help-echo "mouse-1: select, mouse-3: menu"))
         (setq index (1+ index))))
     (goto-char (point-min))
     (when-let* ((match (text-property-search-forward
@@ -352,6 +397,24 @@ Return the number of tracks added."
       (set-buffer-modified-p t)
       (orpheus-playlist-editor--render))))
 
+(defun orpheus-playlist-editor-insert ()
+  "Insert the player's marked tracks, or its row at point, above this row."
+  (interactive)
+  (let ((new-tracks (orpheus-ui-selected-tracks)))
+    (if (null new-tracks)
+        (message "orpheus: no player tracks to insert")
+      (let* ((index (or (orpheus-playlist-editor--index)
+                        (length orpheus-playlist-editor--tracks)))
+             (tracks orpheus-playlist-editor--tracks)
+             (before (cl-subseq tracks 0 index))
+             (after (nthcdr index tracks)))
+        (setq orpheus-playlist-editor--tracks
+              (append before new-tracks after)
+              orpheus-playlist-editor--index index)
+        (set-buffer-modified-p t)
+        (orpheus-playlist-editor--render)
+        (message "orpheus: inserted %d track(s)" (length new-tracks))))))
+
 (defun orpheus-playlist-editor-save ()
   "Write the edited playlist back to its file."
   (interactive)
@@ -370,6 +433,7 @@ Return the number of tracks added."
     (define-key map (kbd "p") #'previous-line)
     (define-key map (kbd "M-<up>") #'orpheus-playlist-editor-move-up)
     (define-key map (kbd "M-<down>") #'orpheus-playlist-editor-move-down)
+    (define-key map (kbd "i") #'orpheus-playlist-editor-insert)
     (define-key map (kbd "d") #'orpheus-playlist-editor-delete)
     (define-key map (kbd "C-k") #'orpheus-playlist-editor-delete)
     (define-key map (kbd "C-x C-s") #'orpheus-playlist-editor-save)
@@ -378,11 +442,12 @@ Return the number of tracks added."
 
 (define-derived-mode orpheus-playlist-editor-mode special-mode "Orpheus-Playlist"
   "Major mode for reordering a portable playlist.
-M-<up> and M-<down> move the track at point, `d' removes it, and `C-x C-s'
-writes the file."
+M-<up> and M-<down> move the track at point, `i' inserts the player's current
+track or marked tracks, `d' removes it, and `C-x C-s' writes the file.  Mouse-1
+selects a row and mouse-3 opens the row menu."
   (setq-local truncate-lines t)
   (setq-local header-line-format
-              " M-<up>/M-<down> reorder  d remove  C-x C-s save  q bury"))
+              " M-<up>/M-<down> reorder  i insert  d remove  C-x C-s save  q bury"))
 
 (defun orpheus-playlist-edit (file)
   "Open portable playlist FILE in an editor buffer."
@@ -402,7 +467,7 @@ writes the file."
                   orpheus-playlist-editor--tracks tracks
                   orpheus-playlist-editor--index 0)
       (setq-local header-line-format
-                  (format " %s  M-<up>/M-<down> reorder  d remove  C-x C-s save  q bury"
+                  (format " %s  M-<up>/M-<down> reorder  i insert  d remove  C-x C-s save  q bury"
                           (file-name-nondirectory file)))
       (orpheus-playlist-editor--render))
     (pop-to-buffer buffer)

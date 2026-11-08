@@ -412,6 +412,52 @@ its own URI.  A server playlist has no URI list until it is opened."
      ((orpheus-item-playable item)
       (list (alist-get 'uri (orpheus-item-data item)))))))
 
+(defun orpheus-ui--portable-uri (uri)
+  "Return URI in the active backend's portable playlist form."
+  (if (and uri orpheus-backend-current)
+      (orpheus-backend-portable-uri orpheus-backend-current uri)
+    uri))
+
+(defun orpheus-ui--item-tracks (item)
+  "Return portable tracks ITEM contributes, or nil.
+A portable playlist row contributes all its tracks with their tags; a track
+keeps its own tags.  A row that is only a folder or an album contributes
+nothing."
+  (let ((file (alist-get 'file (orpheus-item-data item)))
+        (track (alist-get 'track (orpheus-item-data item))))
+    (cond
+     (file
+      (delq nil
+            (mapcar
+             (lambda (entry)
+               (let ((uri (orpheus-track-uri entry)))
+                 (when uri
+                   (orpheus-playlist--track-with-uri
+                    entry (orpheus-ui--portable-uri uri)))))
+             (orpheus-playlist-read file))))
+     (track
+      (let ((uri (orpheus-track-uri track)))
+        (when uri
+          (list (orpheus-playlist--track-with-uri
+                 track (orpheus-ui--portable-uri uri))))))
+     ((orpheus-item-playable item)
+      (let ((uri (alist-get 'uri (orpheus-item-data item))))
+        (when uri
+          (list (orpheus-track-create
+                 :uri (orpheus-ui--portable-uri uri)))))))))
+
+(defun orpheus-ui-selected-tracks ()
+  "Return the player's marked tracks, or the track at point.
+The result is in portable playlist form, ready for the playlist editor.  Error
+when the player buffer does not exist."
+  (let ((buffer (get-buffer orpheus-ui-buffer-name)))
+    (unless (buffer-live-p buffer)
+      (user-error "Open the player first"))
+    (with-current-buffer buffer
+      (let ((items (or (orpheus-ui--marked-items)
+                       (delq nil (list (orpheus-ui--item-at-point))))))
+        (delq nil (mapcan #'orpheus-ui--item-tracks items))))))
+
 (defun orpheus-ui--marked-p (item)
   "Return non-nil when ITEM is marked in the current tab."
   (let* ((tab (orpheus-ui--current-tab))
@@ -449,6 +495,7 @@ backend."
   (let ((map (make-sparse-keymap)))
     (define-key map [mouse-1] 'orpheus-ui-mouse-select)
     (define-key map [mouse-2] 'orpheus-ui-mouse-play)
+    (define-key map [mouse-3] 'orpheus-ui-mouse-menu)
     (define-key map [follow-link] 'mouse-face)
     map)
   "Keymap put on each row, so the mouse works on it.")
@@ -456,9 +503,32 @@ backend."
 (defvar orpheus-ui-tab-map
   (let ((map (make-sparse-keymap)))
     (define-key map [mouse-1] 'orpheus-ui-mouse-tab)
+    (define-key map [mouse-3] 'orpheus-ui-mouse-tab-menu)
     (define-key map [follow-link] 'mouse-face)
     map)
   "Keymap put on each tab, so the mouse can select it.")
+
+(defvar orpheus-ui-row-menu
+  (let ((map (make-sparse-keymap "Track")))
+    (define-key-after map [play] '(menu-item "Play" orpheus-ui-confirm))
+    (define-key-after map [queue] '(menu-item "Queue" orpheus-ui-add))
+    (define-key-after map [mark] '(menu-item "Mark" orpheus-ui-mark))
+    (define-key-after map [unmark] '(menu-item "Unmark" orpheus-ui-unmark))
+    (define-key-after map [edit]
+      '(menu-item "Edit playlist" orpheus-ui-edit-playlist))
+    (define-key-after map [delete] '(menu-item "Delete" orpheus-ui-delete))
+    (define-key-after map [refresh] '(menu-item "Refresh" orpheus-ui-refresh))
+    map)
+  "Menu opened by a right click on a player row.")
+
+(defvar orpheus-ui-tab-menu
+  (let ((map (make-sparse-keymap "Tabs")))
+    (define-key-after map [previous]
+      '(menu-item "Previous tab" orpheus-ui-previous-tab))
+    (define-key-after map [next] '(menu-item "Next tab" orpheus-ui-next-tab))
+    (define-key-after map [refresh] '(menu-item "Refresh" orpheus-ui-refresh))
+    map)
+  "Menu opened by a right click on a tab.")
 
 (defun orpheus-ui--header-line ()
   "Return the header line of the player."
@@ -1207,6 +1277,18 @@ is a copy of a row that is there already."
     (when (integerp index)
       (orpheus-ui-select-tab (1+ index)))))
 
+(defun orpheus-ui-mouse-menu (event)
+  "Open the row menu for the row clicked in EVENT."
+  (interactive "e")
+  (orpheus-ui-mouse-select event)
+  (popup-menu orpheus-ui-row-menu (event-start event)))
+
+(defun orpheus-ui-mouse-tab-menu (event)
+  "Open the tab menu for the tab clicked in EVENT."
+  (interactive "e")
+  (orpheus-ui-mouse-tab event)
+  (popup-menu orpheus-ui-tab-menu (event-start event)))
+
 ;;; Help
 
 (defconst orpheus-ui--help-lines
@@ -1239,6 +1321,7 @@ is a copy of a row that is there already."
     ("C-x C-s" "save the queue as a portable M3U8 playlist")
     ("g" "refresh the status and this tab")
     ("V" "spectrum visualizer")
+    ("mouse-3" "open the row, tab or playlist context menu")
     ("q" "bury the player"))
   "The keys `orpheus-ui-mode' binds, as rows of key and meaning.")
 

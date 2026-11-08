@@ -983,6 +983,71 @@ appends the rest."
                               (orpheus-playlist-read file))
                       '("/b.mp3")))))))
 
+(ert-deftest orpheus-test/playlist-editor-inserts-from-player ()
+  "The editor inserts the player's current track at point."
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let* ((file (orpheus-playlist-file "Insert"))
+            (player-name " *orpheus-test-player*")
+            (player (get-buffer-create player-name))
+            (orpheus-ui-buffer-name player-name)
+            (editor nil))
+       (unwind-protect
+           (progn
+             (orpheus-playlist-write
+              file (list (orpheus-track-create :uri "/a.mp3")))
+             (with-current-buffer player
+               (orpheus-ui-mode)
+               (let* ((track (orpheus-track-create
+                              :uri "/new.mp3" :title "New"))
+                      (item (orpheus-item-create
+                             :kind 'track :label "New"
+                             :data (list (cons 'uri "/new.mp3")
+                                         (cons 'track track))))
+                      (tab (orpheus-ui-tab-create
+                            :kind 'queue :title "Queue" :view 'queue
+                            :items (list item))))
+                 (setq orpheus-ui--tabs (vector tab) orpheus-ui--tab 0)
+                 (orpheus-ui--render)
+                 (goto-char (point-min))
+                 (orpheus-ui--place-point)))
+             (setq editor (save-window-excursion (orpheus-playlist-edit file)))
+             (with-current-buffer editor
+               (goto-char (point-min))
+               (orpheus-playlist-editor-insert)
+               (orpheus-playlist-editor-save))
+             (let ((read (orpheus-playlist-read file)))
+               (should (equal (mapcar #'orpheus-track-uri read)
+                              '("/new.mp3" "/a.mp3")))
+               (should (equal (orpheus-track-title (car read)) "New"))))
+         (when (buffer-live-p editor) (kill-buffer editor))
+         (kill-buffer player))))))
+
+(ert-deftest orpheus-test/mouse-menus-and-editor-map ()
+  "Player rows, tabs and playlist rows expose their mouse actions."
+  (should (eq (lookup-key orpheus-ui-item-map [mouse-3])
+              'orpheus-ui-mouse-menu))
+  (should (eq (lookup-key orpheus-ui-tab-map [mouse-3])
+              'orpheus-ui-mouse-tab-menu))
+  (should (eq (lookup-key orpheus-playlist-editor-item-map [mouse-1])
+              'orpheus-playlist-editor--select))
+  (should (eq (lookup-key orpheus-playlist-editor-item-map [mouse-3])
+              'orpheus-playlist-editor-mouse-menu))
+  (orpheus-test--with-playlist-directory
+   (lambda ()
+     (let ((file (orpheus-playlist-file "Mouse")))
+       (orpheus-playlist-write
+        file (list (orpheus-track-create :uri "/a.mp3")))
+       (let ((buffer (save-window-excursion (orpheus-playlist-edit file))))
+         (unwind-protect
+             (with-current-buffer buffer
+               (goto-char (point-min))
+               (should (eq (get-text-property (point) 'keymap)
+                           orpheus-playlist-editor-item-map))
+               (should (eq (get-text-property (point) 'mouse-face)
+                           'highlight)))
+           (kill-buffer buffer)))))))
+
 ;;; The interface, without a frame
 
 (ert-deftest orpheus-test/ui-edits-portable-playlist ()

@@ -163,9 +163,13 @@ player can be dropped into the directory.  Writing is always UTF-8 M3U8 with
 
 The editor keeps the parsed tracks, not the M3U8 text, so moving a row with
 `M-<up>` or `M-<down>` and removing one with `d` preserve its tags; `C-x C-s`
-writes the file back.  It edits M3U and M3U8 files.  PLS is read-only there,
-because writing an M3U8 body under a `.pls` name would make the file unreadable
-next time; export it as M3U8 first.
+writes the file back.  `i` inserts the player's marked tracks, or its current
+row, above the editor row at point, so a playlist can be assembled from the
+queue or any browsing tab without retyping a path.  The editor also supports
+mouse-1 selection and a mouse-3 menu for insert, reorder, remove and save.  It
+edits M3U and M3U8 files.  PLS is read-only there, because writing an M3U8 body
+under a `.pls` name would make the file unreadable next time; export it as M3U8
+first.
 
 A portable playlist stores library-relative paths whenever the queue names a
 file below a backend's root.  Saving strips `orpheus-local-directory` for the
@@ -410,7 +414,9 @@ keeps that queue, so it starts empty in every session.
 
 The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 `C-n' and `C-p' move, `C-v' and `M-v' page, `C-s' searches, `C-x C-s' saves,
-`q' buries the player.  `?` lists the same table in a buffer.
+`q' buries the player.  `?` lists the same table in a buffer.  The mouse
+follows the same actions: mouse-1 selects a row or tab, mouse-2 plays a row,
+and mouse-3 opens the context menu for a row, a tab or a playlist editor row.
 
 | Key                    | Meaning                                                  |
 |------------------------+----------------------------------------------------------|
@@ -426,6 +432,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `U`, `t`               | unmark everything, invert the marks                      |
 | `a`, `A`               | queue the marked rows (or this one), queue everything here |
 | `e`                    | edit the portable playlist at point (Playlists tab)       |
+| `i`                    | insert the player's tracks in the playlist editor        |
 | `d`, `C-k`             | delete from the queue, or cancel a download               |
 | `D`                    | clear the queue                                          |
 | `/`, `C-s`             | search                                                   |
@@ -443,6 +450,7 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 | `?`                    | the key map in a buffer                                  |
 | `q`                    | bury the player                                          |
 | `mouse-1`, `mouse-2`   | select a row, play it                                    |
+| `mouse-3`              | open the row, tab or playlist editor menu                |
 
 On the Downloads tab, RET plays a finished copy, retries a failed transfer, or
 waits for one that is still moving; `d` cancels the selected transfer.  The

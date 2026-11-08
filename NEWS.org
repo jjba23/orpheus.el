@@ -9,6 +9,16 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- The playlist editor inserts the player's marked tracks, or its current row,
+  with `i`.  A track keeps its tags, and a portable playlist row contributes
+  every track in its file.
+- Player rows, tabs and playlist editor rows have mouse-3 context menus for
+  their common actions; playlist editor rows also select with mouse-1.
+
 * 0.8.0 (2026-11-08)
 
 *** Added
