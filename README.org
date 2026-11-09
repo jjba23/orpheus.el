@@ -705,7 +705,8 @@ metadata work where the extractor provides them.
 - *In a graphical frame* the cover for the current track, or for the album
   folder being browsed when the track has none, is drawn above the list in a
   box of ~orpheus-ui-art-size~ that keeps its height whether a cover is
-  loading, missing or drawn, so the list never moves under it; an image Emacs
+  loading, missing or drawn, so the list never moves under it, and a window
+  left with too few rows under the cover grows to fit them; an image Emacs
   cannot decode is skipped.  The visualizer is an SVG bar graph with rounded
   bars and a colour ramp, or the block-character graph when Emacs was built
   without SVG.

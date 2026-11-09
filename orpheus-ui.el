@@ -740,10 +740,12 @@ cover arrives does not scroll the list under the reader."
     (when window
       ;; A buffer position is not a place: the art box and the path line
       ;; change the height above the list, but the line stays the same.
+      ;; NOFORCE must stay nil, or redisplay may scroll to point and take the
+      ;; cover away with it.
       (save-excursion
         (goto-char (point-min))
         (forward-line (or line 0))
-        (set-window-start window (point) t)))
+        (set-window-start window (point))))
     (setq orpheus-ui--render-key (orpheus-ui--key))))
 
 (defun orpheus-ui--key ()
@@ -1432,6 +1434,20 @@ is a copy of a row that is there already."
 
 ;;; Opening
 
+(defun orpheus-ui--fit-window (window)
+  "Grow WINDOW when the cover leaves too few rows of list under it.
+In a graphical frame the cover block is tall, and a split window can be left
+showing almost none of the queue; the frame is the limit."
+  (let* ((match (save-excursion
+                  (goto-char (point-min))
+                  (text-property-search-forward 'orpheus-item 0 #'eq)))
+         (header (if match
+                     (count-lines (point-min) (prop-match-beginning match))
+                   0))
+         (missing (- (+ header 8) (window-body-height window))))
+    (when (> missing 0)
+      (ignore-errors (enlarge-window missing)))))
+
 (defun orpheus-ui-open ()
   "Show the player, building it the first time."
   (interactive)
@@ -1444,6 +1460,10 @@ is a copy of a row that is there already."
         (orpheus-ui--setup-tabs))
       (orpheus-ui--render))
     (pop-to-buffer buffer)
+    (let ((window (get-buffer-window buffer)))
+      (when window
+        (with-current-buffer buffer
+          (orpheus-ui--fit-window window))))
     (orpheus-ui--update-context-art)
     (orpheus-ui-refresh)))
 

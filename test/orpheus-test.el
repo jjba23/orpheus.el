@@ -1692,6 +1692,58 @@ must not scroll the list out from under the reader."
       (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
       (kill-buffer orpheus-ui-buffer-name))))
 
+(ert-deftest orpheus-test/ui-render-forces-the-top-line ()
+  "Redisplay may not scroll to point behind a redraw.
+`set-window-start' is called without NOFORCE, so a row far down the list
+that holds point cannot drag the cover off the top of the window."
+  (let ((orpheus-ui-buffer-name "*orpheus-test-scroll-top*")
+        (orpheus-ui-show-art nil)
+        (orpheus-ui-show-now-playing nil)
+        (calls nil))
+    (unwind-protect
+        (let ((buffer (get-buffer-create orpheus-ui-buffer-name)))
+          (with-current-buffer buffer
+            (orpheus-ui-mode)
+            (setq orpheus-ui--tabs
+                  (vector (orpheus-ui-tab-create
+                           :kind 'queue :view 'queue :title "Queue"
+                           :items (list (orpheus-item-create
+                                         :label "row" :kind 'track
+                                         :data '((uri . "1.mp3"))))))
+                  orpheus-ui--tab 0)
+            (orpheus-ui--render))
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (cl-letf (((symbol-function 'set-window-start)
+                       (lambda (_window position &optional noforce)
+                         (push (list position noforce) calls))))
+              (orpheus-ui--render))
+            (should (equal '(1 nil) (car calls)))))
+      (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+      (kill-buffer orpheus-ui-buffer-name))))
+
+(ert-deftest orpheus-test/ui-open-grows-a-window-too-short-for-the-list ()
+  "A window the cover leaves no room in is grown by the rows it lacks.
+The cover block is tall in a graphical frame, and a split window can be left
+showing almost none of the list."
+  (with-temp-buffer
+    (insert (make-string 12 ?\n))
+    (insert (propertize "row" 'orpheus-item 0) "\n")
+    (let ((grown nil))
+      (cl-letf (((symbol-function 'window-body-height)
+                 (lambda (&optional _window _pixels) 14))
+                ((symbol-function 'enlarge-window)
+                 (lambda (n &optional _horizontal) (setq grown n))))
+        (orpheus-ui--fit-window (selected-window)))
+      (should (= grown 6)))
+    (let ((grown nil))
+      (cl-letf (((symbol-function 'window-body-height)
+                 (lambda (&optional _window _pixels) 30))
+                ((symbol-function 'enlarge-window)
+                 (lambda (n &optional _horizontal) (setq grown n))))
+        (orpheus-ui--fit-window (selected-window)))
+      (should-not grown))))
+
 (ert-deftest orpheus-test/ui-refresh-clears-the-invalidation ()
   "A read that happens clears the flag, so the next tick is quiet again."
   (let ((orpheus-ui-buffer-name "*orpheus-test-dirty*")

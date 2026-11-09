@@ -9,6 +9,16 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Fixed
+
+- The player keeps the cover and the now-playing card at the top of its
+  window.  A redraw forces the window start instead of letting redisplay
+  follow point, which used to scroll the cover away on every refresh, and a
+  window left with almost no list under the cover is grown by the rows it
+  lacks.
+
 * 0.9.3 (2026-11-09)
 
 *** Added
