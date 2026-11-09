@@ -2,7 +2,7 @@
 
 ;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-;;; Version: 0.9.3
+;;; Version: 0.9.4
 ;;; Author: Josep Bigorra <jjbigorra@gmail.com>
 ;;; Maintainer: Josep Bigorra <jjbigorra@gmail.com>
 ;;; URL: https://github.com/jjba23/orpheus.el
@@ -64,7 +64,7 @@
 
 ;;; Settings
 
-(defconst orpheus-version "0.9.3"
+(defconst orpheus-version "0.9.4"
   "Version of orpheus.")
 
 (defcustom orpheus-backend 'mpd
