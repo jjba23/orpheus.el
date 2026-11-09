@@ -302,6 +302,19 @@ audio_output {
                      (orpheus-local--poll local)
                      (= 33 (orpheus-status-volume
                             (orpheus-local-instance-status local)))))))
+          ;; The filter chain the equalizer builds must be one mpv accepts.
+          (should (orpheus-backend-equalizer
+                   local
+                   "equalizer=frequency=1000:width_type=o:width=1:gain=3"))
+          (let ((answer 'pending))
+            (orpheus-local--send
+             local '("get_property" "af")
+             (lambda (error data) (setq answer (cons error data))))
+            (should (orpheus-integration--wait
+                     (lambda () (not (eq answer 'pending)))))
+            (should (null (car answer)))
+            (should (equal (orpheus-local-instance-equalizer local)
+                           "equalizer=frequency=1000:width_type=o:width=1:gain=3")))
       (orpheus-backend-disconnect local))))
 
 ;;; orpheus-integration-test.el ends here

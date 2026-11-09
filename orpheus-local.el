@@ -89,6 +89,7 @@ and SSH backends share this list."
   (repeat nil)
   (random nil)
   (volume 100)
+  equalizer
   (request-id 0)
   (requests (make-hash-table :test #'eql))
   (load-token 0)
@@ -409,6 +410,12 @@ CALLBACK is called with the error string, or nil, and the data."
         (setf (orpheus-local-instance-ipc local) ipc
               (orpheus-local-instance-connecting local) nil
               (orpheus-local-instance-attempts local) 0)
+        ;; An equalizer chosen before mpv started is applied before the first
+        ;; loadfile, so playback never begins flat and then jump.
+        (when (orpheus-local-instance-equalizer local)
+          (orpheus-local--send
+           local (list "set_property" "af"
+                       (orpheus-local-instance-equalizer local))))
         (let ((waiting (orpheus-local-instance-waiting local)))
           (setf (orpheus-local-instance-waiting local) nil)
           (dolist (callback waiting)
@@ -719,6 +726,14 @@ backend, so a parent row here would show the way up twice."
            ((or 'update 'rescan 'save 'playid 'load)
             (message "orpheus: mpv has no library to %s" action))
            (_ (message "orpheus: mpv cannot %s" action)))))
+
+(cl-defmethod orpheus-backend-equalizer ((local orpheus-local) filters)
+  "Set LOCAL's mpv audio filter chain to FILTERS.
+The filter is kept even while mpv is stopped, and applied when it starts."
+  (setf (orpheus-local-instance-equalizer local) filters)
+  (when (orpheus-local--ready-p local)
+    (orpheus-local--send local (list "set_property" "af" filters)))
+  t)
 
 (defun orpheus-local--shuffle (list)
   "Return LIST in random order."

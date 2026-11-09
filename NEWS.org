@@ -9,6 +9,19 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- ~H~ opens a help buffer that explains the tabs, the queue, the equalizer and
+  the backends before it lists the keys, and links to the tutorial.
+  ~M-x orpheus-tutorial~ walks through the player one step at a time, with a
+  button at each step that runs it.
+- ~E~ opens an equalizer for the local and SSH backends: flat, bass, vocal,
+  treble and loudness presets, a ten-band gain line, and presets saved under
+  the user's own name in a JSON file.  The MPD backend says it cannot filter
+  its daemon's output instead of pretending.
+
 * 0.10.0 (2026-11-09)
 
 *** Added

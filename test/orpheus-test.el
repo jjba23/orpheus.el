@@ -697,6 +697,174 @@ and the password with it."
                            (orpheus-local-instance-track local))))))
 
 
+;;; The equalizer
+
+(ert-deftest orpheus-test/equalizer-filter ()
+  "The filter string names each non-zero band and nothing else."
+  (let ((orpheus-equalizer-bands '(100 1000)))
+    (should (equal (orpheus-equalizer--filter '(0 3))
+                   "equalizer=frequency=1000:width_type=o:width=1:gain=3"))
+    (should (equal (orpheus-equalizer--filter '(0 0)) ""))))
+
+(ert-deftest orpheus-test/equalizer-clamps-gains ()
+  "Gains are rounded into the range, and a wrong shape is refused."
+  (let ((orpheus-equalizer-bands '(100 1000))
+        (orpheus-equalizer-max-gain 6))
+    (should (equal (orpheus-equalizer--clean '(99 -99)) '(6 -6)))
+    (should (equal (orpheus-equalizer--clean '(1.6 -1.6)) '(2 -2)))
+    (should-error (orpheus-equalizer--clean '(1)) :type 'user-error)
+    (should-error (orpheus-equalizer--clean '(1 "x")) :type 'user-error)))
+
+(ert-deftest orpheus-test/equalizer-presets-roundtrip ()
+  "User presets survive JSON, and a user preset wins over a built-in."
+  (let* ((file (make-temp-file "orpheus-eq" nil ".json"))
+         (orpheus-equalizer-preset-file file))
+    (unwind-protect
+        (progn
+          (delete-file file)
+          (orpheus-equalizer--write-presets
+           '(("mine" . (1 2 3 4 5 6 7 8 9 10))
+             ("flat" . (1 1 1 1 1 1 1 1 1 1))))
+          (should (equal (cdr (assoc "mine"
+                                     (orpheus-equalizer--read-presets)))
+                         '(1 2 3 4 5 6 7 8 9 10)))
+          (should (equal (cdr (assoc "flat" (orpheus-equalizer-presets)))
+                         '(1 1 1 1 1 1 1 1 1 1))))
+      (ignore-errors (delete-file file)))))
+
+(ert-deftest orpheus-test/equalizer-rejects-broken-preset-file ()
+  "A preset file without one gain per band is an error, not silence."
+  (let* ((file (make-temp-file "orpheus-eq" nil ".json"))
+         (orpheus-equalizer-preset-file file))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "{\"broken\":[1,2]}"))
+          (should-error (orpheus-equalizer--read-presets) :type 'user-error))
+      (ignore-errors (delete-file file)))))
+
+(ert-deftest orpheus-test/equalizer-sends-the-filter ()
+  "Applying the equalizer sends one af property to mpv."
+  (let ((orpheus-backend-current (make-orpheus-local :name 'local))
+        (orpheus-equalizer-enabled t)
+        (orpheus-equalizer--gains '(0 3))
+        (orpheus-equalizer-bands '(100 1000))
+        (sent nil))
+    (cl-letf (((symbol-function 'orpheus-local--ready-p)
+               (lambda (_local) t))
+              ((symbol-function 'orpheus-local--send)
+               (lambda (_local command &optional _callback)
+                 (setq sent command))))
+      (should (orpheus-equalizer--apply))
+      (should (equal sent
+                     '("set_property" "af"
+                       "equalizer=frequency=1000:width_type=o:width=1:gain=3"))))))
+
+(ert-deftest orpheus-test/equalizer-refuses-a-backend-without-mpv ()
+  "MPD's audio leaves through the daemon, so Emacs says it cannot filter it."
+  (let ((orpheus-backend-current (make-orpheus-mpd :name 'mpd))
+        (orpheus-equalizer-enabled t)
+        (orpheus-equalizer--gains '(0 0 0 0 0 0 0 0 0 0))
+        (messages nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest args)
+                 (push (apply #'format format args) messages))))
+      (should-not (orpheus-equalizer--apply))
+      (should (string-match-p "cannot apply an equalizer" (car messages))))))
+
+(ert-deftest orpheus-test/equalizer-load-preset-applies ()
+  "Loading a preset sets the gains, its name and the enabled flag."
+  (let* ((file (make-temp-file "orpheus-eq" nil ".json"))
+         (orpheus-equalizer-preset-file file)
+         (orpheus-equalizer-enabled nil)
+         (orpheus-equalizer--gains nil)
+         (applied nil))
+    (unwind-protect
+        (progn
+          (delete-file file)
+          (orpheus-equalizer--write-presets
+           '(("mine" . (1 2 3 4 5 6 7 8 9 10))))
+          (cl-letf (((symbol-function 'orpheus-equalizer--apply)
+                     (lambda () (setq applied t))))
+            (orpheus-equalizer-load-preset "mine"))
+          (should applied)
+          (should (equal orpheus-equalizer--gains
+                         '(1 2 3 4 5 6 7 8 9 10)))
+          (should (equal orpheus-equalizer-preset "mine"))
+          (should orpheus-equalizer-enabled))
+      (ignore-errors (delete-file file)))))
+
+(ert-deftest orpheus-test/equalizer-save-preset ()
+  "Saving writes the current gains under the given name."
+  (let* ((file (make-temp-file "orpheus-eq" nil ".json"))
+         (orpheus-equalizer-preset-file file)
+         (orpheus-equalizer--gains '(2 2 2 2 2 2 2 2 2 2)))
+    (unwind-protect
+        (progn
+          (delete-file file)
+          (orpheus-equalizer-save-preset "mine")
+          (should (equal (cdr (assoc "mine"
+                                     (orpheus-equalizer--read-presets)))
+                         '(2 2 2 2 2 2 2 2 2 2)))
+          (should-error (orpheus-equalizer-save-preset "  ")
+                        :type 'user-error))
+      (ignore-errors (delete-file file)))))
+
+(ert-deftest orpheus-test/equalizer-delete-preset ()
+  "A saved preset can be deleted; a built-in one cannot."
+  (let* ((file (make-temp-file "orpheus-eq" nil ".json"))
+         (orpheus-equalizer-preset-file file))
+    (unwind-protect
+        (progn
+          (delete-file file)
+          (orpheus-equalizer--write-presets
+           '(("mine" . (1 2 3 4 5 6 7 8 9 10))))
+          (orpheus-equalizer-delete-preset "mine")
+          (should-not (assoc "mine" (orpheus-equalizer--read-presets)))
+          (should-error (orpheus-equalizer-delete-preset "flat")
+                        :type 'user-error))
+      (ignore-errors (delete-file file)))))
+
+(ert-deftest orpheus-test/local-equalizer-stores-before-mpv ()
+  "An equalizer set before mpv starts is kept for the connection."
+  (let ((local (make-orpheus-local :name 'local))
+        (sent nil))
+    (cl-letf (((symbol-function 'orpheus-local--ready-p)
+               (lambda (_local) nil))
+              ((symbol-function 'orpheus-local--send)
+               (lambda (&rest _arguments) (setq sent t))))
+      (should (orpheus-backend-equalizer local "anull"))
+      (should (equal (orpheus-local-instance-equalizer local) "anull"))
+      (should-not sent))))
+
+;;; Help and the tutorial
+
+(ert-deftest orpheus-test/help-is-a-guided-buffer ()
+  "The help buffer explains the concepts and links to the tutorial."
+  (unwind-protect
+      (progn
+        (orpheus-help)
+        (with-current-buffer "*orpheus help*"
+          (let ((text (buffer-string)))
+            (should (string-match-p "Getting started" text))
+            (should (string-match-p "Equalizer" text))
+            (should (string-match-p "If something is wrong" text))
+            (should (next-button (point-min))))))
+    (when (get-buffer "*orpheus help*")
+      (kill-buffer "*orpheus help*"))))
+
+(ert-deftest orpheus-test/tutorial-is-a-checklist ()
+  "The tutorial walks through the player and can run its own steps."
+  (unwind-protect
+      (progn
+        (orpheus-tutorial)
+        (with-current-buffer "*orpheus tutorial*"
+          (let ((text (buffer-string)))
+            (should (string-match-p "Open the player" text))
+            (should (string-match-p "Shape the sound" text))
+            (should (next-button (point-min))))))
+    (when (get-buffer "*orpheus tutorial*")
+      (kill-buffer "*orpheus tutorial*"))))
+
 ;;; The visualizer
 
 (ert-deftest orpheus-test/vis-parse-frame ()
@@ -2764,7 +2932,8 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
 (ert-deftest orpheus-test/ui-menu-keys ()
   "The menu is on ?, the whole table on H, and N makes a playlist."
   (should (eq (lookup-key orpheus-ui-mode-map (kbd "?")) 'orpheus-menu))
-  (should (eq (lookup-key orpheus-ui-mode-map (kbd "H")) 'orpheus-ui-help))
+  (should (eq (lookup-key orpheus-ui-mode-map (kbd "H")) 'orpheus-help))
+  (should (eq (lookup-key orpheus-ui-mode-map (kbd "E")) 'orpheus-equalizer-menu))
   (should (eq (lookup-key orpheus-ui-mode-map (kbd "N"))
               'orpheus-ui-new-playlist)))
 

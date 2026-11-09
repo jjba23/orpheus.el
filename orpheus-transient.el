@@ -17,6 +17,9 @@
 
 (require 'transient)
 
+(declare-function orpheus-equalizer-menu "orpheus-equalizer" ())
+(declare-function orpheus-tutorial "orpheus-ui" ())
+
 ;;; ###autoload
 (transient-define-prefix orpheus-menu ()
   "The orpheus menu: transport, modes, queue, playlists and views."
@@ -52,7 +55,9 @@
     ("TAB" "Next tab" orpheus-ui-next-tab)
     ("g" "Refresh" orpheus-refresh)
     ("V" "Visualizer" orpheus-visualizer)
-    ("H" "Every key, as a table" orpheus-ui-help)
+    ("E" "Equalizer presets" orpheus-equalizer-menu)
+    ("H" "Help, tutorial and every key" orpheus-help)
+    ("t" "Tutorial" orpheus-tutorial)
     ("q" "Bury the player" quit-window)]])
 
 (provide 'orpheus-transient)

@@ -263,6 +263,14 @@ The actions are `play', `pause', `resume', `toggle', `stop', `next',
 `previous', `seek', `volume', `repeat', `random', `single', `consume',
 `update', `clear', `shuffle', `delete', `save' and `playid'.")
 
+(cl-defgeneric orpheus-backend-equalizer (backend filters)
+  "Set BACKEND's audio filter chain to FILTERS.
+FILTERS is an mpv-style filter string, or an empty string for no filter.
+Return non-nil when the backend accepted it.  A backend whose audio leaves
+through another process, such as MPD, returns nil."
+  (ignore backend filters)
+  nil)
+
 (cl-defgeneric orpheus-backend-album-art (backend track callback)
   "Fetch cover art for TRACK from BACKEND, then call CALLBACK with a path or nil."
   (ignore backend track)

@@ -29,6 +29,10 @@
 (require 'orpheus-backend)
 (require 'orpheus-playlist)
 (require 'orpheus-transient)
+(require 'orpheus-equalizer)
+(require 'button)
+
+(declare-function orpheus "orpheus" ())
 
 ;; The image primitives live in C, so a build that does not preload image.el
 ;; still knows them at run time and the byte-compiler does not.
@@ -1560,7 +1564,9 @@ playlist opens in its editor."
     ("/ / C-s" "search")
     ("C" "jump to the playing row")
     ("?" "the menu: transport, modes, queue, playlists, views")
-    ("H" "this help, as a table")
+    ("H" "this help: concepts, keys, troubleshooting and the tutorial")
+    ("E" "the equalizer: toggle it, load a preset, save your own")
+    ("M-x orpheus-tutorial" "a guided tour through the player")
     ("SPC" "play or pause")
     ("s" "stop")
     ("> / <" "next and previous track")
@@ -1576,19 +1582,143 @@ playlist opens in its editor."
     ("q" "bury the player"))
   "The keys `orpheus-ui-mode' binds, as rows of key and meaning.")
 
-(defun orpheus-ui-help ()
-  "Show the keys of the player."
+(defun orpheus-ui--help-button (label function &optional help)
+  "Insert LABEL as a button that calls FUNCTION, with HELP as its tooltip."
+  (insert-text-button label
+                      'action (lambda (_button) (funcall function))
+                      'follow-link t
+                      'help-echo help))
+
+(defun orpheus-help ()
+  "Show a guide to the player, its keys, its equalizer and its failures."
   (interactive)
   (let ((buffer (get-buffer-create "*orpheus help*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert (propertize "orpheus keys\n\n" 'face 'orpheus-status-face))
+        (insert (propertize "orpheus help\n" 'face 'orpheus-status-face))
+        (insert
+         "A music player for Emacs with three backends: MPD, local files and\n"
+         "URLs through mpv, and music copied from another machine over ssh.\n\n")
+        (insert (propertize "Getting started\n" 'face 'orpheus-title-face))
+        (insert "  M-x orpheus opens the player in this window.  The tutorial\n"
+                "  walks through it step by step: ")
+        (orpheus-ui--help-button "Open the tutorial" #'orpheus-tutorial
+                                 "A guided tour of the player")
+        (insert ".  The menu on ? groups every command, and ")
+        (orpheus-ui--help-button "Customize orpheus"
+                                 (lambda () (customize-group 'orpheus))
+                                 "Every option and face in one place")
+        (insert " shows the options.\n\n")
+        (insert (propertize "The tabs\n" 'face 'orpheus-title-face))
+        (insert
+         "  1-7 choose a tab, TAB and S-TAB move between them, and each tab\n"
+         "  keeps its own place.  RET plays the row, or enters a directory,\n"
+         "  album or artist; ^ goes back up one level.  SSH adds Downloads\n"
+         "  after Queue, where RET plays or retries and d cancels a transfer.\n\n")
+        (insert (propertize "The transport\n" 'face 'orpheus-title-face))
+        (insert
+         "  SPC plays or pauses, s stops, > and < change track, f and b seek,\n"
+         "  and + and - change the volume.  z, x, c and v toggle repeat,\n"
+         "  random, consume and single.  The card's buttons do the same, and\n"
+         "  mouse-1 selects a row, mouse-2 plays it and mouse-3 opens its menu.\n\n")
+        (insert (propertize "The queue and playlists\n" 'face 'orpheus-title-face))
+        (insert
+         "  m and u mark and unmark rows, a queues the marks or the row, A\n"
+         "  queues everything on the tab, d removes a row, D empties the\n"
+         "  queue, and C jumps to what is playing.  N makes a portable\n"
+         "  playlist, e edits the one at point, and C-x C-s saves the queue.\n\n")
+        (insert (propertize "Equalizer\n" 'face 'orpheus-title-face))
+        (insert
+         "  E opens the equalizer: enable it, load flat, bass, vocal, treble\n"
+         "  or loudness, save your own preset, or type the ten gains.  It\n"
+         "  works with the local and ssh backends, which play through mpv.\n"
+         "  MPD's audio leaves through the daemon's own output, so Emacs\n"
+         "  cannot filter it.  Saved presets live in\n"
+         (format "  %s.\n\n" orpheus-equalizer-preset-file))
+        (insert (propertize "If something is wrong\n" 'face 'orpheus-title-face))
+        (insert
+         "  A backend that does not answer is retried in the background, so\n"
+         "  the editor stays usable.  M-x orpheus-ssh-diagnose checks the\n"
+         "  remote commands, and mpv's own complaints are in *orpheus mpv*.\n"
+         "  M-x orpheus-quit closes the player and stops reading the status.\n\n")
+        (insert (propertize "Every key\n" 'face 'orpheus-title-face))
         (dolist (row orpheus-ui--help-lines)
           (insert (propertize (format "  %-20s %s\n" (car row) (cadr row))
                               'face 'orpheus-title-face)))
         (insert "\n")
         (insert (propertize " q buries the player; g reads everything again\n"
+                            'face 'orpheus-muted-face))
+        (goto-char (point-min))
+        (special-mode)))
+    (display-buffer buffer)))
+
+(defun orpheus-ui-help ()
+  "Show the orpheus help buffer (an alias for `orpheus-help')."
+  (interactive)
+  (orpheus-help))
+
+(defun orpheus-tutorial ()
+  "Show a short guided tour of orpheus, one step per heading."
+  (interactive)
+  (let ((buffer (get-buffer-create "*orpheus tutorial*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize "orpheus tutorial\n" 'face 'orpheus-status-face))
+        (insert
+         "Work through these in order; each button runs the step.  The\n"
+         "player keeps its keys, so the same commands work from the menu,\n"
+         "from M-x, and from the mouse.\n\n")
+        (insert (propertize "1. Open the player\n" 'face 'orpheus-title-face))
+        (insert "   M-x orpheus shows the queue in this window; q buries it.  ")
+        (orpheus-ui--help-button "Open it now" #'orpheus
+                                 "Run M-x orpheus")
+        (insert ".\n\n")
+        (insert (propertize "2. Choose a backend\n" 'face 'orpheus-title-face))
+        (insert
+         "   orpheus-backend is mpd, local or ssh.  MPD owns a library and\n"
+         "   its queue; local plays files and URLs with mpv; ssh copies a\n"
+         "   track from another machine and plays it here.  ")
+        (orpheus-ui--help-button "Customize it"
+                                 (lambda () (customize-option 'orpheus-backend))
+                                 "Choose and configure the backend")
+        (insert ".\n\n")
+        (insert (propertize "3. Browse and play\n" 'face 'orpheus-title-face))
+        (insert
+         "   Press 2 for the files or directories tab, RET on a directory to\n"
+         "   enter it, ^ to go back, and RET on a track to play it.  TAB\n"
+         "   moves between tabs.\n\n")
+        (insert (propertize "4. Build a queue\n" 'face 'orpheus-title-face))
+        (insert
+         "   m marks a row, a queues it, A queues the whole tab, d removes\n"
+         "   the row, D empties the queue, and C jumps to what is playing.\n"
+         "   SPC pauses, s stops, and > and < change track.\n\n")
+        (insert (propertize "5. Make a playlist\n" 'face 'orpheus-title-face))
+        (insert
+         "   N asks for a name and a directory, then opens the playlist in\n"
+         "   its editor.  C-x C-s saves the queue as a playlist.  ")
+        (orpheus-ui--help-button "Make one"
+                                 (lambda () (call-interactively
+                                             #'orpheus-ui-new-playlist))
+                                 "Create a new portable playlist")
+        (insert ".\n\n")
+        (insert (propertize "6. Shape the sound\n" 'face 'orpheus-title-face))
+        (insert
+         "   E opens the equalizer.  Load a preset, save the current gains,\n"
+         "   or type ten values.  It needs the local or ssh backend.  ")
+        (orpheus-ui--help-button "Open the equalizer"
+                                 #'orpheus-equalizer-menu
+                                 "Load, save and edit equalizer presets")
+        (insert ".\n\n")
+        (insert (propertize "7. Get help\n" 'face 'orpheus-title-face))
+        (insert
+         "   ? opens the menu, H opens the help buffer, and M-x\n"
+         "   orpheus-tutorial returns here.  ")
+        (orpheus-ui--help-button "Open the help" #'orpheus-help
+                                 "Concepts, keys and troubleshooting")
+        (insert ".\n\n")
+        (insert (propertize "q buries this buffer; the music keeps playing.\n"
                             'face 'orpheus-muted-face))
         (goto-char (point-min))
         (special-mode)))
@@ -1635,7 +1765,8 @@ playlist opens in its editor."
     (define-key map (kbd "C-s") 'orpheus-ui-search)
     (define-key map (kbd "C") 'orpheus-ui-jump-to-current)
     (define-key map (kbd "?") 'orpheus-menu)
-    (define-key map (kbd "H") 'orpheus-ui-help)
+    (define-key map (kbd "H") 'orpheus-help)
+    (define-key map (kbd "E") 'orpheus-equalizer-menu)
     (define-key map (kbd "SPC") 'orpheus-play-pause)
     (define-key map (kbd "p") 'orpheus-ui-previous-line)
     (define-key map (kbd "s") 'orpheus-stop)

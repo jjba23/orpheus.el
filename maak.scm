@@ -23,11 +23,12 @@
 (define emacs-command
   (or (getenv "EMACS") "emacs"))
 
-;; The package: nine files, loaded in this order.
+;; The package: ten files, loaded in this order.
 (define source-files
   '("orpheus-backend.el"
     "orpheus-playlist.el"
     "orpheus-transient.el"
+    "orpheus-equalizer.el"
     "orpheus-mpd.el"
     "orpheus-local.el"
     "orpheus-ssh.el"
@@ -50,6 +51,7 @@
 ;; What byte-compilation leaves behind.
 (define compiled-files
   '("orpheus-backend.elc" "orpheus-playlist.elc" "orpheus-transient.elc"
+    "orpheus-equalizer.elc"
     "orpheus-mpd.elc" "orpheus-local.elc" "orpheus-ssh.elc" "orpheus-ui.elc"
     "orpheus-vis.elc" "orpheus.elc"
     "test/orpheus-test.elc" "test/orpheus-integration-test.elc"
@@ -109,8 +111,8 @@ Both are skipped when they are not installed, so this task always finishes."
 
 (define (demo)
   "Record the reproducible demo GIF.
-Needs Xvfb, ImageMagick's import and ffmpeg; the demo data is fixed and needs
-no player, daemon or network."
+Needs Xvfb, an Emacs built with cairo, and ffmpeg; the demo data is fixed and
+needs no player, daemon or network."
   (run (list "bash" "scripts/record-demo.sh") #:verbose? #t))
 
 (define (tasks)

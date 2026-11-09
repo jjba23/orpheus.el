@@ -41,7 +41,7 @@ jobs:
         run: |
           emacs -Q --batch -L . -L test -f batch-byte-compile \
             orpheus-backend.el orpheus-playlist.el orpheus-transient.el \
-            orpheus-mpd.el \
+            orpheus-equalizer.el orpheus-mpd.el \
             orpheus-local.el orpheus-ssh.el orpheus-ui.el orpheus-vis.el \
             orpheus.el test/orpheus-test.el test/orpheus-integration-test.el \
             test/orpheus-checkdoc.el
@@ -90,7 +90,8 @@ jobs:
           emacs -Q --batch -L . -L test \
             --eval "(setq byte-compile-error-on-warn t)" \
             -f batch-byte-compile \
-            orpheus-backend.el orpheus-playlist.el orpheus-mpd.el \
+            orpheus-backend.el orpheus-playlist.el orpheus-transient.el \
+            orpheus-equalizer.el orpheus-mpd.el \
             orpheus-local.el orpheus-ssh.el orpheus-ui.el orpheus-vis.el \
             orpheus.el test/orpheus-test.el test/orpheus-integration-test.el \
             test/orpheus-checkdoc.el
