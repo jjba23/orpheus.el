@@ -1744,6 +1744,48 @@ showing almost none of the list."
         (orpheus-ui--fit-window (selected-window)))
       (should-not grown))))
 
+(ert-deftest orpheus-test/ui-button-answers-the-mouse ()
+  "A control under the cover is a button: a click runs it, a tooltip names it."
+  (let ((pressed 0)
+        (button (orpheus-ui--button "▶" "Play or pause" 'orpheus-play-pause)))
+    (should (string-match-p "▶" button))
+    (should (equal "Play or pause" (get-text-property 0 'help-echo button)))
+    (should (eq 'hand (get-text-property 0 'pointer button)))
+    (cl-letf (((symbol-function 'orpheus-play-pause)
+               (lambda () (interactive) (setq pressed (1+ pressed)))))
+      ;; The binding is handed the click event and ignores it.
+      (funcall (lookup-key (get-text-property 0 'keymap button) [mouse-1]) nil)
+      (should (= 1 pressed)))))
+
+(ert-deftest orpheus-test/ui-transport-is-a-row-of-buttons ()
+  "The transport row is previous, play, next, the toggles and stop."
+  (with-temp-buffer
+    ;; The newline keeps the row off buffer position 1, where a property on the
+    ;; first character is not stored.
+    (insert "\n" (orpheus-ui--transport nil))
+    (goto-char (point-min))
+    (dolist (help '("Previous track" "Play" "Next track" "Repeat"
+                    "Shuffle" "Single track" "Consume" "Stop"))
+      (should (text-property-search-forward 'help-echo help)))))
+
+(ert-deftest orpheus-test/ui-seek-seconds ()
+  "A click on the progress bar seeks to the column it landed on."
+  (should (= -20 (orpheus-ui--seek-seconds 100 100 11 100 20)))
+  (should (= 0 (orpheus-ui--seek-seconds 105 100 11 100 50)))
+  (should (= 80 (orpheus-ui--seek-seconds 110 100 11 100 20))))
+
+(ert-deftest orpheus-test/ui-now-playing-carries-the-transport ()
+  "The now-playing card has the transport buttons and a bar that seeks."
+  (let ((orpheus-ui-plain-ascii nil)
+        (orpheus-ui--art nil)
+        (orpheus-track-current nil)
+        (orpheus-status-current nil))
+    (with-temp-buffer
+      (orpheus-ui--insert-now-playing 80)
+      (goto-char (point-min))
+      (should (text-property-search-forward 'help-echo "Previous track"))
+      (should (text-property-search-forward 'help-echo "Next track")))))
+
 (ert-deftest orpheus-test/ui-refresh-clears-the-invalidation ()
   "A read that happens clears the flag, so the next tick is quiet again."
   (let ((orpheus-ui-buffer-name "*orpheus-test-dirty*")

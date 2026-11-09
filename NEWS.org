@@ -9,6 +9,16 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- The now-playing card is a control panel: the transport under the progress
+  bar plays, pauses, skips, stops and toggles repeat, random, single and
+  consume with the mouse, each button with a tooltip and the toggles lit when
+  they are on, and a click on the progress bar seeks to that point of the
+  track.
+
 * 0.9.4 (2026-11-09)
 
 *** Fixed

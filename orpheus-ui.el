@@ -33,6 +33,9 @@
 ;; still knows them at run time and the byte-compiler does not.
 (declare-function image-size "image.c" (spec &optional pixels))
 
+;; The seek bar sends its command through the session, which loads last.
+(declare-function orpheus--command "orpheus" (action &optional value))
+
 ;;; Look
 
 (defface orpheus-status-face
@@ -116,6 +119,18 @@
 (defface orpheus-progress-empty-face
   '((t :inherit shadow))
   "Face of the remaining part of the progress bar."
+  :group 'orpheus)
+
+(defface orpheus-button-face
+  '((t :inherit shadow :box t))
+  "Face of a control under the cover that is off or inert."
+  :group 'orpheus)
+
+(defface orpheus-button-on-face
+  '((((background dark)) :inherit bold :box t :foreground "#e6c78a")
+    (((background light)) :inherit bold :box t :foreground "#6b4f1f")
+    (t :inherit bold :box t))
+  "Face of a control under the cover that is on: gold, like the status line."
   :group 'orpheus)
 
 (defface orpheus-download-face
@@ -607,11 +622,91 @@ so the list below it never moves while a cover arrives."
                             (list 'space :width 1 :height rest))
                 "\n")))))
 
+(defun orpheus-ui--center (text width)
+  "Return TEXT centred in WIDTH, keeping the properties it carries."
+  (concat (make-string (max 0 (/ (- width (string-width text)) 2)) ?\s)
+          text))
+
 (defun orpheus-ui--center-line (text width face)
   "Return TEXT centred in WIDTH, with FACE."
-  (let* ((text (orpheus-ui--elide text width))
-         (indent (max 0 (/ (- width (string-width text)) 2))))
-    (concat (make-string indent ?\s) (propertize text 'face face))))
+  (orpheus-ui--center (propertize (orpheus-ui--elide text width) 'face face)
+                      width))
+
+(defun orpheus-ui--button (label help command &optional face)
+  "Return LABEL as a button that runs COMMAND, with HELP as its tooltip.
+A control in a player is a thing to click, so the label carries its own
+keymap, a hand for the pointer and the box of FACE, which defaults to
+`orpheus-button-face'."
+  (propertize (format " %s " label)
+              'face (or face 'orpheus-button-face)
+              'mouse-face 'highlight
+              'pointer 'hand
+              'help-echo help
+              'keymap (let ((map (make-sparse-keymap)))
+                        (define-key map [mouse-1]
+                                    (lambda (_event)
+                                      (interactive "e")
+                                      (call-interactively command)))
+                        (define-key map [follow-link] 'mouse-face)
+                        map)))
+
+(defun orpheus-ui--transport (status)
+  "Return the transport buttons for STATUS, as a row the mouse can press.
+The four mode toggles show their state in their face, the way the flags in
+the status line spell it out."
+  (let* ((ascii orpheus-ui-plain-ascii)
+         (playing (and status (eq (orpheus-status-state status) 'play)))
+         (mood (lambda (on) (if on 'orpheus-button-on-face 'orpheus-button-face))))
+    (concat
+     (orpheus-ui--button (if ascii "<<" "⏮") "Previous track"
+                         'orpheus-previous)
+     (orpheus-ui--button (cond (playing (if ascii "||" "⏸"))
+                               (ascii ">")
+                               (t "▶"))
+                         (if playing "Pause" "Play") 'orpheus-play-pause)
+     (orpheus-ui--button (if ascii ">>" "⏭") "Next track" 'orpheus-next)
+     " "
+     (orpheus-ui--button "R" "Repeat" 'orpheus-toggle-repeat
+                         (funcall mood (and status
+                                            (orpheus-status-repeat status))))
+     (orpheus-ui--button "Z" "Shuffle" 'orpheus-toggle-random
+                         (funcall mood (and status
+                                            (orpheus-status-random status))))
+     (orpheus-ui--button "S" "Single track" 'orpheus-toggle-single
+                         (funcall mood (and status
+                                            (orpheus-status-single status))))
+     (orpheus-ui--button "C" "Consume" 'orpheus-toggle-consume
+                         (funcall mood (and status
+                                            (orpheus-status-consume status))))
+     " "
+     (orpheus-ui--button (if ascii "[]" "⏹") "Stop" 'orpheus-stop))))
+
+(defun orpheus-ui--seek-seconds (point start width total elapsed)
+  "Return the seconds to seek for a click at POINT on a bar at START.
+WIDTH is the bar's width, TOTAL the track's length and ELAPSED where it is
+now; the answer is relative, which every backend already takes."
+  (let* ((column (max 0 (min (1- width) (- point start))))
+         (target (* total (/ (float column) (max 1 (1- width))))))
+    (round (- target (or elapsed 0)))))
+
+(defvar orpheus-ui-seek-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] 'orpheus-ui-seek-at)
+    (define-key map [follow-link] 'mouse-face)
+    map)
+  "Keymap put on the progress bar, so a click there seeks.")
+
+(defun orpheus-ui-seek-at (event)
+  "Seek to the point of the progress bar clicked in EVENT."
+  (interactive "e")
+  (let* ((point (posn-point (event-start event)))
+         (bar (and (integer-or-marker-p point)
+                   (get-text-property point 'orpheus-bar))))
+    (when bar
+      (pcase-let ((`(,start ,width ,total ,elapsed) bar))
+        (orpheus--command 'seek
+                          (orpheus-ui--seek-seconds point start width total
+                                                    elapsed))))))
 
 (defun orpheus-ui--insert-now-playing (width)
   "Insert a centered now-playing card in WIDTH."
@@ -632,14 +727,28 @@ so the list below it never moves while a cover arrives."
             "\n")
     (unless (string-empty-p sub)
       (insert (orpheus-ui--center-line sub width 'orpheus-artist-face) "\n"))
-    (insert (orpheus-ui--center-line
-             (format "%s  %s / %s"
-                     (orpheus-ui--progress-string
-                      elapsed total orpheus-ui-progress-width)
-                     (orpheus-format-time elapsed)
-                     (orpheus-format-time total))
-             width 'orpheus-muted-face)
-            "\n\n")))
+    ;; The bar keeps its two faces, so the line is centred without
+    ;; re-propertising it, and a click on the bar seeks.
+    (let* ((bar (orpheus-ui--progress-string elapsed total
+                                             orpheus-ui-progress-width))
+           (times (propertize (format "%s / %s"
+                                      (orpheus-format-time elapsed)
+                                      (orpheus-format-time total))
+                              'face 'orpheus-muted-face))
+           (line (concat bar "  " times)))
+      (insert (make-string (max 0 (/ (- width (string-width line)) 2)) ?\s))
+      (let ((from (point)))
+        (insert bar)
+        (when (and total (> total 0))
+          (add-text-properties
+           from (+ from (length bar))
+           (list 'keymap orpheus-ui-seek-map
+                 'mouse-face 'highlight
+                 'pointer 'hand
+                 'help-echo "mouse-1: seek"
+                 'orpheus-bar (list from (length bar) total elapsed)))))
+      (insert "  " times "\n"))
+    (insert (orpheus-ui--center (orpheus-ui--transport status) width) "\n\n")))
 
 (defun orpheus-ui--current-p (item)
   "Return non-nil when ITEM is the row playing now."
@@ -1329,6 +1438,7 @@ is a copy of a row that is there already."
     ("s" "stop")
     ("> / <" "next and previous track")
     ("f / b" "seek forward and back")
+    ("mouse-1 on the card" "press a transport button or seek on the bar")
     ("M-<up> / M-<down>, + / -" "volume up and down")
     ("z / x / c / v" "repeat, random, consume, single")
     ("M-u / M-U" "update the library, rescan it")

@@ -412,6 +412,9 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 ~q~ buries the player.  ~?~ lists the same table in a buffer.  The mouse
 follows the same actions: mouse-1 selects a row or tab, mouse-2 plays a row,
 and mouse-3 opens the context menu for a row, a tab or a playlist editor row.
+The now-playing card is a control panel too: the buttons under the progress bar
+play, pause, skip, stop and toggle the repeat, random, single and consume
+modes, and a click on the bar seeks to that point of the track.
 
 | Key                    | Meaning                                                  |
 |------------------------+----------------------------------------------------------|
@@ -445,6 +448,7 @@ and mouse-3 opens the context menu for a row, a tab or a playlist editor row.
 | ~?~                    | the key map in a buffer                                  |
 | ~q~                    | bury the player                                          |
 | ~mouse-1~, ~mouse-2~   | select a row, play it                                    |
+| ~mouse-1~ on the card  | press a transport button; on the bar, seek to that point |
 | ~mouse-3~              | open the row, tab or playlist editor menu                |
 
 On the Downloads tab, RET plays a finished copy, retries a failed transfer, or
