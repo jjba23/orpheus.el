@@ -29,6 +29,8 @@
                (expand-file-name ".." (file-name-directory load-file-name))))
 (require 'orpheus)
 
+(declare-function imagep "image.c" (object))
+
 
 ;;; The fake MPD server
 ;;
@@ -745,10 +747,31 @@ and the password with it."
       (should (= 4 (length row))))))
 
 (ert-deftest orpheus-test/vis-svg ()
-  "The SVG renderer makes an image, and colours follow the level."
-  (should (imagep (orpheus-vis--svg-image '(10 50 100) 120 40)))
+  "The SVG renderer draws when it can, and returns nil when it cannot."
   (should (equal (car orpheus-vis-colors) (orpheus-vis--color 0)))
-  (should (equal (car (last orpheus-vis-colors)) (orpheus-vis--color 100))))
+  (should (equal (car (last orpheus-vis-colors)) (orpheus-vis--color 100)))
+  (when (image-type-available-p 'svg)
+    (should (imagep (orpheus-vis--svg-image '(10 50 100) 120 40))))
+  ;; An Emacs built without SVG must not signal once per frame.
+  (cl-letf (((symbol-function 'image-type-available-p) #'ignore))
+    (should-not (orpheus-vis--svg-image '(10 50 100) 120 40))))
+
+(ert-deftest orpheus-test/vis-render-falls-back-to-text ()
+  "A graphical frame that cannot draw SVG gets the block-character graph."
+  (let ((orpheus-vis-buffer-name "*orpheus-test-vis*")
+        (orpheus-vis--data '(10 50 100))
+        (orpheus-vis--image nil)
+        (orpheus-vis--image-key nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'display-graphic-p)
+                     (lambda (&optional _frame) t))
+                    ((symbol-function 'orpheus-vis--svg-image) #'ignore))
+            (with-current-buffer (get-buffer-create orpheus-vis-buffer-name)
+              (orpheus-vis--render t)
+              (should (string-match-p (string orpheus-vis-bar-char)
+                                      (buffer-string))))))
+      (kill-buffer orpheus-vis-buffer-name))))
 
 
 ;;; Portable playlists
@@ -1632,6 +1655,43 @@ so they are allowed by name."
             (should (= refreshes 1))))
       (kill-buffer orpheus-ui-buffer-name))))
 
+(ert-deftest orpheus-test/ui-render-keeps-the-window-line ()
+  "A redraw keeps the same text line at the top of the window.
+A line added above the list — the art box, the now-playing card or a path —
+must not scroll the list out from under the reader."
+  (let ((orpheus-ui-buffer-name "*orpheus-test-scroll*")
+        (orpheus-ui-show-art nil)
+        (orpheus-ui-show-now-playing nil)
+        (orpheus-ui--art nil))
+    (unwind-protect
+        (let ((buffer (get-buffer-create orpheus-ui-buffer-name)))
+          (with-current-buffer buffer
+            (orpheus-ui-mode)
+            (setq orpheus-ui--tabs
+                  (vector (orpheus-ui-tab-create
+                           :kind 'queue :view 'queue :title "Queue"
+                           :items (mapcar
+                                   (lambda (n)
+                                     (orpheus-item-create
+                                      :label (format "row %d" n)
+                                      :kind 'track
+                                      :data (list (cons 'uri
+                                                        (format "%d.mp3" n)))))
+                                   (number-sequence 1 40)))))
+            (setq orpheus-ui--tab 0)
+            (orpheus-ui--render))
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (forward-line 10)
+            (set-window-start (selected-window) (point))
+            (let ((line (count-lines (point-min) (window-start))))
+              (setf (orpheus-ui-tab-arg (orpheus-ui--current-tab)) '("Rock/"))
+              (orpheus-ui--render)
+              (should (= line (count-lines (point-min) (window-start)))))))
+      (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+      (kill-buffer orpheus-ui-buffer-name))))
+
 (ert-deftest orpheus-test/ui-refresh-clears-the-invalidation ()
   "A read that happens clears the flag, so the next tick is quiet again."
   (let ((orpheus-ui-buffer-name "*orpheus-test-dirty*")
@@ -1690,6 +1750,22 @@ so they are allowed by name."
       (with-temp-buffer
         (orpheus-ui--insert-art 80)
         (should (string-match-p "\n" (buffer-string)))))))
+
+(ert-deftest orpheus-test/ui-art-box-keeps-its-size ()
+  "The cover area is the same size while loading and with no cover at all.
+Otherwise the list below it moves up and down every time a cover arrives."
+  (let ((orpheus-ui--art (list :key "k" :loading t))
+        (orpheus-ui-art-size 100))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _frame) t)))
+      (with-temp-buffer
+        (orpheus-ui--insert-art 80)
+        (let ((loading (buffer-string)))
+          (should (equal (get-text-property 0 'display loading)
+                         '(space :width 1 :height 100)))
+          (setq orpheus-ui--art (list :key "k" :file nil))
+          (erase-buffer)
+          (orpheus-ui--insert-art 80)
+          (should (equal (buffer-string) loading)))))))
 
 (ert-deftest orpheus-test/local-cover-detection ()
   "Cover files are found by name regardless of case and extension."
@@ -1856,12 +1932,13 @@ so they are allowed by name."
   "A frame that looks the same reuses the image of the frame before it."
   (let ((orpheus-vis--image nil)
         (orpheus-vis--image-key nil))
-    (let ((first (orpheus-vis--image '(10 20 30 40) 120 40))
-          (same (orpheus-vis--image '(11 21 30 41) 120 40))
-          (other (orpheus-vis--image '(90 20 30 40) 120 40)))
-      (should (imagep first))
-      (should (eq first same))
-      (should-not (eq first other)))))
+    (cl-letf (((symbol-function 'orpheus-vis--svg-image)
+               (lambda (_levels _width _height) (list 'image))))
+      (let ((first (orpheus-vis--image '(10 20 30 40) 120 40))
+            (same (orpheus-vis--image '(11 21 30 41) 120 40))
+            (other (orpheus-vis--image '(90 20 30 40) 120 40)))
+        (should (eq first same))
+        (should-not (eq first other))))))
 
 (ert-deftest orpheus-test/vis-filter-marks-a-new-frame ()
   "Each complete frame marks the buffer for a redraw."

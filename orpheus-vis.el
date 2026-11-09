@@ -182,11 +182,14 @@ The car is the list of bar heights, or nil while no frame is complete."
     svg))
 
 (defun orpheus-vis--svg-image (levels width height)
-  "Return LEVELS as an image, an SVG bar graph WIDTH by HEIGHT."
+  "Return LEVELS as an image, an SVG bar graph WIDTH by HEIGHT.
+Return nil when this Emacs cannot draw SVG, so the caller falls back to text
+instead of signalling once per frame."
   ;; The require comes first: Emacs resolves `svg-image' before it evaluates
   ;; the arguments, so loading svg inside the argument would be too late.
   (require 'svg)
-  (svg-image (orpheus-vis--svg levels width height) :ascent 'center))
+  (when (image-type-available-p 'svg)
+    (svg-image (orpheus-vis--svg levels width height) :ascent 'center)))
 
 (defun orpheus-vis--image (levels width height)
   "Return LEVELS as an image WIDTH by HEIGHT, reusing the last one when it fits.
@@ -294,11 +297,12 @@ visualizer feel slow."
                          orpheus-vis--data
                          (make-list orpheus-vis-bars 0))))
           (erase-buffer)
-          (if (and orpheus-vis-graphical (display-graphic-p))
-            (insert-image (orpheus-vis--image (seq-take levels width)
-                                              (* 8 width) (* 8 height))
-                          " ")
-            (insert (orpheus-vis--text levels width height)))
+          (let ((image (and orpheus-vis-graphical (display-graphic-p)
+                            (orpheus-vis--image (seq-take levels width)
+                                                (* 8 width) (* 8 height)))))
+            (if image
+              (insert-image image " ")
+              (insert (orpheus-vis--text levels width height))))
           (insert "\n")
           (insert (propertize
                    (format " %s, %d bars  (q stops)" (orpheus-vis--input)

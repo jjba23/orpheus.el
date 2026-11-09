@@ -22,6 +22,18 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
 - NEWS.org uses Org inline-code markup, and the release task renders it
   as Markdown in GitHub release notes.
 
+*** Fixed
+
+- The cover art keeps a box of ~orpheus-ui-art-size~ whether a cover is
+  loading, missing or drawn, so the list below it no longer jumps when artwork
+  arrives.  A redraw also restores the line at the top of the window instead of
+  a buffer position, so the list stays where it was when the height above it
+  changes.
+- The visualizer draws its block-character graph when Emacs was built without
+  SVG support, instead of signalling on every frame.
+- Lint declares the C image primitives, so it passes on an Emacs whose build
+  does not preload ~image.el~.
+
 * 0.9.2 (2026-11-09)
 
 *** Changed

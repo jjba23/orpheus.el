@@ -29,6 +29,10 @@
 (require 'orpheus-backend)
 (require 'orpheus-playlist)
 
+;; The image primitives live in C, so a build that does not preload image.el
+;; still knows them at run time and the byte-compiler does not.
+(declare-function image-size "image.c" (spec &optional pixels))
+
 ;;; Look
 
 (defface orpheus-status-face
@@ -138,7 +142,9 @@ Set it in a terminal whose font has no play, pause or block characters."
   :type 'boolean :group 'orpheus)
 
 (defcustom orpheus-ui-show-art t
-  "Whether to draw cover art in a graphical frame."
+  "Whether to draw cover art in a graphical frame.
+The art keeps a box of `orpheus-ui-art-size', so the list below it does not
+move while a cover loads and does not move when a track has none."
   :type 'boolean :group 'orpheus)
 
 (defcustom orpheus-ui-show-now-playing t
@@ -581,24 +587,25 @@ backend."
                         :ascent 'center))))))
 
 (defun orpheus-ui--insert-art (width)
-  "Insert the cover art centred in WIDTH, or keep its place while it loads."
-  (let ((image (orpheus-ui--art-image)))
-    (cond
-      (image
-       (let* ((size (ignore-errors (image-size image t)))
-              (columns (if size
+  "Insert the cover art centred in WIDTH, in a box that keeps its size.
+The box is as tall as the art whether it is drawn, still loading or missing,
+so the list below it never moves while a cover arrives."
+  (when (display-graphic-p)
+    (let* ((image (orpheus-ui--art-image))
+           (size (and image (ignore-errors (image-size image t))))
+           (rest (- orpheus-ui-art-size (or (cdr size) 0))))
+      (when image
+        (let ((columns (if size
                            (ceiling (/ (float (car size))
                                        (max 1 (frame-char-width))))
-                         1))
-              (indent (max 0 (/ (- width columns) 2))))
-         (insert (make-string indent ?\s))
-         (insert-image image " ")
-         (insert "\n")))
-      ((and (plist-get orpheus-ui--art :loading) (display-graphic-p))
-       ;; The list must not jump up and back down when the cover arrives.
-       (insert (propertize " " 'display
-                           (list 'space :width 1 :height orpheus-ui-art-size))
-               "\n")))))
+                         1)))
+          (insert (make-string (max 0 (/ (- width columns) 2)) ?\s))
+          (insert-image image " ")
+          (insert "\n")))
+      (when (> rest 0)
+        (insert (propertize " " 'display
+                            (list 'space :width 1 :height rest))
+                "\n")))))
 
 (defun orpheus-ui--center-line (text width face)
   "Return TEXT centred in WIDTH, with FACE."
@@ -698,11 +705,11 @@ folder are read at a glance the way Dired shows them."
 
 (defun orpheus-ui--render ()
   "Draw the buffer from the tabs and rows it holds.
-The window start is put back afterwards, so a redraw while a cover arrives
-does not scroll the list under the reader."
+The line at the top of the window is put back afterwards, so a redraw while a
+cover arrives does not scroll the list under the reader."
   (let* ((inhibit-read-only t)
          (window (get-buffer-window))
-         (start (and window (window-start window)))
+         (line (and window (count-lines (point-min) (window-start window))))
          (tab (orpheus-ui--current-tab))
          (width (max 24 (if window (window-body-width window) 80))))
     (erase-buffer)
@@ -730,8 +737,13 @@ does not scroll the list under the reader."
     (insert (propertize (orpheus-ui--footer (and tab (orpheus-ui-tab-kind tab)))
                         'face 'orpheus-muted-face))
     (orpheus-ui--place-point)
-    (when (and window start (<= start (point-max)))
-      (set-window-start window start))
+    (when window
+      ;; A buffer position is not a place: the art box and the path line
+      ;; change the height above the list, but the line stays the same.
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line (or line 0))
+        (set-window-start window (point) t)))
     (setq orpheus-ui--render-key (orpheus-ui--key))))
 
 (defun orpheus-ui--key ()
@@ -1490,7 +1502,10 @@ URI names the current track, when there is one."
       (setq orpheus-ui--art (list :key key :uri uri :file cached))
       (orpheus-ui--redraw))
      (t
-      (setq orpheus-ui--art (list :key key :uri uri :loading t))
+      ;; The cover already drawn stays until the next one arrives: a blank box
+      ;; for as long as a fetch takes is the flicker this avoids.
+      (setq orpheus-ui--art (list :key key :uri uri :loading t
+                                  :file (plist-get orpheus-ui--art :file)))
       (orpheus-ui--redraw)
       (funcall request
                (lambda (file)

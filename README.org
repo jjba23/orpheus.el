@@ -183,7 +183,8 @@ format can know where another machine keeps it.
 
 ~orpheus-visualizer~ runs [[https://github.com/karlstav/cava][cava]], reads its frames as they arrive and draws
 them: block characters in a terminal, an SVG bar graph with a colour ramp in a
-graphical frame, redrawn ~orpheus-vis-framerate~ times a second.  cava listens
+graphical frame that can draw SVG, redrawn ~orpheus-vis-framerate~ times a
+second.  cava listens
 to the system, not to one player, so it draws the same bars for MPD, for mpv
 and for anything else the machine is playing.
 
@@ -702,9 +703,12 @@ metadata work where the extractor provides them.
 :END:
 
 - *In a graphical frame* the cover for the current track, or for the album
-  folder being browsed when the track has none, is drawn above the list at
-  ~orpheus-ui-art-size~; an image Emacs cannot decode is skipped.  The
-  visualizer is an SVG bar graph with rounded bars and a colour ramp.
+  folder being browsed when the track has none, is drawn above the list in a
+  box of ~orpheus-ui-art-size~ that keeps its height whether a cover is
+  loading, missing or drawn, so the list never moves under it; an image Emacs
+  cannot decode is skipped.  The visualizer is an SVG bar graph with rounded
+  bars and a colour ramp, or the block-character graph when Emacs was built
+  without SVG.
 - *In a terminal* no cover is fetched or drawn, and the list, the status line,
   the progress bar and the faces are unchanged.  The visualizer falls back to
   block characters, which is a real rendering, not a placeholder.
