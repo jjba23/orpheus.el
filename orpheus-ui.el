@@ -309,26 +309,33 @@ one keystroke is what turns a queue into thousands of rows."
             (propertize (substring bar filled)
                         'face 'orpheus-progress-empty-face))))
 
-(defun orpheus-ui--status-string (status track)
-  "Return the one-line status of STATUS and TRACK."
-  (let ((elapsed (and status (orpheus-status-elapsed status)))
-        (total (and status (orpheus-status-total status)))
-        (flags (concat (orpheus-ui--flag (and status (orpheus-status-repeat status)) "R")
-                       (orpheus-ui--flag (and status (orpheus-status-random status)) "Z")
-                       (orpheus-ui--flag (and status (orpheus-status-single status)) "S")
-                       (orpheus-ui--flag (and status (orpheus-status-consume status)) "C"))))
-    (format " %s  %s  %s / %s  [%s] %3d%%  vol %d  %s%s"
-            (orpheus-status-glyph status)
-            (if (and track (not (string-empty-p (orpheus-track-label track))))
-              (orpheus-track-label track)
-              (if status "nothing playing" "connecting…"))
-            (orpheus-format-time elapsed)
-            (orpheus-format-time total)
-            (orpheus-ui--progress-string elapsed total orpheus-ui-progress-width)
-            (orpheus-progress-percent elapsed total)
-            (if status (orpheus-status-volume status) 0)
-            flags
-            (or (orpheus-ui--download-summary-string) ""))))
+(defun orpheus-ui--status-string (status track &optional width)
+  "Return the one-line status of STATUS and TRACK, fitted into WIDTH.
+WIDTH is in columns; nil keeps the natural width."
+  (let* ((elapsed (and status (orpheus-status-elapsed status)))
+         (total (and status (orpheus-status-total status)))
+         (flags (concat (orpheus-ui--flag (and status (orpheus-status-repeat status)) "R")
+                        (orpheus-ui--flag (and status (orpheus-status-random status)) "Z")
+                        (orpheus-ui--flag (and status (orpheus-status-single status)) "S")
+                        (orpheus-ui--flag (and status (orpheus-status-consume status)) "C")))
+         (left (format " %s  %s"
+                       (orpheus-status-glyph status)
+                       (if (and track (not (string-empty-p
+                                            (orpheus-track-label track))))
+                           (orpheus-track-label track)
+                         (if status "nothing playing" "connecting…"))))
+         (right (format "%s / %s  [%s] %3d%%  vol %d  %s%s"
+                        (orpheus-format-time elapsed)
+                        (orpheus-format-time total)
+                        (orpheus-ui--progress-string
+                         elapsed total orpheus-ui-progress-width)
+                        (orpheus-progress-percent elapsed total)
+                        (if status (orpheus-status-volume status) 0)
+                        flags
+                        (or (orpheus-ui--download-summary-string) ""))))
+    (if width
+        (orpheus-ui--columns left right width)
+      (concat left "  " right))))
 
 (defun orpheus-ui--elide (string width)
   "Return STRING fitted into WIDTH columns, cut with an ellipsis."
@@ -618,7 +625,10 @@ backend."
   "Return the header line of the player."
   (if (and orpheus-backend-current
            (orpheus-backend-connected-p orpheus-backend-current))
-    (orpheus-ui--status-string orpheus-status-current orpheus-track-current)
+    (let ((window (get-buffer-window)))
+      (orpheus-ui--status-string
+       orpheus-status-current orpheus-track-current
+       (and window (window-body-width window))))
     (propertize " orpheus  not connected" 'face 'orpheus-error-face)))
 
 (defun orpheus-ui--tab-string ()
@@ -718,7 +728,7 @@ so the list below it never moves while a cover arrives."
 A control in a player is a thing to click, so the label carries its own
 keymap, a hand for the pointer and the box of FACE, which defaults to
 `orpheus-button-face'."
-  (propertize (format " %s " label)
+  (propertize (format "  %s  " label)
               'face (or face 'orpheus-button-face)
               'mouse-face 'highlight
               'pointer 'hand
@@ -734,33 +744,39 @@ keymap, a hand for the pointer and the box of FACE, which defaults to
 (defun orpheus-ui--transport (status)
   "Return the transport buttons for STATUS, as a row the mouse can press.
 The four mode toggles show their state in their face, the way the flags in
-the status line spell it out."
+the status line spell it out.  Stop sits with the other transport controls,
+and a gap keeps the modes from reading as part of the transport."
   (let* ((ascii orpheus-ui-plain-ascii)
          (playing (and status (eq (orpheus-status-state status) 'play)))
          (mood (lambda (on) (if on 'orpheus-button-on-face 'orpheus-button-face))))
     (concat
      (orpheus-ui--button (if ascii "<<" "⏮") "Previous track"
                          'orpheus-previous)
+     " "
      (orpheus-ui--button (cond (playing (if ascii "||" "⏸"))
                                (ascii ">")
                                (t "▶"))
                          (if playing "Pause" "Play") 'orpheus-play-pause)
+     " "
      (orpheus-ui--button (if ascii ">>" "⏭") "Next track" 'orpheus-next)
      " "
+     (orpheus-ui--button (if ascii "X" "⏹") "Stop" 'orpheus-stop)
+     "   "
      (orpheus-ui--button "R" "Repeat" 'orpheus-toggle-repeat
                          (funcall mood (and status
                                             (orpheus-status-repeat status))))
+     " "
      (orpheus-ui--button "Z" "Shuffle" 'orpheus-toggle-random
                          (funcall mood (and status
                                             (orpheus-status-random status))))
+     " "
      (orpheus-ui--button "S" "Single track" 'orpheus-toggle-single
                          (funcall mood (and status
                                             (orpheus-status-single status))))
+     " "
      (orpheus-ui--button "C" "Consume" 'orpheus-toggle-consume
                          (funcall mood (and status
-                                            (orpheus-status-consume status))))
-     " "
-     (orpheus-ui--button (if ascii "[]" "⏹") "Stop" 'orpheus-stop))))
+                                            (orpheus-status-consume status)))))))
 
 (defun orpheus-ui--seek-seconds (point start width total elapsed)
   "Return the seconds to seek for a click at POINT on a bar at START.
@@ -962,9 +978,7 @@ which row is highlighted."
           (and orpheus-status-current
                (orpheus-status-songid orpheus-status-current))
           (plist-get orpheus-ui--art :key)
-          (plist-get orpheus-ui--art :file)
-          (orpheus-ui--download-summary-string)
-          orpheus-ui--downloads)))
+          (plist-get orpheus-ui--art :file))))
 
 (defun orpheus-ui--redraw ()
   "Draw the buffer again, but only when what it shows has changed."
@@ -1008,15 +1022,20 @@ which row is highlighted."
                (length items)))))
 
 (defun orpheus-ui--set-downloads (items)
-  "Remember ITEMS as the current transfer rows and redraw."
-  (setq orpheus-ui--downloads items)
-  (let ((tab (orpheus-ui--current-tab)))
-    (when (and tab (eq (orpheus-ui-tab-view tab) 'downloads))
-      (setf (orpheus-ui-tab-items tab) items
-            (orpheus-ui-tab-loading tab) nil
-            (orpheus-ui-tab-loaded tab) t
-            (orpheus-ui-tab-loaded-at tab) (float-time))))
-  (orpheus-ui--redraw))
+  "Remember ITEMS as the current transfer rows.
+Redraw the player only when the Downloads tab is visible; otherwise the
+header line is enough, so transfer progress does not repaint a long queue."
+  (unless (equal items orpheus-ui--downloads)
+    (setq orpheus-ui--downloads items)
+    (let ((tab (orpheus-ui--current-tab)))
+      (if (and tab (eq (orpheus-ui-tab-view tab) 'downloads))
+          (progn
+            (setf (orpheus-ui-tab-items tab) items
+                  (orpheus-ui-tab-loading tab) nil
+                  (orpheus-ui-tab-loaded tab) t
+                  (orpheus-ui-tab-loaded-at tab) (float-time))
+            (orpheus-ui--redraw))
+        (force-mode-line-update t)))))
 
 (defun orpheus-ui--refresh-downloads ()
   "Refresh the transfer rows and the header summary."
@@ -1575,7 +1594,7 @@ playlist opens in its editor."
     ("M-<up> / M-<down>, + / -" "volume up and down")
     ("z / x / c / v" "repeat, random, consume, single")
     ("M-u / M-U" "update the library, rescan it")
-    ("C-x C-s" "save the queue as a portable M3U8 playlist; a new one asks where")
+    ("C-x C-s" "save the queue as a portable M3U8 playlist")
     ("g" "refresh the status and this tab")
     ("V" "spectrum visualizer")
     ("mouse-3" "open the row, tab or playlist context menu")
@@ -1588,6 +1607,15 @@ playlist opens in its editor."
                       'action (lambda (_button) (funcall function))
                       'follow-link t
                       'help-echo help))
+
+(defun orpheus-ui--show-guide (buffer)
+  "Show BUFFER in the selected window at its first line."
+  (pop-to-buffer buffer '(display-buffer-same-window))
+  (with-current-buffer buffer
+    (goto-char (point-min))
+    (let ((window (get-buffer-window buffer)))
+      (when window
+        (set-window-start window (point-min))))))
 
 (defun orpheus-help ()
   "Show a guide to the player, its keys, its equalizer and its failures."
@@ -1644,14 +1672,21 @@ playlist opens in its editor."
          "  M-x orpheus-quit closes the player and stops reading the status.\n\n")
         (insert (propertize "Every key\n" 'face 'orpheus-title-face))
         (dolist (row orpheus-ui--help-lines)
-          (insert (propertize (format "  %-20s %s\n" (car row) (cadr row))
-                              'face 'orpheus-title-face)))
+          (insert "  "
+                  (propertize (format "%-24s" (car row))
+                              'face 'orpheus-status-face)
+                  " "
+                  (propertize (cadr row) 'face 'orpheus-title-face)
+                  "\n"))
         (insert "\n")
         (insert (propertize " q buries the player; g reads everything again\n"
                             'face 'orpheus-muted-face))
         (goto-char (point-min))
-        (special-mode)))
-    (display-buffer buffer)))
+        (special-mode)
+        (visual-line-mode 1)
+        (setq-local line-spacing 2
+                    wrap-prefix "  ")))
+    (orpheus-ui--show-guide buffer)))
 
 (defun orpheus-ui-help ()
   "Show the orpheus help buffer (an alias for `orpheus-help')."
@@ -1721,8 +1756,11 @@ playlist opens in its editor."
         (insert (propertize "q buries this buffer; the music keeps playing.\n"
                             'face 'orpheus-muted-face))
         (goto-char (point-min))
-        (special-mode)))
-    (display-buffer buffer)))
+        (special-mode)
+        (visual-line-mode 1)
+        (setq-local line-spacing 2
+                    wrap-prefix "  ")))
+    (orpheus-ui--show-guide buffer)))
 
 ;;; The mode
 

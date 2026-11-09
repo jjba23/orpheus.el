@@ -9,6 +9,23 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Changed
+
+- The now-playing card's transport groups previous, play or pause, next and
+  stop as familiar media glyphs, separated from the four mode toggles.  The
+  header line fits its window and elides the track name before the time,
+  volume or flags, and the help and tutorial fill the selected window, wrap
+  long lines and keep their indentation.  The equalizer menu gets a taller
+  side window.
+
+*** Fixed
+
+- Transfer progress from a hidden Downloads tab no longer redraws the visible
+  queue.  Five progress updates on a 5,000-row queue measured 47 ms before and
+  0.8 ms after.
+
 * 0.11.0 (2026-11-09)
 
 *** Added

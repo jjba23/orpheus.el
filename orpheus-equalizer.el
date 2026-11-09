@@ -274,8 +274,17 @@ Interactive input is a line of numbers, for example
            (mapconcat (lambda (gain) (format "%+d" gain))
                       orpheus-equalizer--gains " ")))
 
-;;;###autoload
-(transient-define-prefix orpheus-equalizer-menu ()
+(defconst orpheus-equalizer--display-action
+  '(display-buffer-in-side-window
+    (side . bottom)
+    (window-height . 0.35)
+    (dedicated . t)
+    (inhibit-same-window . t))
+  "Where the equalizer menu is shown.
+A side window keeps the player visible while giving the two columns room;
+the default transient side window is only as tall as its contents.")
+
+(transient-define-prefix orpheus-equalizer-menu--transient ()
   "The equalizer: presets, saved presets and gain editing."
   [["Equalizer"
     ("e" "Enable or disable" orpheus-equalizer-toggle)
@@ -289,6 +298,13 @@ Interactive input is a line of numbers, for example
     ("s" "Save the current gains..." orpheus-equalizer-save-preset)
     ("d" "Delete a saved preset..." orpheus-equalizer-delete-preset)
     ("g" "Set the ten gains..." orpheus-equalizer-set-gains)]])
+
+;;;###autoload
+(defun orpheus-equalizer-menu ()
+  "The equalizer: presets, saved presets and gain editing."
+  (interactive)
+  (let ((transient-display-buffer-action orpheus-equalizer--display-action))
+    (orpheus-equalizer-menu--transient)))
 
 (provide 'orpheus-equalizer)
 

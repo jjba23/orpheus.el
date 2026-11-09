@@ -852,6 +852,23 @@ and the password with it."
     (when (get-buffer "*orpheus help*")
       (kill-buffer "*orpheus help*"))))
 
+(ert-deftest orpheus-test/guides-wrap-and-open-at-the-top ()
+  "The guides use the window, wrap long lines and start at their title."
+  (dolist (case '((orpheus-help . "*orpheus help*")
+                  (orpheus-tutorial . "*orpheus tutorial*")))
+    (unwind-protect
+        (progn
+          (funcall (car case))
+          (with-current-buffer (cdr case)
+            (should visual-line-mode)
+            (should (equal wrap-prefix "  "))
+            (should-not truncate-lines)
+            (let ((window (get-buffer-window (current-buffer))))
+              (when window
+                (should (= (point-min) (window-start window)))))))
+      (when (get-buffer (cdr case))
+        (kill-buffer (cdr case))))))
+
 (ert-deftest orpheus-test/tutorial-is-a-checklist ()
   "The tutorial walks through the player and can run its own steps."
   (unwind-protect
@@ -1416,6 +1433,19 @@ appends the rest."
     (should (string-match-p "R" line))
     (should (string-match-p "Z" line))))
 
+(ert-deftest orpheus-test/ui-status-string-fits-a-width ()
+  "A narrow header elides the track instead of clipping the controls."
+  (let* ((status (orpheus-status-create :state 'play :elapsed 65 :total 200
+                                       :volume 80 :repeat t :random t))
+         (track (orpheus-track-create :title (make-string 60 ?x)
+                                      :artist "Band"))
+         (line (orpheus-ui--status-string status track 72)))
+    (should (<= (string-width line) 72))
+    (should (string-match-p "1:05 / 3:20" line))
+    (should (string-match-p "vol 80" line))
+    (should (string-match-p "R" line))
+    (should (string-match-p "Z" line))))
+
 (ert-deftest orpheus-test/ui-download-summary ()
   "The header counts active and queued transfers and their aggregate speed."
   (let ((orpheus-ui-plain-ascii t)
@@ -1935,6 +1965,68 @@ showing almost none of the list."
     (dolist (help '("Previous track" "Play" "Next track" "Repeat"
                     "Shuffle" "Single track" "Consume" "Stop"))
       (should (text-property-search-forward 'help-echo help)))))
+
+(ert-deftest orpheus-test/ui-transport-is-spaced-and-traditional ()
+  "The transport is a spaced row with stop beside the other transport keys."
+  (let ((orpheus-ui-plain-ascii nil))
+    (let* ((status (orpheus-status-create :state 'play :repeat t))
+           (row (orpheus-ui--transport status))
+           stop repeat)
+      (with-temp-buffer
+        (insert "\n" row)
+        (goto-char (point-min))
+        (text-property-search-forward 'help-echo "Stop")
+        (setq stop (point))
+        (goto-char (point-min))
+        (text-property-search-forward 'help-echo "Repeat")
+        (setq repeat (point)))
+      (should (string-match-p "  ⏮  " row))
+      (should (string-match-p "  ⏸  " row))
+      (should (string-match-p "  ⏭  " row))
+      (should (string-match-p "  ⏹  " row))
+      (should (and stop repeat (< stop repeat)))))
+  (let ((orpheus-ui-plain-ascii t))
+    (let ((row (orpheus-ui--transport nil)))
+      (should (string-match-p "  <<  " row))
+      (should (string-match-p "  X  " row))
+      (should-not (string-match-p "\\[\\]" row)))))
+
+(ert-deftest orpheus-test/download-progress-does-not-redraw-another-tab ()
+  "A transfer update redraws the Downloads tab, not the queue behind it."
+  (let ((orpheus-ui-buffer-name "*orpheus-test-download-redraw*")
+        (rendered 0)
+        (downloads-a (list (orpheus-item-create
+                            :kind 'download
+                            :data '((state . downloading) (speed . 1024)))))
+        (downloads-b (list (orpheus-item-create
+                            :kind 'download
+                            :data '((state . downloading) (speed . 2048))))))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+          (orpheus-ui-mode)
+          (setq orpheus-ui--tabs
+                (vector (orpheus-ui-tab-create
+                         :kind 'queue :title "Queue" :view 'queue
+                         :items (list (orpheus-item-create
+                                       :label "One" :kind 'track
+                                       :data '((id . 1))))))
+                orpheus-ui--tab 0)
+          (orpheus-ui--render)
+          (cl-letf (((symbol-function 'orpheus-ui--render)
+                     (lambda () (setq rendered (1+ rendered)))))
+            (orpheus-ui--set-downloads downloads-a)
+            (should (= rendered 0)))
+          (setq orpheus-ui--tabs
+                (vector (orpheus-ui-tab-create :kind 'downloads
+                                               :title "Downloads"
+                                               :view 'downloads))
+                orpheus-ui--tab 0)
+          (cl-letf (((symbol-function 'orpheus-ui--render)
+                     (lambda () (setq rendered (1+ rendered)))))
+            (orpheus-ui--set-downloads downloads-b)
+            (should (= rendered 1))))
+      (when (get-buffer orpheus-ui-buffer-name)
+        (kill-buffer orpheus-ui-buffer-name)))))
 
 (ert-deftest orpheus-test/ui-seek-seconds ()
   "A click on the progress bar seeks to the column it landed on."

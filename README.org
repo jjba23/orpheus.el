@@ -102,15 +102,20 @@ prove it is real.
   connect reports which remote commands and shell features work, and
   ~M-x orpheus-ssh-diagnose~ shows the same table on demand.  The header line
   counts active and queued transfers and shows their aggregate throughput.
-  ~d~ cancels one and ~RET~ plays a finished copy or retries a failure.
+  ~d~ cancels one and ~RET~ plays a finished copy or retries a failure.  A
+  progress update touches the header line, not the queue or another tab behind
+  the Downloads tab.
 - *Search close to home.* :: MPD searches its library, the local backend runs
   ~find~ below ~orpheus-local-directory~, and SSH runs ~find~ below
   ~orpheus-ssh-directory~; when the host has no ~find~, SSH falls back to a
   recursive ~ls~.  All three answer asynchronously and put the results in the
   same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
-  artist and album, and a coloured progress bar.  ~orpheus-ui-show-now-playing~
-  turns it off when the header line is enough.
+  artist and album, and a coloured progress bar.  Its controls carry the
+  familiar previous, play or pause, next and stop glyphs, separated from the
+  repeat, random, single and consume toggles, each with a tooltip and an ASCII
+  fallback.  ~orpheus-ui-show-now-playing~ turns the card off when the header
+  line is enough.
 - *A queue you can edit.* :: Play a row, queue a row or everything on the tab,
   mark rows the way Dired does, queue or delete just the marked ones, clear the
   queue, jump to what is playing, save the queue as a portable M3U8 playlist.
@@ -118,7 +123,8 @@ prove it is real.
   transport, the four modes, the queue, playlists, the library and the views,
   each entry next to its key.  ~H~ opens the help buffer, which explains the
   concepts behind the keys, the equalizer, and what to do when a backend is
-  silent, then prints the whole table.
+  silent, then prints the whole table.  Help and the tutorial fill the selected
+  window and wrap long lines.
 - *A tutorial in the editor.* :: ~M-x orpheus-tutorial~ walks from opening the
   player to building a queue, saving a playlist and shaping the sound, with a
   button at each step that runs it.  The help buffer links to it, so the
@@ -140,10 +146,12 @@ prove it is real.
   — a folder, a track, an album, an artist, a playlist.
 - *The transport, all of it.* :: Play, pause, stop, next, previous, seek
   forward and back, volume up and down, and the four MPD flags — repeat,
-  random, single, consume.
+  random, single, consume.  The card groups the four transport buttons apart
+  from the modes and uses the usual media glyphs, with an ASCII fallback.
 - *A status line that does not steal the screen.* :: It lives in
   ~header-line-format~, so it redraws every second while the list, the point and
-  the scroll position stay exactly where you left them.
+  the scroll position stay exactly where you left them.  It fits the window,
+  eliding the track name before the time, volume or flags disappear.
 - *Cover art.* :: For the current track and for the album folder being browsed.
   Local and SSH look for ~cover.jpg~, ~Cover.PNG~, ~cover.webp~, ~folder.*~,
   ~front.*~, ~album.*~ and ~artwork.*~ regardless of case; SSH copies a remote
@@ -456,9 +464,10 @@ The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
 lists the same table in a buffer.  The mouse
 follows the same actions: mouse-1 selects a row or tab, mouse-2 plays a row,
 and mouse-3 opens the context menu for a row, a tab or a playlist editor row.
-The now-playing card is a control panel too: the buttons under the progress bar
-play, pause, skip, stop and toggle the repeat, random, single and consume
-modes, and a click on the bar seeks to that point of the track.
+The now-playing card is a control panel too: previous, play or pause, next and
+stop carry the usual media glyphs, with the repeat, random, single and consume
+toggles in their own group; a click on the bar seeks to that point of the
+track.
 
 | Key                    | Meaning                                                  |
 |------------------------+----------------------------------------------------------|
