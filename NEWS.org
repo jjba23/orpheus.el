@@ -9,6 +9,26 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- The orpheus logo, from the jointhefreeworld icon set, now appears near the
+  top of the README and, when the frame can display images, at the start of
+  the player's tab row.  A terminal frame keeps the text-only line.
+- The README is now a landing page; the guide lives in =docs/= and links its
+  pages to each other.  The feature tour, usage walkthrough, configuration
+  reference, backend protocol, troubleshooting guide and development notes are
+  separate pages, with the original reference tables and examples preserved
+  and expanded.
+
+*** Build
+
+- Add =manifest.scm= for Guix and =flake.nix= for Nix with Xvfb, ffmpeg,
+  DejaVu Sans Mono and a Cairo-capable Emacs.  The Nix shell records the demo
+  end to end, and the GIF is regenerated with the current transport controls
+  and the logo.
+
 * 0.12.0 (2026-11-09)
 
 *** Changed

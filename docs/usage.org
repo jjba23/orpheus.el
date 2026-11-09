@@ -1,0 +1,283 @@
+#+title: Using orpheus
+#+subtitle: from a fresh install to a queue you can shape
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
+
+This page starts where installation stops.  It first gets one backend playing,
+then explains the interface and the keys; the reference tables live in
+[[file:configuration.org][Configuration]] and the protocol is in
+[[file:backends.org][Backends]].  If something does not answer, jump to
+[[file:troubleshooting.org][Troubleshooting]].
+
+* Quick start
+:PROPERTIES:
+:CUSTOM_ID: getting-started
+:END:
+
+#+begin_src emacs-lisp
+(require 'orpheus)
+
+;; A daemon on this machine, reached over its socket.
+(setq orpheus-backend 'mpd)
+(setq orpheus-mpd-socket "~/.mpd/socket")
+(orpheus)
+#+end_src
+
+For MPD over the network, leave the socket nil and set the host and port:
+
+#+begin_src emacs-lisp
+(setq orpheus-mpd-host "music.example.org")
+(setq orpheus-mpd-port 6600)
+#+end_src
+
+The password goes nowhere near this repository, and it does not need to go in
+your init either.  ~orpheus-mpd-password~ nil means "read ~MPD_PASSWORD~",
+then "ask ~auth-source~", and ~auth-source~ reads =~/.authinfo.gpg= by
+default, so GPG can hold the secret and gpg-agent asks for its passphrase once
+per session.
+
+The entry is found by ~machine~ and ~port~, and those two words are
+~orpheus-mpd-host~ and ~orpheus-mpd-port~ — ~localhost~ and ~6600~ unless you
+changed them.  That holds for a socket connection too: the socket says where to
+connect, the host and port say which entry belongs to it.  So a daemon on
+another machine needs
+
+#+begin_src emacs-lisp
+(setq orpheus-mpd-host "music.example.org")
+(setq orpheus-mpd-port 6600)
+#+end_src
+
+and an entry that spells the same host and port:
+
+#+begin_src shell
+machine music.example.org port 6600 password ...
+#+end_src
+
+Written from the values your init sets, with the secret read without echo:
+
+#+begin_src shell
+host=music.example.org port=6600      # what orpheus-mpd-host and -port say
+read -r -s -p "MPD password for $host:$port: " secret && echo
+umask 077
+printf 'machine %s port %s password %s\n' "$host" "$port" "$secret" |
+  gpg --batch --yes --quiet --encrypt --default-recipient-self \
+    > ~/.authinfo.gpg
+unset secret
+#+end_src
+
+~--default-recipient-self~ seals it for your own key; ~--recipient
+you@example.org~ seals it for another one.  ~--batch --yes~ lets the same
+recipe run a second time without stopping at a prompt.
+
+Read it back, and read the line rather than the exit status: an entry that
+stops at ~password~, or one written for a host the daemon no longer has, is not
+a password, and MPD then refuses every command it is given.
+
+#+begin_src shell
+gpg --quiet --decrypt ~/.authinfo.gpg
+#+end_src
+
+A password that is found is sent, so keep the store to the daemons it
+describes.  A daemon with no password answers ~ACK ... incorrect password~ to
+one it never asked for, and the session then fails to log in instead of
+starting without it.
+
+A ~pass~ store works instead, once Emacs is told about it.  Its secret is asked
+for only when a connection needs it, and the password leaves the connection
+once MPD has it.
+
+#+begin_src emacs-lisp
+(require 'auth-source-pass)
+(auth-source-pass-enable)
+#+end_src
+
+For a session rather than an installation the environment is enough, though
+every process of your user can read it.  ~MPD_PASSWORD~ wins over
+~auth-source~, so it overrides the store:
+
+#+begin_src shell
+export MPD_PASSWORD='...'
+#+end_src
+
+The local backend needs no daemon at all:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'local)
+(setq orpheus-local-directory "~/Music")
+(orpheus)                                  ; then 2 for the files tab, RET to play
+#+end_src
+
+or, from anywhere:
+
+#+begin_src emacs-lisp
+(orpheus-play-file "~/Music/album/01.flac")
+(orpheus-play-url "https://www.youtube.com/watch?v=...")
+#+end_src
+
+Music on another machine is copied over ssh and played by mpv here:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'ssh)
+(setq orpheus-ssh-host "music.example.org")   ; or "me@music.example.org"
+(setq orpheus-ssh-directory "Music")          ; nil starts in the login home
+(orpheus)
+#+end_src
+
+There is no daemon on the far side: ~ls -1p~ fills the files tab, a remote
+~find~ fills Search, falling back to a recursive ~ls~ when the host has no
+~find~, and RET starts a transfer.  Bytes go straight to a private
+cache file as they arrive, so another download never freezes Emacs; the
+Downloads tab shows what is queued and what is moving, and ~d~ cancels a row.
+When the remote shell rejects ~cat~, the transfer uses ~sftp~ instead;
+~orpheus-ssh-sftp-program~ names the program (which must be installed here),
+and ~orpheus-ssh-sftp-extra-args~ carries its options, such as ~-P 2222~.  A
+one-time check when the backend connects reports which remote commands and
+shell features work, and ~M-x orpheus-ssh-diagnose~ shows the same table on
+demand.  Playback begins once the copy is complete, so a large track spends its
+transfer time downloading rather than playing.  While the current track plays, the next
+~orpheus-ssh-prefetch~ queue entries are fetched in the background, and the last
+~orpheus-ssh-cache-count~ completed tracks stay on disk, so replaying one or
+moving to the next needs no second transfer.  A play request always goes ahead
+of a prefetch.  The cache lives in a private temporary directory, which is
+deleted when the backend disconnects and when Emacs exits.  Your key
+must already let you in, because ssh has no terminal in which to ask for a
+passphrase.  A host whose key is not in =~/.ssh/known_hosts= needs one
+~ssh music.example.org~ from a terminal first, or
+~(setq orpheus-ssh-extra-args '("-o" "StrictHostKeyChecking=accept-new"))~ once.
+mpv must be installed here, and the audio comes out of this machine.  The start
+directory is relative to the login home or absolute; a leading =~= is not
+expanded, because the path is quoted for the remote shell.
+
+* Getting help
+:PROPERTIES:
+:CUSTOM_ID: getting-help
+:END:
+
+~?~ opens the command menu, ~H~ opens the help buffer, and
+~M-x orpheus-tutorial~ starts a guided tour.  The help buffer is the map: it
+explains what the tabs, the queue, the equalizer and the backends do, lists
+every key, and says where to look when a backend is not answering.  The
+tutorial is the shortest path from a fresh install to a playing track, and
+each step is a button as well as a key.  [[file:configuration.org][Configuration]] and
+[[file:backends.org][Backends]] are the reference for the options and the backend protocol.  For a
+quick answer without leaving the player, ~?~ is usually enough; for an
+explanation, ~H~.
+
+* Keys
+:PROPERTIES:
+:CUSTOM_ID: keys
+:END:
+
+The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
+~C-n~ and ~C-p~ move, ~C-v~ and ~M-v~ page, ~C-s~ searches, ~C-x C-s~ saves,
+~q~ buries the player.  ~?~ opens a transient menu of the commands, and ~H~
+lists the same table in a buffer.  The mouse
+follows the same actions: mouse-1 selects a row or tab, mouse-2 plays a row,
+and mouse-3 opens the context menu for a row, a tab or a playlist editor row.
+The now-playing card is a control panel too: previous, play or pause, next and
+stop carry the usual media glyphs, with the repeat, random, single and consume
+toggles in their own group; a click on the bar seeks to that point of the
+track.
+
+| Key                    | Meaning                                                  |
+|------------------------+----------------------------------------------------------|
+| ~RET~                  | play the row or portable playlist, or open the album, artist or directory |
+| ~n~, ~C-n~, ~j~        | next row                                                 |
+| ~p~, ~C-p~, ~k~        | previous row                                             |
+| ~C-v~, ~M-v~           | one screen down, one screen up                           |
+| ~M-<~, ~M->~           | first row, last row                                      |
+| ~TAB~, ~S-TAB~         | next tab, previous tab                                   |
+| ~1~ … ~7~              | the tabs, in the order shown; SSH adds Downloads after Queue |
+| ~^~, ~C-b~             | back up one level in the tab                             |
+| ~m~, ~u~               | mark the row, unmark it                                  |
+| ~U~, ~t~               | unmark everything, invert the marks                      |
+| ~a~, ~A~               | queue the marked rows (or this one), queue everything here |
+| ~e~                    | edit the portable playlist at point (Playlists tab)       |
+| ~N~                    | create a new playlist, asking for its directory          |
+| ~i~                    | insert the player's tracks in the playlist editor        |
+| ~d~, ~C-k~             | delete from the queue, or cancel a download               |
+| ~D~                    | clear the queue                                          |
+| ~/~, ~C-s~             | search                                                   |
+| ~C~                    | jump to the playing row                                  |
+| ~SPC~                  | play or pause                                            |
+| ~s~                    | stop                                                     |
+| ~>~, ~<~               | next track, previous track                               |
+| ~f~, ~b~               | seek forward, seek back                                  |
+| ~M-<up>~, ~M-<down>~   | volume up, volume down (also ~+~ and ~-~)                |
+| ~z~, ~x~, ~c~, ~v~     | repeat, random, consume, single                          |
+| ~M-u~, ~M-U~           | update the library, rescan it                            |
+| ~C-x C-s~              | save the queue as a portable M3U8 playlist; a new name asks where |
+| ~g~                    | refresh the status and the current tab                   |
+| ~V~                    | the spectrum visualizer                                  |
+| ~?~                    | the menu: transport, modes, queue, playlists, views      |
+| ~H~                    | help: concepts, keys and troubleshooting                 |
+| ~E~                    | the equalizer: presets, save, delete, set the gains      |
+| ~q~                    | bury the player                                          |
+| ~mouse-1~, ~mouse-2~   | select a row, play it                                    |
+| ~mouse-1~ on the card  | press a transport button; on the bar, seek to that point |
+| ~mouse-3~              | open the row, tab or playlist editor menu                |
+
+On the Downloads tab, RET plays a finished copy, retries a failed transfer, or
+waits for one that is still moving; ~d~ cancels the selected transfer.  The
+header line counts active and queued transfers and shows their aggregate
+throughput while they run.  On the Playlists tab, ~a~ appends a portable
+playlist's tracks, ~d~ deletes the portable playlist file, and ~e~ opens its
+editor; RET loads it in place of the queue.
+
+Queueing is guarded: ~A~ (and ~a~ with many marks) asks before adding more than
+~orpheus-ui-add-confirm-threshold~ rows, and a queue over
+~orpheus-ui-queue-warning-size~ says how to clear it.  MPD also refuses a
+directory URI, because its ~add~ would expand the whole tree.  Connecting never
+queues anything; a queue that is already large was restored by MPD's own
+~state_file~, and ~D~ empties it.
+
+Outside the player buffer:
+
+| Command                  | Meaning                                          |
+|--------------------------+--------------------------------------------------|
+| ~M-x orpheus~            | open the player                                  |
+| ~M-x orpheus-play-pause~ | play or pause without leaving what you are doing |
+| ~M-x orpheus-next~       | next track                                       |
+| ~M-x orpheus-help~       | the help buffer: concepts, keys and troubleshooting |
+| ~M-x orpheus-tutorial~   | a guided tour through the player                 |
+| ~M-x orpheus-equalizer-menu~ | equalizer presets, save and delete           |
+| ~M-x orpheus-volume-up~  | volume up by ~orpheus-volume-step~               |
+| ~M-x orpheus-visualizer~ | spectrum visualizer                              |
+| ~M-x orpheus-ssh-diagnose~ | check the remote SSH commands and shell features |
+| ~M-x orpheus-mode-line-mode~ | show the track in the mode line              |
+| ~M-x orpheus-quit~       | stop reading the status and close the player     |
+
+All of the transport commands are ordinary interactive functions, so any of
+them can be bound in ~global-map~ or in a repeat map.
+
+* Graphics, and how it degrades
+:PROPERTIES:
+:CUSTOM_ID: graphics
+:END:
+
+- *In a graphical frame* the cover for the current track, or for the album
+  folder being browsed when the track has none, is drawn above the list in a
+  box of ~orpheus-ui-art-size~ that keeps its height whether a cover is
+  loading, missing or drawn, so the list never moves under it, and a window
+  left with too few rows under the cover grows to fit them; an image Emacs
+  cannot decode is skipped.  The visualizer is an SVG bar graph with rounded
+  bars and a colour ramp, or the block-character graph when Emacs was built
+  without SVG.
+- *In a terminal* no cover is fetched or drawn, and the list, the status line,
+  the progress bar and the faces are unchanged.  The visualizer falls back to
+  block characters, which is a real rendering, not a placeholder.
+- *In either* the status line is text and the progress bar is Unicode by
+  default and ASCII with ~orpheus-ui-plain-ascii~.
+- *Over SSH* nothing is different from a local terminal, because nothing needs
+  a display: ~display-graphic-p~ is the only test that matters.
+
+
+* Where to go next
+
+The keys above are the whole player; the options behind them are in
+[[file:configuration.org][Configuration]].  When a row will not play or a backend
+stays silent, [[file:troubleshooting.org][Troubleshooting]] has the checks in order.

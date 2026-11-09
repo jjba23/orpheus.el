@@ -1,0 +1,185 @@
+#+title: Features
+#+subtitle: what orpheus does, and what it deliberately leaves out
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
+
+This is the long version of the feature list.  The [[file:../README.org][README]] keeps the short
+one; this page says what each part is for and how it behaves at the edges.
+
+* What the player does
+:PROPERTIES:
+:CUSTOM_ID: features
+:END:
+
+** The player
+:PROPERTIES:
+:CUSTOM_ID: the-player
+:END:
+
+- *The rmpc tabs.* :: MPD gets Queue, Directories, Artists, Album Artists,
+  Albums, Playlists and Search, numbered 1 to 7, each keeping its own place in
+  the hierarchy while you move between them.  Every backend gets Queue,
+  Directories, Playlists and Search, and one with file transfers adds Downloads
+  after Queue.
+- *A visible transfer queue.* :: SSH downloads run in the background, up to
+  ~orpheus-ssh-concurrency~ at once.  A play request jumps ahead of prefetches,
+  the next ~orpheus-ssh-prefetch~ queue entries arrive before you need them,
+  and the Downloads tab shows every transfer's state, completion, rolling
+  speed, ETA and bytes.  The file streams with ~cat~; a separate ~ls -l~
+  probe supplies its size for progress when the host allows it, so a host that
+  cannot report a size still downloads and shows ~--%~.  When the shell
+  rejects ~cat~, the transfer goes over ~sftp~ instead.  A one-time check on
+  connect reports which remote commands and shell features work, and
+  ~M-x orpheus-ssh-diagnose~ shows the same table on demand.  The header line
+  counts active and queued transfers and shows their aggregate throughput.
+  ~d~ cancels one and ~RET~ plays a finished copy or retries a failure.  A
+  progress update touches the header line, not the queue or another tab behind
+  the Downloads tab.
+- *Search close to home.* :: MPD searches its library, the local backend runs
+  ~find~ below ~orpheus-local-directory~, and SSH runs ~find~ below
+  ~orpheus-ssh-directory~; when the host has no ~find~, SSH falls back to a
+  recursive ~ls~.  All three answer asynchronously and put the results in the
+  same Search tab.
+- *A now-playing card.* :: Above the list, a centred card shows the track, its
+  artist and album, and a coloured progress bar.  Its controls carry the
+  familiar previous, play or pause, next and stop glyphs, separated from the
+  repeat, random, single and consume toggles, each with a tooltip and an ASCII
+  fallback.  ~orpheus-ui-show-now-playing~ turns the card off when the header
+  line is enough.
+- *A queue you can edit.* :: Play a row, queue a row or everything on the tab,
+  mark rows the way Dired does, queue or delete just the marked ones, clear the
+  queue, jump to what is playing, save the queue as a portable M3U8 playlist.
+- *A menu, not a key dump.* :: ~?~ opens a transient menu that groups the
+  transport, the four modes, the queue, playlists, the library and the views,
+  each entry next to its key.  ~H~ opens the help buffer, which explains the
+  concepts behind the keys, the equalizer, and what to do when a backend is
+  silent, then prints the whole table.  Help and the tutorial fill the selected
+  window and wrap long lines.
+- *A tutorial in the editor.* :: ~M-x orpheus-tutorial~ walks from opening the
+  player to building a queue, saving a playlist and shaping the sound, with a
+  button at each step that runs it.  The help buffer links to it, so the
+  answer to "where do I start?" is one command away.
+- *A sound you can shape.* :: ~E~ opens the equalizer: flat, bass, vocal,
+  treble and loudness presets, a ten-band gain line, and presets you save
+  under your own name.  It works with the local and ssh backends, which play
+  through mpv; MPD's audio leaves through the daemon's own output, so Emacs
+  cannot filter it.
+- *A playlist in two answers.* :: ~N~ asks for a name and then where to keep
+  it, starting in ~orpheus-playlist-new-directory~ (=~/Music= by default), and
+  opens the new playlist in the editor.  Saving a queue asks the same question
+  when the name is new.
+- *It opens where you are.* :: ~M-x orpheus~ reuses the selected window instead
+  of splitting the frame.  ~orpheus-ui-display-action~ asks for a pop-up window
+  only when you want one.
+- *Dired fingers and icons.* :: ~RET~ enters a directory, ~^~ leaves it, ~m~,
+  ~u~, ~U~ and ~t~ mark rows, and every row starts with a glyph for what it is
+  — a folder, a track, an album, an artist, a playlist.
+- *The transport, all of it.* :: Play, pause, stop, next, previous, seek
+  forward and back, volume up and down, and the four MPD flags — repeat,
+  random, single, consume.  The card groups the four transport buttons apart
+  from the modes and uses the usual media glyphs, with an ASCII fallback.
+- *A status line that does not steal the screen.* :: It lives in
+  ~header-line-format~, so it redraws every second while the list, the point and
+  the scroll position stay exactly where you left them.  It fits the window,
+  eliding the track name before the time, volume or flags disappear.
+- *Cover art.* :: For the current track and for the album folder being browsed.
+  Local and SSH look for ~cover.jpg~, ~Cover.PNG~, ~cover.webp~, ~folder.*~,
+  ~front.*~, ~album.*~ and ~artwork.*~ regardless of case; SSH copies a remote
+  cover into the cache.  MPD uses its embedded ~albumart~ or ~readpicture~.
+  Cached under ~orpheus-cache-directory~, drawn at ~orpheus-ui-art-size~ in a
+  graphical frame, and skipped without a fetch in a terminal.
+- *Song change notifications.* :: Through ~notifications-notify~, with the cover
+  as the icon, on by default and one flag away.
+- *A Greek palette.* :: Gold, marble, Aegean blue, iris and olive, chosen for a
+  dark or light frame, with a visualizer ramp that runs from deep sea to gold.
+- *A mode line you can click.* :: ~orpheus-mode-line-mode~ puts the playing
+  track in the mode line of every buffer; ~mouse-1~ opens the player,
+  ~mouse-2~ plays or pauses, and ~mouse-3~ opens the transport menu, so the
+  mode line controls the music without changing the buffer you are in.
+- *Dired and URLs.* :: ~orpheus-play-file~ and ~orpheus-add-file~ take the file
+  at point; ~orpheus-play-url~ takes a link, and mpv hands a video page to
+  yt-dlp when it is installed.
+
+** Portable playlists
+:PROPERTIES:
+:CUSTOM_ID: portable-playlists
+:END:
+
+A playlist is an M3U8 file, not an object owned by a backend.  ~N~ creates an
+empty one: it asks for a name and then for the directory to keep it in,
+starting in ~orpheus-playlist-new-directory~ (=~/Music= by default), so a
+playlist can sit next to the album it was made from.  ~C-x C-s~ writes the
+current queue as a playlist; a new name asks the same question, and an existing
+playlist is overwritten where it is.  The Playlists tab lists both
+~orpheus-playlist-directory~ (by default
+~$XDG_DATA_HOME/orpheus/playlists~, or =~/.local/share/orpheus/playlists=) and
+~orpheus-playlist-new-directory~: RET replaces the queue with a playlist, ~a~
+appends its tracks, ~e~ opens it in an editor buffer, and ~d~ deletes the file
+after asking.  MPD's own server playlists appear in the same tab, after the
+portable ones, and still open and play as they did before.  MPD's backend-level
+~save~ and ~load~ command actions remain for server-playlist compatibility; the
+player never uses them, so the queue is always written as a portable file.
+
+Reading accepts M3U and PLS as well as M3U8, so a playlist exported by another
+player can be dropped into the directory.  Writing is always UTF-8 M3U8 with
+~#EXTM3U~ and ~#EXTINF~ labels.
+
+The editor keeps the parsed tracks, not the M3U8 text, so moving a row with
+~M-<up>~ or ~M-<down>~ and removing one with ~d~ preserve its tags; ~C-x C-s~
+writes the file back.  ~i~ inserts the player's marked tracks, or its current
+row, above the editor row at point, so a playlist can be assembled from the
+queue or any browsing tab without retyping a path.  The editor also supports
+mouse-1 selection and a mouse-3 menu for insert, reorder, remove and save.  It
+edits M3U and M3U8 files.  PLS is read-only there, because writing an M3U8 body
+under a ~.pls~ name would make the file unreadable next time; export it as M3U8
+first.
+
+A portable playlist stores library-relative paths whenever the queue names a
+file below a backend's root.  Saving strips ~orpheus-local-directory~ for the
+local backend, ~orpheus-ssh-directory~ for SSH, and the same local root for
+MPD; playing expands a relative path through the active backend.  A playlist
+saved from ~local~ therefore plays through ~mpd~ or ~ssh~ when those libraries
+mirror it, and one saved from either of those plays locally.  An absolute path
+outside the configured roots is still passed through unchanged, because no
+format can know where another machine keeps it.
+
+** The visualizer
+:PROPERTIES:
+:CUSTOM_ID: the-visualizer
+:END:
+
+~orpheus-visualizer~ runs [[https://github.com/karlstav/cava][cava]], reads its frames as they arrive and draws
+them: block characters in a terminal, an SVG bar graph with a colour ramp in a
+graphical frame that can draw SVG, redrawn ~orpheus-vis-framerate~ times a
+second.  cava listens
+to the system, not to one player, so it draws the same bars for MPD, for mpv
+and for anything else the machine is playing.
+
+#+begin_quote
+The image is the package's own ~orpheus-vis--svg~ fed a sample frame and
+exported with Inkscape — no screenshot of a separate application.
+#+end_quote
+
+** What is not here yet
+:PROPERTIES:
+:CUSTOM_ID: what-is-not-here-yet
+:END:
+
+Named so that nobody guesses: lyrics, per-track rating, a command mode with
+arguments, pane splitting inside a tab, mouse drag of queue rows, and gapless
+playback on the local backend (mpv plays one file at a time there, so the gap
+is the time Emacs takes to load the next).  MPD gives gapless playback by
+itself, because the daemon owns the whole queue.
+
+
+* Where to go next
+
+- [[file:usage.org][Using orpheus]] starts the player, explains the keys and walks through the
+  tabs.
+- [[file:configuration.org][Configuration]] lists every option with its default.
+- [[file:backends.org][Backends]] explains MPD, local files, SSH, and how to add a fourth.
+- [[file:troubleshooting.org][Troubleshooting]] is the symptom-by-symptom page.

@@ -1,0 +1,203 @@
+#+title: Configuration
+#+subtitle: every orpheus option, its default, and a few complete examples
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:usage.org][Using orpheus]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
+
+Every option below lives in the ~orpheus~ customization group, so
+
+#+begin_src emacs-lisp
+M-x customize-group RET orpheus RET
+#+end_src
+
+shows the same list with widgets and documentation.  The tables are the quick
+reference; the examples at the end show the settings that are easiest to get
+wrong.  Backend-specific setup, including MPD passwords and SSH keys, is in
+[[file:backends.org][Backends]].
+
+* Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+
+** The session
+:PROPERTIES:
+:CUSTOM_ID: the-session
+:END:
+
+| Option                     | Default | Meaning                                        |
+|----------------------------+---------+------------------------------------------------|
+| ~orpheus-backend~          | ~mpd~   | ~mpd~, ~local~, or any registered backend      |
+| ~orpheus-refresh-interval~ | ~1.0~   | seconds between two status reads               |
+| ~orpheus-volume-step~      | ~2~     | volume change of the volume commands           |
+| ~orpheus-seek-step~        | ~5~     | seconds of the seek commands                   |
+| ~orpheus-notifications~    | ~t~     | notify on track change                         |
+| ~orpheus-mode-line-width~  | ~40~    | columns the mode-line track is given           |
+| ~orpheus-cache-directory~  | ~$XDG_CACHE_HOME/orpheus/~ | cover art and generated files |
+
+** The MPD backend
+:PROPERTIES:
+:CUSTOM_ID: the-mpd-backend
+:END:
+
+| Option                    | Default     | Meaning                                    |
+|---------------------------+-------------+--------------------------------------------|
+| ~orpheus-mpd-host~        | ~"localhost"~ | host, when the socket is nil             |
+| ~orpheus-mpd-port~        | ~6600~      | port, when the socket is nil               |
+| ~orpheus-mpd-socket~      | ~nil~       | unix socket path                           |
+| ~orpheus-mpd-password~    | ~nil~       | password, or nil for ~MPD_PASSWORD~/auth-source |
+| ~orpheus-mpd-search-tag~  | ~"any"~     | the tag search looks in                    |
+
+** The local backend
+:PROPERTIES:
+:CUSTOM_ID: the-local-backend
+:END:
+
+| Option                       | Default     | Meaning                                |
+|------------------------------+-------------+----------------------------------------|
+| ~orpheus-local-directory~    | ="~/Music"= | where the files tab starts             |
+| ~orpheus-local-mpv-program~  | ~"mpv"~     | the player                             |
+| ~orpheus-local-audio-driver~ | ~nil~       | what follows ~--ao=~, or nil for the platform |
+| ~orpheus-local-extra-args~   | ~nil~       | more mpv arguments, as a list          |
+| ~orpheus-local-socket~       | ~nil~       | IPC socket path, or nil for a temporary one |
+| ~orpheus-local-cover-names~  | ~cover.jpg~, ~front.jpg~, … | files looked for next to a track or album folder; local and SSH |
+| ~orpheus-local-extensions~   | ~mp3~, ~flac~, ~opus~, … | what the files tab shows |
+
+~orpheus-local-audio-driver~ is the escape hatch for a machine that needs a
+specific device: ~"pipewire"~, ~"coreaudio/1"~, ~"wasapi"~, ~"alsa/hw:1,0"~.
+Left nil, the platform decides (see [[file:backends.org#platforms][Platforms]]).
+
+** The SSH backend
+:PROPERTIES:
+:CUSTOM_ID: the-ssh-backend
+:END:
+
+| Option                          | Default | Meaning                                         |
+|---------------------------------+---------+-------------------------------------------------|
+| ~orpheus-ssh-host~              | ~nil~   | ~host~ or ~user@host~; nil means not configured |
+| ~orpheus-ssh-directory~         | ~nil~   | remote start directory; nil is the login home   |
+| ~orpheus-ssh-program~           | ~"ssh"~ | the ssh program                                 |
+| ~orpheus-ssh-extra-args~        | ~nil~   | more ssh arguments, as a list                   |
+| ~orpheus-ssh-sftp-program~      | ~"sftp"~ | sftp program used when cat is unavailable      |
+| ~orpheus-ssh-sftp-extra-args~   | ~nil~   | more sftp arguments, as a list                  |
+| ~orpheus-ssh-concurrency~       | ~2~     | simultaneous ssh downloads                      |
+| ~orpheus-ssh-prefetch~          | ~2~     | upcoming queue tracks fetched in the background |
+| ~orpheus-ssh-cache-count~       | ~32~    | completed tracks kept in the cache              |
+
+** Playlists
+:PROPERTIES:
+:CUSTOM_ID: playlist-configuration
+:END:
+
+| Option                       | Default                           | Meaning                                             |
+|------------------------------+-----------------------------------+-----------------------------------------------------|
+| ~orpheus-playlist-directory~ | ~$XDG_DATA_HOME/orpheus/playlists~ | where portable playlists are read and written       |
+| ~orpheus-playlist-new-directory~ | =~/Music= | directory offered for a new playlist              |
+
+The default falls back to =~/.local/share/orpheus/playlists= when
+~XDG_DATA_HOME~ is unset.  The directory is made on the first save; an empty
+one is a tab with no rows.
+
+** The equalizer
+:PROPERTIES:
+:CUSTOM_ID: equalizer
+:END:
+
+Only the local and SSH backends can apply it: both play through mpv.  The MPD
+backend returns nil from ~orpheus-backend-equalizer~, and pressing ~E~ says so,
+because its audio leaves through the daemon's output.
+
+| Option                         | Default                          | Meaning |
+|--------------------------------+----------------------------------+---------|
+| ~orpheus-equalizer-enabled~    | ~nil~                            | apply the preset to the backend |
+| ~orpheus-equalizer-preset~     | ~"flat"~                         | preset used when none was loaded yet |
+| ~orpheus-equalizer-bands~      | 31, 62, … 16000                  | frequencies, in Hz, one gain each |
+| ~orpheus-equalizer-max-gain~   | ~12~                             | largest boost or cut, in dB |
+| ~orpheus-equalizer-preset-file~ | ~$XDG_DATA_HOME/orpheus/equalizer.json~ | saved presets, as JSON |
+
+A preset is one gain in dB for each frequency in ~orpheus-equalizer-bands~.
+The built-ins are flat, bass, vocal, treble and loudness.  Saving a preset
+writes every user preset to ~orpheus-equalizer-preset-file~, so the file can be
+copied between machines:
+
+#+begin_src json
+{"night": [0, 0, -1, -2, 0, 1, 2, 3, 2, 1]}
+#+end_src
+
+A user preset with a built-in's name replaces it.
+~M-x orpheus-equalizer-set-gains~ reads a line of ten numbers for a one-off
+shape, and ~M-x orpheus-equalizer-save-preset~ keeps the current gains under a
+name.
+
+** The interface and the visualizer
+:PROPERTIES:
+:CUSTOM_ID: the-interface-and-the-visualizer
+:END:
+
+| Option                      | Default   | Meaning                                  |
+|-----------------------------+-----------+------------------------------------------|
+| ~orpheus-ui-buffer-name~    | ~"*orpheus*"~ | the player's buffer                  |
+| ~orpheus-ui-plain-ascii~    | ~nil~     | ASCII glyphs instead of Unicode          |
+| ~orpheus-ui-icons~          | ~t~       | a glyph for each row's kind              |
+| ~orpheus-ui-show-art~       | ~t~       | draw cover art in a graphical frame      |
+| ~orpheus-ui-show-now-playing~ | ~t~     | draw the now-playing card above the list |
+| ~orpheus-ui-art-size~       | ~220~     | longest side of the art, in pixels       |
+| ~orpheus-ui-display-action~ | same window | how ~orpheus-ui-open~ shows the player  |
+| ~orpheus-ui-cache-seconds~  | ~30~      | seconds a loaded tab is reused           |
+| ~orpheus-ui-image-cache-size~ | ~64~    | decoded covers kept for redraws          |
+| ~orpheus-ui-mode-bindings~  | ~nil~     | (KEY . COMMAND) pairs applied to the keymap |
+| ~orpheus-ui-progress-width~ | ~16~      | columns of the progress bar              |
+| ~orpheus-progress-filled-char~ | ~━~    | the played part of the bar               |
+| ~orpheus-progress-empty-char~  | ~─~    | the rest of the bar                      |
+| ~orpheus-vis-program~       | ~"cava"~  | the visualizer program                   |
+| ~orpheus-vis-bars~          | ~32~      | bars asked for                           |
+| ~orpheus-vis-framerate~     | ~30~      | frames per second drawn                  |
+| ~orpheus-vis-input~         | ~nil~     | cava's input method, or nil for the platform |
+| ~orpheus-vis-graphical~     | ~t~       | SVG bars in a graphical frame            |
+| ~orpheus-vis-colors~        | five colours | the bar ramp, quiet to loud           |
+
+
+* Complete examples
+
+A daemon on this machine, with a shorter refresh and a larger cover:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'mpd
+      orpheus-mpd-socket "~/.mpd/socket"
+      orpheus-refresh-interval 0.5
+      orpheus-ui-art-size 260)
+(orpheus)
+#+end_src
+
+A local library, with the equalizer ready and the mode line showing the track:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'local
+      orpheus-local-directory "~/Music"
+      orpheus-equalizer-enabled t
+      orpheus-equalizer-preset "bass")
+(orpheus-mode-line-mode 1)
+#+end_src
+
+Music copied from another machine, with three transfers in flight:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'ssh
+      orpheus-ssh-host "music.example.org"
+      orpheus-ssh-directory "Music"
+      orpheus-ssh-concurrency 3)
+(orpheus)
+#+end_src
+
+In a graphical frame, the first line of the player shows the small orpheus logo
+before the tabs.  There is no option to hide it; a terminal frame simply draws
+the text without it.
+
+* Where to go next
+
+- [[file:backends.org][Backends]] turns these options into a working connection.
+- [[file:usage.org][Using orpheus]] explains what the keys do once the player is open.
+- [[file:development.org][Development]] is for testing a change to an option or a backend.

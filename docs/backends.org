@@ -1,0 +1,186 @@
+#+title: Backends
+#+subtitle: MPD, local files, SSH, the protocol, and the platform details
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]]
+
+A backend is the only part that knows how to talk to a player.  The interface
+is written once; MPD, mpv and SSH are the three implementations that keep it
+honest.  Choose one first, then follow its section.
+
+| Backend | Best for | Needs |
+|---------+----------+-------|
+| MPD     | an existing library and daemon, especially on another machine | ~mpd~ and a running daemon |
+| local   | files and URLs on this machine | ~mpv~; ~ffmpeg~ for extracted covers, ~yt-dlp~ for video links |
+| SSH     | a library on a remote machine with no daemon there | ~ssh~; ~sftp~ only when the remote shell cannot run ~cat~ |
+
+The trade-off is where the queue lives.  MPD owns its queue in the daemon;
+local and SSH keep the queue in Emacs, and SSH copies each track before mpv
+plays it.  MPD can be gapless because it owns the whole queue; the local
+backend plays one file at a time.  The visualizer is independent of all three:
+it listens to the system output through cava.
+
+* Backends
+:PROPERTIES:
+:CUSTOM_ID: backends
+:END:
+
+** What a backend is
+:PROPERTIES:
+:CUSTOM_ID: what-a-backend-is
+:END:
+
+A backend is a ~cl-defstruct~ that includes ~orpheus-backend~ and implements
+these generics from =orpheus-backend.el=:
+
+| Generic                          | Meaning                                        |
+|----------------------------------+------------------------------------------------|
+| ~orpheus-backend-connected-p~    | is it ready to take commands?                  |
+| ~orpheus-backend-connect~        | connect, then call back with the backend or nil |
+| ~orpheus-backend-disconnect~     | close it                                       |
+| ~orpheus-backend-status~         | an ~orpheus-status~: state, elapsed, total, volume, flags, song id |
+| ~orpheus-backend-track~          | an ~orpheus-track~: URI, title, artist, album, duration, … |
+| ~orpheus-backend-queue~          | the queue as ~orpheus-item~ rows                |
+| ~orpheus-backend-browse~         | one tab's rows, for a kind and a path           |
+| ~orpheus-backend-add~            | append URIs to the queue                       |
+| ~orpheus-backend-play-uri~       | play a URI now                                 |
+| ~orpheus-backend-portable-uri~   | store a URI as a library-relative path          |
+| ~orpheus-backend-playlist-uri~   | resolve a playlist URI for the backend          |
+| ~orpheus-backend-command~        | play, pause, toggle, stop, next, previous, seek, volume, repeat, random, single, consume, update, rescan, clear, shuffle, delete, save, playpos, playid, load |
+| ~orpheus-backend-equalizer~      | set the mpv audio filter chain, or nil when the backend cannot |
+| ~orpheus-backend-album-art~      | a file path to the cover, or nil               |
+| ~orpheus-backend-downloads~      | active and recent transfers as rows, when it has a ~downloads~ capability |
+| ~orpheus-backend-cancel-download~ | cancel the transfer for a URI                 |
+| ~orpheus-backend-capabilities~   | which of the browse kinds it can do            |
+
+The browse kinds are ~queue~, ~downloads~, ~directories~, ~artists~,
+~albumartists~, ~albums~, ~playlists~ and ~search~; the interface draws a tab
+per kind a backend claims.  A row is an ~orpheus-item~ with a label, a detail column, a
+kind, and an alist whose ~uri~ makes it playable and whose ~browse~ is a
+~(KIND . ARG)~ to descend into.
+
+Three backends are shipped and are the reference implementations:
+
+- =orpheus-mpd.el= — a complete MPD client on ~make-network-process~: TCP or a
+  unix socket, password, serialized replies, ~ACK~ errors, and the ~albumart~
+  and ~readpicture~ binary payloads for cover art.
+- =orpheus-local.el= — mpv over its JSON IPC socket, with the queue kept in
+  Emacs, tags read from mpv's ~metadata~ property, cover art found next to the
+  file or in its album folder, or extracted with ffmpeg, and URLs delegated to
+  mpv (and so to yt-dlp).
+- =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
+  files tab, ~find~ fills Search, and ~cat~ streams the chosen track into a
+  private cache file; a cover in the track's folder is copied to the same cache.
+  ~sftp~ takes over when the shell rejects ~cat~.  A one-time check reports the
+  remote commands and shell features.  Transfers run
+  in a queue of at most ~orpheus-ssh-concurrency~, a play request goes ahead of
+  the background prefetches, and the Downloads tab shows each one.  The local
+  backend plays a copy once it is complete.  There is no daemon on the far side,
+  and the cache goes away on disconnect and when Emacs exits.
+
+** Adding one
+:PROPERTIES:
+:CUSTOM_ID: adding-one
+:END:
+
+Register a constructor and implement the generics:
+
+#+begin_src emacs-lisp
+(cl-defstruct (orpheus-spotify (:include orpheus-backend)
+                               (:constructor make-orpheus-spotify)
+                               (:conc-name orpheus-spotify-instance-))
+  process)
+
+(orpheus-register-backend 'spotify #'make-orpheus-spotify
+                          "Spotify through a command line client")
+
+(cl-defmethod orpheus-backend-connected-p ((backend orpheus-spotify))
+  "Return non-nil when the client is running."
+  (process-live-p (orpheus-spotify-instance-process backend)))
+
+(cl-defmethod orpheus-backend-command ((backend orpheus-spotify) action &optional value)
+  "Run ACTION on the Spotify client, with VALUE when it takes one."
+  (ignore backend value)
+  (pcase action
+    ('toggle (orpheus--spotify-call "play-pause"))
+    ('next   (orpheus--spotify-call "next"))))
+
+(cl-defmethod orpheus-backend-capabilities ((_backend orpheus-spotify))
+  "Spotify knows a queue and a search, and nothing about MPD's library."
+  '(queue search))
+#+end_src
+
+Two things make a backend feel finished: it calls its callbacks from process
+filters rather than from a blocking read, and it degrades by claiming fewer
+capabilities instead of lying about them.  A skeleton like the one above needs
+a ~orpheus--spotify-call~ of your own — an asynchronous wrapper around
+whichever client you drive, ~spotify_player~ and ~playerctl~ being the usual
+candidates.  No Spotify backend ships here because its authentication belongs
+to your account, not to this repository.
+
+** YouTube
+:PROPERTIES:
+:CUSTOM_ID: youtube
+:END:
+
+No extra backend is needed: with ~orpheus-backend~ set to ~local~, any URL mpv
+can open plays —
+
+#+begin_src emacs-lisp
+(orpheus-play-url "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+#+end_src
+
+— and when ~yt-dlp~ is installed mpv uses it automatically.  Seeking and
+metadata work where the extractor provides them.
+
+* Platforms
+:PROPERTIES:
+:CUSTOM_ID: platforms
+:END:
+
+** GNU/Linux and PipeWire
+:PROPERTIES:
+:CUSTOM_ID: gnulinux-and-pipewire
+:END:
+
+MPD's own audio output is the PipeWire, PulseAudio or ALSA one you configured
+in ~mpd.conf~; orpheus does not touch it.  The local backend asks mpv for
+~--ao=pipewire,pulse,alsa~, so PipeWire is used when it is there and mpv falls
+back by itself when it is not.  cava captures with ~method = pipewire~, the
+monitor of the default sink, which is why the visualizer draws what any player
+is playing.
+
+** macOS
+:PROPERTIES:
+:CUSTOM_ID: macos
+:END:
+
+MPD uses CoreAudio.  The local backend asks mpv for ~--ao=coreaudio~, and
+~orpheus-vis-input~ defaults to cava's ~portaudio~ input.  That input records
+an *input* device, so hearing system output in the visualizer needs a loopback
+device such as BlackHole; without one, MPD and mpv still play, and the
+visualizer shows silence.  Cover art, notifications and the rest are the same
+as anywhere else.
+
+** Windows and everything else
+:PROPERTIES:
+:CUSTOM_ID: windows-and-everything-else
+:END:
+
+The local backend asks mpv for ~--ao=wasapi~ on Windows and drives it over a
+named pipe; that path is written and compiled but untested, so treat it as
+unproven rather than supported.  MPD works wherever MPD does — that includes
+an MPD on another machine, which is the case that needs no platform support at
+all.  Nothing in the package reads or writes a path in a platform-specific way
+beyond ~temporary-file-directory~ and ~orpheus-cache-directory~.
+
+
+* Where to go next
+
+- [[file:configuration.org][Configuration]] has the option tables for every backend.
+- [[file:usage.org][Using orpheus]] covers MPD passwords, local playback and SSH transfers in
+  context.
+- [[file:troubleshooting.org][Troubleshooting]] starts with the checks to run when a connection is silent.

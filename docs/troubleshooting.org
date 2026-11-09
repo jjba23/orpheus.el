@@ -1,0 +1,132 @@
+#+title: Troubleshooting
+#+subtitle: the checks to run before changing anything
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:development.org][Development]]
+
+Start with the player's own diagnostics: ~H~ opens the help buffer, ~?~ opens
+the command menu, and ~M-x orpheus-tutorial~ walks the happy path again.  The
+sections below are ordered from the connection outward.
+
+* The player says “not connected”
+
+The header line is truthful: the backend has not completed its connection.
+Check the backend before changing an option.
+
+** MPD
+
+#+begin_src shell
+mpc status
+#+end_src
+
+- If ~mpc~ cannot connect, fix MPD first.  The socket path in
+  ~orpheus-mpd-socket~ must be the one in ~mpd.conf~, and the host and port are
+  used when the socket is nil.
+- A socket connection still uses ~orpheus-mpd-host~ and ~orpheus-mpd-port~ to
+  find the matching password entry.  They must describe the same daemon even
+  when the connection itself is a socket.
+- On another machine, make sure the daemon listens on an address the network
+  can reach and that the firewall allows the port.
+
+** Local
+
+#+begin_src shell
+mpv --version
+#+end_src
+
+The local backend needs ~mpv~ on ~exec-path~.  If ~orpheus-local-directory~ is
+wrong, the player opens but the files tab is empty; it does not prevent the
+connection.
+
+** SSH
+
+Run ~M-x orpheus-ssh-diagnose~.  It reports which remote commands and shell
+features work, and it is the first thing to include in a bug report.  If the
+host asks for a passphrase, unlock the key first: ssh has no terminal in which
+to prompt from inside Emacs, so start ~ssh music.example.org~ once in a shell.
+A new host also needs its key in =~/.ssh/known_hosts= first; use
+~orpheus-ssh-extra-args~ with ~StrictHostKeyChecking=accept-new~ only once, not
+as a permanent setting.
+
+* A password is rejected
+
+~orpheus-mpd-password~ nil means the password comes from ~MPD_PASSWORD~ first,
+then from ~auth-source~.  A password that is found is sent; a daemon with no
+password answers an incorrect-password error to a password it never requested,
+so keep the auth store to the daemons it describes.  The machine and port in
+the entry must match ~orpheus-mpd-host~ and ~orpheus-mpd-port~.
+
+The setup recipe and the ~pass~ integration are in [[file:usage.org][Using orpheus]].
+If the connection fails immediately after a password change, read the auth
+entry back rather than trusting the command's exit status.
+
+* Why MPD's queue is already full at the start
+
+The queue is the daemon's, not the player's: orpheus sends ~add~, ~delete~ and
+~clear~ and reads ~playlistinfo~ back, so the Queue tab shows what MPD holds.
+MPD writes that queue into its ~state_file~ when it stops and reads it back
+when it starts, which is why the first Queue tab of the day can be full while
+nothing was added to it.  orpheus adds nothing on start.
+
+~D~ empties the queue, and an ~mpd.conf~ without a ~state_file~ makes the
+daemon forget it at shutdown.  The local backend is the other way round: Emacs
+keeps that queue, so it starts empty in every session.
+
+* Downloads do not start or do not finish
+
+- The remote shell must accept the quoted commands the backend sends.  Run
+  ~M-x orpheus-ssh-diagnose~ and look for the command that fails.
+- If ~cat~ is unavailable, the transfer falls back to ~sftp~.
+  ~orpheus-ssh-sftp-program~ must name a program installed on this machine, and
+  ~orpheus-ssh-sftp-extra-args~ carries its options, such as ~-P 2222~.
+- A key that works in a shell may still fail here if it needs a passphrase.
+  Unlock it first.
+- Playback starts only after the copy is complete.  A large track spends its
+  transfer time downloading; the Downloads tab shows the bytes and the ETA.
+- ~d~ cancels the selected transfer.  A failed transfer can be retried with
+  ~RET~ after the cause is fixed.
+
+* There is no cover art
+
+- Cover art is drawn only in a graphical frame.  A terminal is text on purpose;
+  the list, card and progress bar still work.
+- Local and SSH look for the usual names next to the track or in its album
+  folder: ~cover.jpg~, ~front.jpg~, ~folder.*~, ~album.*~ and variants,
+  regardless of case.  SSH copies a remote cover into its cache.
+- MPD supplies embedded ~albumart~ or ~readpicture~.  A daemon or file without
+  either has no cover to draw.
+- An image Emacs cannot decode is skipped.  If the file is unusual, convert it
+  to JPEG or PNG.
+
+* The visualizer is empty or missing
+
+The visualizer is [[https://github.com/karlstav/cava][cava]], not a player-specific
+meter.  It listens to the system output, so it shows whatever the machine is
+playing.
+
+- Check that ~cava~ is installed and that ~orpheus-vis-program~ names it.
+- On GNU/Linux, cava captures the default PipeWire or PulseAudio monitor.  If
+  the sink is not the one playing, select the right input with ~orpheus-vis-input~.
+- On macOS, the default ~portaudio~ input records an input device.  Hearing
+  system output needs a loopback device such as BlackHole; without one, playback
+  works and the visualizer is silent.
+- In a graphical frame the bars are SVG.  A frame without SVG support falls
+  back to block characters, which is a real rendering rather than an error.
+
+* The equalizer says MPD cannot do it
+
+That is correct.  The equalizer applies an mpv audio filter, so it works with
+the local and SSH backends.  MPD's audio leaves through the daemon's own
+output; Emacs never sees the samples.  Use MPD's own output configuration or
+switch to the local backend if the equalizer matters.
+
+* Reporting a problem
+
+Include the backend, the orpheus version (~orpheus-version~), the exact
+options that differ from their defaults, and the output of
+~M-x orpheus-ssh-diagnose~ for SSH problems.  Open an issue at
+[[https://github.com/jjba23/orpheus.el/issues][github.com/jjba23/orpheus.el]].
+Do not paste passwords, private keys or the contents of your auth store.

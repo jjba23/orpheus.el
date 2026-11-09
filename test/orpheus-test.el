@@ -47,6 +47,14 @@
                     (file-name-directory (or load-file-name buffer-file-name)))
   "Absolute path of the package source under test.")
 
+(defun orpheus-test--documentation-files ()
+  "Return README.org and every Org page under docs/."
+  (let* ((root (file-name-directory orpheus-test--source))
+         (docs (expand-file-name "docs" root)))
+    (cons (expand-file-name "README.org" root)
+          (and (file-directory-p docs)
+               (directory-files docs t "\\.org\\'")))))
+
 (defvar orpheus-test--mpd-requests nil
   "Command lines the fake MPD received, most recent first.")
 
@@ -1639,59 +1647,82 @@ keystroke doubles it and a few of them fill it with copies."
 
 (ert-deftest orpheus-test/readme-options-exist ()
   "Every option the configuration tables name is really a user option."
-  (let* ((readme (expand-file-name
-                  "README.org"
-                  (file-name-directory orpheus-test--source)))
+  (let* ((root (file-name-directory orpheus-test--source))
+         (file (expand-file-name "docs/configuration.org" root))
          (text (with-temp-buffer
-                 (insert-file-contents readme)
+                 (insert-file-contents file)
                  (buffer-string)))
-         (start (string-match "^\\*+ Configuration" text))
-         (end (string-match "^\\*+ Backends" text))
+         (position 0)
          (named nil))
-    (should start)
-    (should end)
-    (let ((section (substring text start end))
-          (position 0))
-      ;; Only the rows of the tables, whose first column is an option name.
-      (while (string-match "^| \\(?:~\\|=\\)\\(orpheus-[a-z0-9-]+\\)\\(?:~\\|=\\)" section position)
-        (push (intern (match-string 1 section)) named)
-        (setq position (match-end 0))))
+    ;; Only the rows of the tables, whose first column is an option name.
+    (while (string-match "^| \\(?:~\\|=\\)\\(orpheus-[a-z0-9-]+\\)\\(?:~\\|=\\)" text position)
+      (push (intern (match-string 1 text)) named)
+      (setq position (match-end 0)))
     (should (> (length named) 20))
     (dolist (symbol named)
       (should (custom-variable-p symbol)))))
 
 (ert-deftest orpheus-test/readme-symbols-exist ()
-  "Every `orpheus-…' symbol the README names in backticks is defined.
-Only the public ones: the double dash marks helpers and the one hypothetical
-function in the extension example.  The four value types are named as types,
-so they are allowed by name."
-  (let* ((readme (expand-file-name
-                  "README.org"
-                  (file-name-directory orpheus-test--source)))
-         (text (with-temp-buffer
-                 (insert-file-contents readme)
-                 (buffer-string)))
-         (position 0)
-         (checked 0)
-         (types '(orpheus-track orpheus-status orpheus-item)))
-    (while (string-match "\\(?:~\\|=\\)\\(orpheus-[a-z0-9-]*[a-z0-9]\\)\\(?:~\\|=\\)" text position)
-      (let ((symbol (intern (match-string 1 text))))
-        (setq position (match-end 0))
-        (unless (string-prefix-p "orpheus--" (symbol-name symbol))
-          (setq checked (1+ checked))
-          (should (or (boundp symbol) (fboundp symbol)
-                      (memq symbol types))))))
+  "Every public `orpheus-…' symbol the documentation names is defined.
+The double dash marks helpers and the hypothetical function in the extension
+example.  The value types are named as types, so they are allowed by name."
+  (let ((checked 0)
+        (types '(orpheus-track orpheus-status orpheus-item)))
+    (dolist (file (orpheus-test--documentation-files))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents file)
+                    (buffer-string)))
+            (position 0))
+        (while (string-match "\\(?:~\\|=\\)\\(orpheus-[a-z0-9-]*[a-z0-9]\\)\\(?:~\\|=\\)" text position)
+          (let ((symbol (intern (match-string 1 text))))
+            (setq position (match-end 0))
+            (unless (string-prefix-p "orpheus--" (symbol-name symbol))
+              (setq checked (1+ checked))
+              (should (or (boundp symbol) (fboundp symbol)
+                          (memq symbol types))))))))
     (should (> checked 30))))
 
 (ert-deftest orpheus-test/docs-use-org-code-markup ()
   "The Org documentation uses Org code markup, not Markdown backticks."
-  (dolist (file '("README.org" "NEWS.org"))
-    (let ((text (with-temp-buffer
-                  (insert-file-contents
-                   (expand-file-name file
-                                     (file-name-directory orpheus-test--source)))
-                  (buffer-string))))
-      (should-not (string-match-p "`" text)))))
+  (let ((root (file-name-directory orpheus-test--source)))
+    (dolist (file (append (orpheus-test--documentation-files)
+                          (list (expand-file-name "NEWS.org" root))))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents file)
+                    (buffer-string))))
+        (should-not (string-match-p "`" text))))))
+
+(ert-deftest orpheus-test/documentation-file-links-resolve ()
+  "Every local file: link in the documentation points at a file."
+  (let ((checked 0))
+    (dolist (file (orpheus-test--documentation-files))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents file)
+                    (buffer-string)))
+            (directory (file-name-directory file))
+            (position 0))
+        (while (string-match "\\[\\[file:\\([^]]+\\)\\]" text position)
+          ;; Save the match end before `expand-file-name' can reuse the match
+          ;; data, or the loop restarts at the same link forever.
+          (let* ((target (match-string 1 text))
+                 (end (match-end 0))
+                 (path (car (split-string target "#")))
+                 (resolved (expand-file-name path directory)))
+            (setq position end)
+            (setq checked (1+ checked))
+            (should (file-exists-p resolved))))))
+    (should (> checked 20))))
+
+(ert-deftest orpheus-test/logo-file-is-packaged ()
+  "The player logo ships beside the source."
+  (should (file-readable-p orpheus-ui--logo-file)))
+
+(ert-deftest orpheus-test/logo-is-not-an-image-in-a-terminal ()
+  "A terminal player keeps the logo out of the text."
+  (let ((orpheus-ui--logo-image-cache nil))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _frame) nil)))
+      (should-not (orpheus-ui--logo-string)))))
 
 ;;; Marks, icons and the parent row
 

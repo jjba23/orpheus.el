@@ -1,0 +1,48 @@
+#+title: orpheus.el documentation
+#+subtitle: the manual, one page at a time
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:../NEWS.org][News]] · [[file:../LICENSE][License]]
+
+The README is the front door; these pages are the manual.  They are written to
+be read in order the first time and used as a reference afterwards.
+
+* The pages
+
+| Page | Start here when… |
+|------+------------------|
+| [[file:features.org][Feature tour]] | you want to know what the player does before configuring it |
+| [[file:usage.org][Using orpheus]] | you have orpheus installed and want a track playing |
+| [[file:configuration.org][Configuration]] | you need the exact option, default or a complete example |
+| [[file:backends.org][Backends]] | you are choosing MPD, local files or SSH, or writing a backend |
+| [[file:troubleshooting.org][Troubleshooting]] | something is silent, rejected or stuck |
+| [[file:development.org][Development]] | you are changing the package, recording the demo or cutting a release |
+
+* A reading order
+
+1. Install the package and its player from the [[file:../README.org][README]].
+2. Follow [[file:usage.org][Using orpheus]] until the first track plays.
+3. Read [[file:features.org][Feature tour]] for the parts you have not touched yet.
+4. Keep [[file:configuration.org][Configuration]] and [[file:backends.org][Backends]] nearby when
+   you change the setup.
+5. Use [[file:troubleshooting.org][Troubleshooting]] instead of guessing when a
+   connection stops answering.
+6. Read [[file:development.org][Development]] before opening a pull request.
+
+* Conventions
+
+- ~C-x~ is a key sequence; ~RET~, ~TAB~ and ~SPC~ are the keys Emacs calls by
+  those names.
+- Option names are written exactly as the code spells them, so they can be
+  passed to ~setq~ or found with ~M-x customize-group~.
+- Code blocks are Org source blocks.  The examples are meant to be copied into
+  =init.el= and evaluated; the shell blocks are meant to be run as written.
+- A terminal frame loses images, not controls.  The visualizer and cover art
+  have text fallbacks; the tab row simply omits the logo.
+
+The logo is the orpheus icon from the jointhefreeworld project icon set.  It is
+shown in the README and, when the frame can display images, at the start of the
+player's header line.

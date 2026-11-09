@@ -41,6 +41,14 @@
 ;; The seek bar sends its command through the session, which loads last.
 (declare-function orpheus--command "orpheus" (action &optional value))
 
+(defconst orpheus-ui--logo-file
+  (expand-file-name "docs/orpheus-logo.png"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "The project logo, as a PNG beside the package source.")
+
+(defvar orpheus-ui--logo-image-cache nil
+  "The scaled player logo, once this frame has made one.")
+
 ;;; Look
 
 (defgroup orpheus-faces nil
@@ -621,14 +629,33 @@ backend."
     map)
   "Menu opened by a right click on a tab.")
 
+(defun orpheus-ui--logo-image ()
+  "Return the project logo at player size, or nil.
+The image is made once and cached; a terminal frame gets nil, because an
+image would be a box of escape codes there rather than a logo."
+  (when (and (display-graphic-p)
+             (not orpheus-ui--logo-image-cache)
+             (file-readable-p orpheus-ui--logo-file))
+    (setq orpheus-ui--logo-image-cache
+          (ignore-errors
+            (create-image orpheus-ui--logo-file nil nil
+                          :height 20 :ascent 'center))))
+  orpheus-ui--logo-image-cache)
+
+(defun orpheus-ui--logo-string ()
+  "Return the logo as a string, or nil when this frame cannot draw it."
+  (let ((image (orpheus-ui--logo-image)))
+    (when image
+      (propertize " " 'display image 'help-echo "orpheus.el"))))
+
 (defun orpheus-ui--header-line ()
   "Return the header line of the player."
   (if (and orpheus-backend-current
            (orpheus-backend-connected-p orpheus-backend-current))
-    (let ((window (get-buffer-window)))
-      (orpheus-ui--status-string
-       orpheus-status-current orpheus-track-current
-       (and window (window-body-width window))))
+      (let ((window (get-buffer-window)))
+        (orpheus-ui--status-string
+         orpheus-status-current orpheus-track-current
+         (and window (window-body-width window))))
     (propertize " orpheus  not connected" 'face 'orpheus-error-face)))
 
 (defun orpheus-ui--tab-string ()
@@ -923,7 +950,8 @@ while this one runs is done once after it, never inside it."
            (tab (orpheus-ui--current-tab))
            (width (max 24 (if window (window-body-width window) 80))))
       (erase-buffer)
-      (insert (orpheus-ui--tab-string) "\n")
+      (insert (or (orpheus-ui--logo-string) "")
+              (orpheus-ui--tab-string) "\n")
       (when (orpheus-ui-tab-arg tab)
         (insert (propertize (orpheus-ui--path-string)
                             'face 'orpheus-muted-face)
