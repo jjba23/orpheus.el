@@ -23,10 +23,11 @@
 (define emacs-command
   (or (getenv "EMACS") "emacs"))
 
-;; The package: eight files, loaded in this order.
+;; The package: nine files, loaded in this order.
 (define source-files
   '("orpheus-backend.el"
     "orpheus-playlist.el"
+    "orpheus-transient.el"
     "orpheus-mpd.el"
     "orpheus-local.el"
     "orpheus-ssh.el"
@@ -48,9 +49,9 @@
 
 ;; What byte-compilation leaves behind.
 (define compiled-files
-  '("orpheus-backend.elc" "orpheus-playlist.elc" "orpheus-mpd.elc"
-    "orpheus-local.elc" "orpheus-ssh.elc" "orpheus-ui.elc" "orpheus-vis.elc"
-    "orpheus.elc"
+  '("orpheus-backend.elc" "orpheus-playlist.elc" "orpheus-transient.elc"
+    "orpheus-mpd.elc" "orpheus-local.elc" "orpheus-ssh.elc" "orpheus-ui.elc"
+    "orpheus-vis.elc" "orpheus.elc"
     "test/orpheus-test.elc" "test/orpheus-integration-test.elc"
     "test/orpheus-checkdoc.elc"))
 
@@ -105,6 +106,12 @@ Both are skipped when they are not installed, so this task always finishes."
   "Open an Emacs with the package loaded for hacking."
   (run (list emacs-command "-Q" "-L" "."
              "--eval" "(progn (require (quote orpheus)) (orpheus))")))
+
+(define (demo)
+  "Record the reproducible demo GIF.
+Needs Xvfb, ImageMagick's import and ffmpeg; the demo data is fixed and needs
+no player, daemon or network."
+  (run (list "bash" "scripts/record-demo.sh") #:verbose? #t))
 
 (define (tasks)
   "List the available tasks."

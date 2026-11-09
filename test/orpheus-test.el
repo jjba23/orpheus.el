@@ -1854,8 +1854,10 @@ Otherwise the list below it moves up and down every time a cover arrives."
       (with-temp-buffer
         (orpheus-ui--insert-art 80)
         (let ((loading (buffer-string)))
+          ;; A bare number would be a hundred line heights, not pixels, and
+          ;; the list would start far below the window.
           (should (equal (get-text-property 0 'display loading)
-                         '(space :width 1 :height 100)))
+                         '(space :width 1 :height (100))))
           (setq orpheus-ui--art (list :key "k" :file nil))
           (erase-buffer)
           (orpheus-ui--insert-art 80)
@@ -2694,5 +2696,157 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
                               (buffer-string))
                             "sftp bytes\n")))
          (orpheus-backend-disconnect ssh))))))
+
+;;; New playlists, the menu and the cached interface
+
+(ert-deftest orpheus-test/playlist-create-chooses-the-directory ()
+  "A new playlist is written where the player was told to keep it."
+  (let* ((storage (make-temp-file "orpheus-playlists" t))
+         (music (make-temp-file "orpheus-music" t))
+         (orpheus-playlist-directory storage)
+         (orpheus-playlist-new-directory music))
+    (unwind-protect
+        (progn
+          (let ((file (orpheus-playlist-create "Night Drive" music)))
+            (should (file-readable-p file))
+            (should (equal (file-name-directory file)
+                           (file-name-as-directory
+                            (expand-file-name music))))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) "#EXTM3U\n"))))
+          (orpheus-playlist-write (orpheus-playlist-file "Other") nil)
+          (should (equal (mapcar #'file-name-base (orpheus-playlist-files))
+                         '("Night Drive" "Other")))
+          (should (equal (file-name-base (orpheus-playlist-find "Night Drive"))
+                         "Night Drive")))
+      (delete-directory storage t)
+      (delete-directory music t))))
+
+(ert-deftest orpheus-test/playlist-create-refuses-an-existing-name ()
+  "Creating a playlist never overwrites one that is already there."
+  (let ((directory (make-temp-file "orpheus-playlists" t)))
+    (unwind-protect
+        (progn
+          (orpheus-playlist-create "Mix" directory)
+          (should-error (orpheus-playlist-create "Mix" directory)))
+      (delete-directory directory t))))
+
+(ert-deftest orpheus-test/ui-new-playlist-opens-the-editor ()
+  "The N command creates the file and opens it, so an empty playlist is usable."
+  (let ((directory (make-temp-file "orpheus-playlists" t))
+        (edited nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'orpheus-playlist-edit)
+                     (lambda (file) (setq edited file))))
+            (orpheus-ui-new-playlist "Mix" directory))
+          (should edited)
+          (should (file-readable-p edited)))
+      (delete-directory directory t))))
+
+(ert-deftest orpheus-test/ui-save-playlist-can-choose-the-directory ()
+  "Saving a new queue playlist writes it where the player was told."
+  (let ((directory (make-temp-file "orpheus-music" t))
+        (orpheus-backend-current 'fake)
+        (items (list (orpheus-item-create
+                      :kind 'track :data '((uri . "/a.mp3"))))))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'orpheus-backend-queue)
+                     (lambda (_backend callback) (funcall callback items))))
+            (orpheus-ui-save-playlist "Mix" directory))
+          (should (equal (file-name-directory (orpheus-playlist-file "Mix" directory))
+                         (file-name-as-directory (expand-file-name directory))))
+          (should (file-readable-p (orpheus-playlist-file "Mix" directory))))
+      (delete-directory directory t))))
+
+(ert-deftest orpheus-test/ui-menu-keys ()
+  "The menu is on ?, the whole table on H, and N makes a playlist."
+  (should (eq (lookup-key orpheus-ui-mode-map (kbd "?")) 'orpheus-menu))
+  (should (eq (lookup-key orpheus-ui-mode-map (kbd "H")) 'orpheus-ui-help))
+  (should (eq (lookup-key orpheus-ui-mode-map (kbd "N"))
+              'orpheus-ui-new-playlist)))
+
+(ert-deftest orpheus-test/ui-bindings-are-customizable ()
+  "A (KEY . COMMAND) setting rebinds the player without a hook."
+  (let ((orpheus-ui-mode-bindings '(("C-c o" . orpheus-ui-first-line))))
+    (unwind-protect
+        (progn
+          (orpheus-ui--apply-bindings)
+          (should (eq (lookup-key orpheus-ui-mode-map (kbd "C-c o"))
+                      'orpheus-ui-first-line)))
+      (define-key orpheus-ui-mode-map (kbd "C-c o") nil))))
+
+(ert-deftest orpheus-test/ui-open-reuses-the-selected-window ()
+  "Opening the player passes the same-window action to `pop-to-buffer'."
+  (let ((orpheus-ui-buffer-name
+         (generate-new-buffer-name "*orpheus-open-test*"))
+        (orpheus-ui-display-action '(display-buffer-same-window))
+        (action 'unset))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &optional action-argument)
+                       (setq action action-argument)
+                       (set-window-buffer (selected-window) buffer)))
+                    ((symbol-function 'orpheus-ui--fit-window) #'ignore)
+                    ((symbol-function 'orpheus-ui--update-context-art) #'ignore)
+                    ((symbol-function 'orpheus-ui-refresh) #'ignore))
+            (orpheus-ui-open))
+          (should (equal action '(display-buffer-same-window))))
+      (when (get-buffer orpheus-ui-buffer-name)
+        (kill-buffer orpheus-ui-buffer-name)))))
+
+(ert-deftest orpheus-test/ui-tab-is-reused-within-the-cache-window ()
+  "A tab loaded a moment ago is shown again without asking the backend."
+  (let ((orpheus-ui-buffer-name
+         (generate-new-buffer-name "*orpheus-cache-test*"))
+        (orpheus-ui-cache-seconds 30)
+        (orpheus-ui--needs-refresh nil)
+        (loads 0)
+        (tab (orpheus-ui-tab-create :kind 'queue :title "Queue"
+                                    :loaded t :loaded-at (float-time))))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+            (orpheus-ui-mode)
+            (setq orpheus-ui--tabs (vector tab)
+                  orpheus-ui--tab 0))
+          (cl-letf (((symbol-function 'orpheus-ui--load-tab)
+                     (lambda (_tab callback)
+                       (setq loads (1+ loads))
+                       (funcall callback))))
+            (orpheus-ui-refresh)
+            (should (= loads 0))
+            (setf (orpheus-ui-tab-loaded-at tab) 0)
+            (orpheus-ui-refresh)
+            (should (= loads 1))))
+      (kill-buffer orpheus-ui-buffer-name))))
+
+(ert-deftest orpheus-test/ui-card-height-is-stable ()
+  "The card keeps its line count when the first track starts."
+  (let ((orpheus-ui-show-art nil)
+        (orpheus-ui-show-now-playing t)
+        (orpheus-ui--art nil)
+        (orpheus-track-current nil)
+        (orpheus-status-current nil))
+    (with-temp-buffer
+      (orpheus-ui-mode)
+      (setq orpheus-ui--tabs
+            (vector (orpheus-ui-tab-create
+                     :kind 'queue :title "Queue"
+                     :items (list (orpheus-item-create
+                                   :label "row" :kind 'track
+                                   :data '((uri . "a.mp3"))))))
+            orpheus-ui--tab 0)
+      (orpheus-ui--render)
+      (let ((before (count-lines (point-min) (point-max))))
+        (setq orpheus-track-current
+              (orpheus-track-create :title "Song" :artist "Band")
+              orpheus-status-current
+              (orpheus-status-create :state 'play :elapsed 1 :total 10))
+        (orpheus-ui--render)
+        (should (= before (count-lines (point-min) (point-max))))))))
 
 ;;; orpheus-test.el ends here

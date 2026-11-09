@@ -69,10 +69,12 @@ A non-standard port belongs here as `-P PORT', because sftp spells the port
 differently from ssh; the rest of ssh's options have sftp's own spelling too."
   :type '(repeat string) :group 'orpheus)
 
-(defcustom orpheus-ssh-cache-count 8
+(defcustom orpheus-ssh-cache-count 32
   "Number of downloaded tracks kept in SSH's temporary directory.
 A track played from the cache needs no second transfer.  The playing track is
-never evicted."
+never evicted.  The default keeps a whole album plus the next tracks queued in
+reach of the prefetcher, at the cost of disk in a temporary directory that is
+deleted on disconnect."
   :type 'integer :group 'orpheus)
 
 (defcustom orpheus-ssh-prefetch 2

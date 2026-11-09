@@ -28,6 +28,7 @@
 (require 'subr-x)
 (require 'orpheus-backend)
 (require 'orpheus-playlist)
+(require 'orpheus-transient)
 
 ;; The image primitives live in C, so a build that does not preload image.el
 ;; still knows them at run time and the byte-compiler does not.
@@ -37,6 +38,14 @@
 (declare-function orpheus--command "orpheus" (action &optional value))
 
 ;;; Look
+
+(defgroup orpheus-faces nil
+  "Faces of the orpheus player.
+Customize this group to give the player a palette of its own; every face
+inherits a built-in face where it can, so a theme that does not know orpheus
+still gives a readable player."
+  :group 'orpheus
+  :prefix "orpheus-")
 
 (defface orpheus-status-face
   '((((background dark)) :inherit bold :foreground "#e6c78a")
@@ -147,6 +156,18 @@
   "Face of a download that is still running."
   :group 'orpheus)
 
+;; The faces keep `orpheus' as a group for `customize-group' and are gathered
+;; under `orpheus-faces' so a reader looking for the look finds the whole set
+;; in one place.
+(dolist (face '(orpheus-status-face orpheus-title-face orpheus-artist-face
+                orpheus-album-face orpheus-current-face orpheus-tab-face
+                orpheus-tab-active-face orpheus-muted-face
+                orpheus-directory-face orpheus-error-face orpheus-marked-face
+                orpheus-progress-filled-face orpheus-progress-empty-face
+                orpheus-button-face orpheus-button-on-face
+                orpheus-download-face orpheus-download-active-face))
+  (custom-add-to-group 'orpheus-faces face 'custom-face))
+
 (defcustom orpheus-ui-buffer-name "*orpheus*"
   "Name of the player's buffer."
   :type 'string :group 'orpheus)
@@ -179,6 +200,29 @@ move while a cover loads and does not move when a track has none."
 `orpheus-ui-plain-ascii' turns the glyphs into letters, and a font without
 symbols is the reason to turn them off."
   :type 'boolean :group 'orpheus)
+
+(defcustom orpheus-ui-display-action '(display-buffer-same-window)
+  "How `orpheus-ui-open' shows the player.
+The default reuses the selected window, so opening orpheus replaces what is
+there instead of splitting the frame.  A value such as
+`(display-buffer-pop-up-window)' gives the player a window of its own."
+  :type '(choice (const :tag "Same window" (display-buffer-same-window))
+                 (const :tag "New window" (display-buffer-pop-up-window))
+                 (sexp :tag "A `display-buffer' action"))
+  :group 'orpheus)
+
+(defcustom orpheus-ui-cache-seconds 30
+  "Seconds a loaded tab is reused before it is read again.
+Switching tabs within this window costs no backend request, which is what
+makes moving between a large queue and a directory feel instant.  `g' always
+reads; set this to 0 to read on every switch."
+  :type 'number :group 'orpheus)
+
+(defcustom orpheus-ui-image-cache-size 64
+  "Number of decoded cover images kept for redraws.
+The cache is emptied when it fills, so a long session holds at most this many
+images and decodes a cover again only after that."
+  :type 'integer :group 'orpheus)
 
 (defcustom orpheus-ui-add-confirm-threshold 250
   "Number of rows `orpheus-ui-add' and `orpheus-ui-add-all' queue before asking.
@@ -355,6 +399,7 @@ on what CAPABILITIES offers."
   (index 0)
   (loading nil)
   (loaded nil)
+  (loaded-at 0)
   (seq 0)
   (marks nil))
 
@@ -375,6 +420,16 @@ on what CAPABILITIES offers."
 
 (defvar orpheus-ui--art-cache (make-hash-table :test #'equal)
   "Cover file of each URI already fetched, so a cover is fetched once.")
+
+(defvar orpheus-ui--image-cache (make-hash-table :test #'equal)
+  "Decoded cover images, keyed by file, size, modification time and scale.
+A redraw every second must not decode the same cover again.")
+
+(defvar orpheus-ui--rendering nil
+  "Whether the buffer is being drawn, so a redraw asked for now must wait.")
+
+(defvar orpheus-ui--redraw-pending nil
+  "Whether a redraw was asked for while the buffer was being drawn.")
 
 (defvar orpheus-ui--queue-warned nil
   "Whether a queue over `orpheus-ui-queue-warning-size' was reported.")
@@ -539,6 +594,9 @@ backend."
       '(menu-item "Edit playlist" orpheus-ui-edit-playlist))
     (define-key-after map [delete] '(menu-item "Delete" orpheus-ui-delete))
     (define-key-after map [refresh] '(menu-item "Refresh" orpheus-ui-refresh))
+    (define-key-after map [new-playlist]
+      '(menu-item "New playlist…" orpheus-ui-new-playlist))
+    (define-key-after map [menu] '(menu-item "Orpheus menu" orpheus-menu))
     map)
   "Menu opened by a right click on a player row.")
 
@@ -548,6 +606,7 @@ backend."
       '(menu-item "Previous tab" orpheus-ui-previous-tab))
     (define-key-after map [next] '(menu-item "Next tab" orpheus-ui-next-tab))
     (define-key-after map [refresh] '(menu-item "Refresh" orpheus-ui-refresh))
+    (define-key-after map [menu] '(menu-item "Orpheus menu" orpheus-menu))
     map)
   "Menu opened by a right click on a tab.")
 
@@ -589,17 +648,33 @@ backend."
       "")))
 
 (defun orpheus-ui--art-image ()
-  "Return the cover art as an image, or nil."
+  "Return the cover art as an image, or nil.
+The decoded image is cached by file, size, modification time and scale, so a
+redraw every second does not decode the cover again."
   (let ((file (plist-get orpheus-ui--art :file)))
     (when (and file (file-readable-p file) (display-graphic-p))
       (let* ((window (get-buffer-window))
              (max (if window
                       (max 1 (min orpheus-ui-art-size
                                   (window-body-width window t)))
-                    orpheus-ui-art-size)))
-        (ignore-errors
-          (create-image file nil nil :max-width max :max-height max
-                        :ascent 'center))))))
+                    orpheus-ui-art-size))
+             (attributes (file-attributes file))
+             (key (list (expand-file-name file)
+                        (file-attribute-size attributes)
+                        (file-attribute-modification-time attributes)
+                        max)))
+        (or (gethash key orpheus-ui--image-cache)
+            (let ((image (ignore-errors
+                           (create-image file nil nil :max-width max
+                                         :max-height max :ascent 'center))))
+              (when image
+                (when (>= (hash-table-count orpheus-ui--image-cache)
+                          (max 1 orpheus-ui-image-cache-size))
+                  ;; shortcut: the cache is emptied rather than evicted in LRU
+                  ;; order; one redraw then decodes each cover once more.
+                  (clrhash orpheus-ui--image-cache))
+                (puthash key image orpheus-ui--image-cache))
+              image))))))
 
 (defun orpheus-ui--insert-art (width)
   "Insert the cover art centred in WIDTH, in a box that keeps its size.
@@ -618,8 +693,10 @@ so the list below it never moves while a cover arrives."
           (insert-image image " ")
           (insert "\n")))
       (when (> rest 0)
+        ;; A bare number here is a multiple of the line height, not pixels;
+        ;; a one-element list is the pixel specification.
         (insert (propertize " " 'display
-                            (list 'space :width 1 :height rest))
+                            (list 'space :width 1 :height (list rest)))
                 "\n")))))
 
 (defun orpheus-ui--center (text width)
@@ -709,12 +786,14 @@ now; the answer is relative, which every backend already takes."
                                                     elapsed))))))
 
 (defun orpheus-ui--insert-now-playing (width)
-  "Insert a centered now-playing card in WIDTH."
+  "Insert a centered now-playing card in WIDTH.
+The card is drawn even with nothing playing, and its second line is always
+there, so the list below it does not jump when the first track starts."
   (let* ((track orpheus-track-current)
          (status orpheus-status-current)
          (title (or (and track (orpheus-track-title track))
                     (and track (orpheus-track-label track))
-                    "unknown track"))
+                    "nothing playing"))
          (artist (and track (orpheus-track-artist track)))
          (album (and track (orpheus-track-album track)))
          (sub (string-join (delq nil (list artist album))
@@ -725,8 +804,7 @@ now; the answer is relative, which every backend already takes."
              (format "%s  %s" (orpheus-status-glyph status) title)
              width 'orpheus-title-face)
             "\n")
-    (unless (string-empty-p sub)
-      (insert (orpheus-ui--center-line sub width 'orpheus-artist-face) "\n"))
+    (insert (orpheus-ui--center-line sub width 'orpheus-artist-face) "\n")
     ;; The bar keeps its two faces, so the line is centred without
     ;; re-propertising it, and a click on the bar seeks.
     (let* ((bar (orpheus-ui--progress-string elapsed total
@@ -806,56 +884,65 @@ folder are read at a glance the way Dired shows them."
          ('downloads
           " RET play or retry  d cancel  g refresh  ? help  q bury")
          ('playlists
-          " RET play  e edit  a add  d delete  C-x C-s save queue  g refresh  ? help  q bury")
+          " RET play  e edit  N new  a add  d delete  C-x C-s save queue  ? menu  q bury")
          ('search
-          " RET play  a add  m mark  / search again  g refresh  ? help  q bury")
+          " RET play  a add  m mark  / search again  g refresh  ? menu  q bury")
          (_
-          " RET play  a add  m mark  d delete  / search  g refresh  ? help  q bury")))
+          " RET play  a add  m mark  d delete  / search  g refresh  ? menu  q bury")))
 
 (defun orpheus-ui--render ()
   "Draw the buffer from the tabs and rows it holds.
 The line at the top of the window is put back afterwards, so a redraw while a
-cover arrives does not scroll the list under the reader."
-  (let* ((inhibit-read-only t)
-         (window (get-buffer-window))
-         (line (and window (count-lines (point-min) (window-start window))))
-         (tab (orpheus-ui--current-tab))
-         (width (max 24 (if window (window-body-width window) 80))))
-    (erase-buffer)
-    (insert (orpheus-ui--tab-string) "\n")
-    (when (orpheus-ui-tab-arg tab)
-      (insert (propertize (orpheus-ui--path-string) 'face 'orpheus-muted-face)
-              "\n"))
-    (when orpheus-ui-show-art
-      (orpheus-ui--insert-art width))
-    (when (and orpheus-ui-show-now-playing orpheus-track-current)
-      (orpheus-ui--insert-now-playing width))
-    (insert (propertize (make-string width ?─) 'face 'orpheus-muted-face) "\n")
-    (let ((items (orpheus-ui-tab-items tab)))
-      (if (null items)
-        (insert (propertize
-                 (if (orpheus-ui-tab-loading tab)
-                   "  loading…"
-                   "  nothing here yet")
-                 'face 'orpheus-muted-face)
-                "\n")
-        (let ((index 0))
-          (dolist (item items)
-            (orpheus-ui--insert-item item index width)
-            (setq index (1+ index))))))
-    (insert (propertize (orpheus-ui--footer (and tab (orpheus-ui-tab-kind tab)))
-                        'face 'orpheus-muted-face))
-    (orpheus-ui--place-point)
-    (when window
-      ;; A buffer position is not a place: the art box and the path line
-      ;; change the height above the list, but the line stays the same.
-      ;; NOFORCE must stay nil, or redisplay may scroll to point and take the
-      ;; cover away with it.
-      (save-excursion
-        (goto-char (point-min))
-        (forward-line (or line 0))
-        (set-window-start window (point))))
-    (setq orpheus-ui--render-key (orpheus-ui--key))))
+cover arrives does not scroll the list under the reader.  A redraw asked for
+while this one runs is done once after it, never inside it."
+  (let ((orpheus-ui--rendering t))
+    (let* ((inhibit-read-only t)
+           (window (get-buffer-window))
+           (line (and window (count-lines (point-min)
+                                          (window-start window))))
+           (tab (orpheus-ui--current-tab))
+           (width (max 24 (if window (window-body-width window) 80))))
+      (erase-buffer)
+      (insert (orpheus-ui--tab-string) "\n")
+      (when (orpheus-ui-tab-arg tab)
+        (insert (propertize (orpheus-ui--path-string)
+                            'face 'orpheus-muted-face)
+                "\n"))
+      (when orpheus-ui-show-art
+        (orpheus-ui--insert-art width))
+      (when orpheus-ui-show-now-playing
+        (orpheus-ui--insert-now-playing width))
+      (insert (propertize (make-string width ?─) 'face 'orpheus-muted-face)
+              "\n")
+      (let ((items (orpheus-ui-tab-items tab)))
+        (if (null items)
+            (insert (propertize
+                     (if (orpheus-ui-tab-loading tab)
+                         "  loading…"
+                       "  nothing here yet")
+                     'face 'orpheus-muted-face)
+                    "\n")
+          (let ((index 0))
+            (dolist (item items)
+              (orpheus-ui--insert-item item index width)
+              (setq index (1+ index))))))
+      (insert (propertize (orpheus-ui--footer (and tab (orpheus-ui-tab-kind tab)))
+                          'face 'orpheus-muted-face))
+      (orpheus-ui--place-point)
+      (when window
+        ;; A buffer position is not a place: the art box and the path line
+        ;; change the height above the list, but the line stays the same.
+        ;; NOFORCE must stay nil, or redisplay may scroll to point and take
+        ;; the cover away with it.
+        (save-excursion
+          (goto-char (point-min))
+          (forward-line (or line 0))
+          (set-window-start window (point))))
+      (setq orpheus-ui--render-key (orpheus-ui--key))))
+  (when orpheus-ui--redraw-pending
+    (setq orpheus-ui--redraw-pending nil)
+    (run-at-time 0 nil #'orpheus-ui--redraw))
+  orpheus-ui--render-key)
 
 (defun orpheus-ui--key ()
   "Return what the buffer was drawn from.
@@ -879,8 +966,13 @@ which row is highlighted."
   "Draw the buffer again, but only when what it shows has changed."
   (when (buffer-live-p (get-buffer orpheus-ui-buffer-name))
     (with-current-buffer orpheus-ui-buffer-name
-      (unless (equal (orpheus-ui--key) orpheus-ui--render-key)
-        (orpheus-ui--render)))))
+      (cond
+       (orpheus-ui--rendering
+        ;; A modeline or timer hook asked for a redraw from inside one; the
+        ;; next pass picks it up instead of erasing the buffer twice.
+        (setq orpheus-ui--redraw-pending t))
+       ((not (equal (orpheus-ui--key) orpheus-ui--render-key))
+        (orpheus-ui--render))))))
 
 (defun orpheus-ui--place-point ()
   "Put point on the row the tab remembers."
@@ -898,7 +990,8 @@ which row is highlighted."
   (let ((parent (orpheus-ui--parent-item tab)))
     (setf (orpheus-ui-tab-items tab) (if parent (cons parent items) items)
           (orpheus-ui-tab-loading tab) nil
-          (orpheus-ui-tab-loaded tab) t)
+          (orpheus-ui-tab-loaded tab) t
+          (orpheus-ui-tab-loaded-at tab) (float-time))
     (when (>= (orpheus-ui-tab-index tab)
               (max 1 (length (orpheus-ui-tab-items tab))))
       (setf (orpheus-ui-tab-index tab)
@@ -917,7 +1010,8 @@ which row is highlighted."
     (when (and tab (eq (orpheus-ui-tab-view tab) 'downloads))
       (setf (orpheus-ui-tab-items tab) items
             (orpheus-ui-tab-loading tab) nil
-            (orpheus-ui-tab-loaded tab) t)))
+            (orpheus-ui-tab-loaded tab) t
+            (orpheus-ui-tab-loaded-at tab) (float-time))))
   (orpheus-ui--redraw))
 
 (defun orpheus-ui--refresh-downloads ()
@@ -981,9 +1075,9 @@ an older one."
 
 (defun orpheus-ui-refresh (&optional force)
   "Read the current tab again and redraw when it changed.
-Unless FORCE is non-nil, nothing is read while nothing invalidated the tab:
-the status timer asks every second, and fetching a queue of thousands on each
-ask is what makes an editor stutter."
+Unless FORCE is non-nil, a tab already loaded is reused for
+`orpheus-ui-cache-seconds': the status timer asks every second, and fetching a
+queue of thousands on each ask is what makes an editor stutter."
   (interactive)
   (let ((buffer (get-buffer orpheus-ui-buffer-name)))
     (when (buffer-live-p buffer)
@@ -991,7 +1085,10 @@ ask is what makes an editor stutter."
         (let ((tab (orpheus-ui--current-tab)))
           (when (and tab
                      (or force orpheus-ui--needs-refresh
-                         (not (orpheus-ui-tab-loaded tab))))
+                         (not (orpheus-ui-tab-loaded tab))
+                         (> (- (float-time)
+                               (orpheus-ui-tab-loaded-at tab))
+                            orpheus-ui-cache-seconds)))
             (when (orpheus-ui--load-tab tab #'orpheus-ui--redraw)
               (setq orpheus-ui--needs-refresh nil))))))))
 
@@ -1123,17 +1220,17 @@ read and are refreshed every tick so their bytes and the header summary move."
         (setq index i found t)))
     (when found
       (setq orpheus-ui--tab index)
-      (orpheus-ui-invalidate)
       (orpheus-ui--render)
       (orpheus-ui-refresh))))
 
 (defun orpheus-ui-next-tab ()
-  "Show the next tab."
+  "Show the next tab.
+A tab loaded within `orpheus-ui-cache-seconds' is shown from memory, so
+moving between a large queue and a directory does not read either again."
   (interactive)
   (when (vectorp orpheus-ui--tabs)
     (setq orpheus-ui--tab (% (1+ orpheus-ui--tab)
                              (length orpheus-ui--tabs)))
-    (orpheus-ui-invalidate)
     (orpheus-ui--render)
     (orpheus-ui-refresh)))
 
@@ -1144,7 +1241,6 @@ read and are refreshed every tick so their bytes and the header summary move."
     (setq orpheus-ui--tab (% (+ (1- orpheus-ui--tab)
                                 (length orpheus-ui--tabs))
                              (length orpheus-ui--tabs)))
-    (orpheus-ui-invalidate)
     (orpheus-ui--render)
     (orpheus-ui-refresh)))
 
@@ -1154,7 +1250,6 @@ read and are refreshed every tick so their bytes and the header summary move."
   (when (and (vectorp orpheus-ui--tabs)
              (> n 0) (<= n (length orpheus-ui--tabs)))
     (setq orpheus-ui--tab (1- n))
-    (orpheus-ui-invalidate)
     (orpheus-ui--render)
     (orpheus-ui-refresh)))
 
@@ -1353,9 +1448,20 @@ is a copy of a row that is there already."
       (orpheus-ui--render)
       (orpheus-ui-refresh))))
 
-(defun orpheus-ui-save-playlist (name)
-  "Save the queue as the portable playlist NAME."
-  (interactive (list (read-string "Save queue as playlist: ")))
+(defun orpheus-ui-save-playlist (name &optional directory)
+  "Save the queue as the portable playlist NAME.
+An existing playlist is overwritten where it is.  A new one is stored in
+DIRECTORY, which the player asks for, starting in
+`orpheus-playlist-new-directory'."
+  (interactive
+   (let ((name (read-string "Save queue as playlist: ")))
+     (list name
+           (unless (orpheus-playlist-find name)
+             (read-directory-name
+              "Store playlist in: "
+              (file-name-as-directory
+               (expand-file-name orpheus-playlist-new-directory))
+              nil nil)))))
   (when (string-empty-p name)
     (user-error "No playlist name"))
   (orpheus-playlist-save-queue
@@ -1365,7 +1471,26 @@ is a copy of a row that is there already."
          (progn
            (orpheus-ui-invalidate)
            (message "orpheus: saved %s" (file-name-nondirectory file)))
-       (message "orpheus: the queue is empty")))))
+       (message "orpheus: the queue is empty")))
+   directory))
+
+(defun orpheus-ui-new-playlist (name directory)
+  "Create an empty portable playlist called NAME in DIRECTORY.
+The player asks for NAME and then for DIRECTORY to keep it in, starting at
+`orpheus-playlist-new-directory' (=~/Music= by default).  DIRECTORY is made
+when it does not exist, so a playlist can go in a folder of its own.  The new
+playlist opens in its editor."
+  (interactive
+   (list (read-string "New playlist name: ")
+         (read-directory-name
+          "Store playlist in: "
+          (file-name-as-directory
+           (expand-file-name orpheus-playlist-new-directory))
+          nil nil)))
+  (let ((file (orpheus-playlist-create name directory)))
+    (orpheus-ui-invalidate)
+    (orpheus-playlist-edit file)
+    (message "orpheus: created %s" (file-name-nondirectory file))))
 
 (defun orpheus-ui-edit-playlist ()
   "Edit the portable playlist at point in its own buffer."
@@ -1429,11 +1554,13 @@ is a copy of a row that is there already."
     ("t" "invert the marks")
     ("a / A" "queue the marked rows, or this row; queue everything here")
     ("e" "edit a portable playlist in its own buffer")
+    ("N" "create a new portable playlist, asking where to keep it")
     ("d / C-k" "delete from the queue, remove a playlist, or cancel a download")
     ("D" "clear the queue")
     ("/ / C-s" "search")
     ("C" "jump to the playing row")
-    ("?" "this help")
+    ("?" "the menu: transport, modes, queue, playlists, views")
+    ("H" "this help, as a table")
     ("SPC" "play or pause")
     ("s" "stop")
     ("> / <" "next and previous track")
@@ -1442,7 +1569,7 @@ is a copy of a row that is there already."
     ("M-<up> / M-<down>, + / -" "volume up and down")
     ("z / x / c / v" "repeat, random, consume, single")
     ("M-u / M-U" "update the library, rescan it")
-    ("C-x C-s" "save the queue as a portable M3U8 playlist")
+    ("C-x C-s" "save the queue as a portable M3U8 playlist; a new one asks where")
     ("g" "refresh the status and this tab")
     ("V" "spectrum visualizer")
     ("mouse-3" "open the row, tab or playlist context menu")
@@ -1500,13 +1627,15 @@ is a copy of a row that is there already."
     (define-key map (kbd "a") 'orpheus-ui-add)
     (define-key map (kbd "A") 'orpheus-ui-add-all)
     (define-key map (kbd "e") 'orpheus-ui-edit-playlist)
+    (define-key map (kbd "N") 'orpheus-ui-new-playlist)
     (define-key map (kbd "d") 'orpheus-ui-delete)
     (define-key map (kbd "C-k") 'orpheus-ui-delete)
     (define-key map (kbd "D") 'orpheus-ui-clear)
     (define-key map (kbd "/") 'orpheus-ui-search)
     (define-key map (kbd "C-s") 'orpheus-ui-search)
     (define-key map (kbd "C") 'orpheus-ui-jump-to-current)
-    (define-key map (kbd "?") 'orpheus-ui-help)
+    (define-key map (kbd "?") 'orpheus-menu)
+    (define-key map (kbd "H") 'orpheus-ui-help)
     (define-key map (kbd "SPC") 'orpheus-play-pause)
     (define-key map (kbd "p") 'orpheus-ui-previous-line)
     (define-key map (kbd "s") 'orpheus-stop)
@@ -1531,6 +1660,22 @@ is a copy of a row that is there already."
     map)
   "Keymap of `orpheus-ui-mode'.")
 
+(defcustom orpheus-ui-mode-bindings nil
+  "Keys to bind in `orpheus-ui-mode-map', as (KEY . COMMAND) pairs.
+KEY is a string as `kbd' reads it, and COMMAND nil unbinds it.  These are
+applied over the defaults when `orpheus-ui-mode' starts, so a setting in your
+init remaps a key without a hook.  For a key that needs a closure, call
+`define-key' on `orpheus-ui-mode-map' instead; every key is available there."
+  :type '(alist :key-type string
+                :value-type (choice (command :tag "Command")
+                                    (const :tag "Unbound" nil)))
+  :group 'orpheus)
+
+(defun orpheus-ui--apply-bindings ()
+  "Apply `orpheus-ui-mode-bindings' over the default keys."
+  (dolist (binding orpheus-ui-mode-bindings)
+    (define-key orpheus-ui-mode-map (kbd (car binding)) (cdr binding))))
+
 (define-derived-mode orpheus-ui-mode special-mode "Orpheus"
   "Major mode for the orpheus music player."
   (setq-local header-line-format '(:eval (orpheus-ui--header-line)))
@@ -1540,7 +1685,8 @@ is a copy of a row that is there already."
   (setq-local orpheus-ui--tabs nil)
   (setq-local orpheus-ui--tab 0)
   (setq-local orpheus-ui--downloads nil)
-  (setq-local orpheus-ui--render-key nil))
+  (setq-local orpheus-ui--render-key nil)
+  (orpheus-ui--apply-bindings))
 
 ;;; Opening
 
@@ -1569,7 +1715,7 @@ showing almost none of the queue; the frame is the limit."
                    (eq orpheus-ui--backend orpheus-backend-current))
         (orpheus-ui--setup-tabs))
       (orpheus-ui--render))
-    (pop-to-buffer buffer)
+    (pop-to-buffer buffer orpheus-ui-display-action)
     (let ((window (get-buffer-window buffer)))
       (when window
         (with-current-buffer buffer

@@ -9,6 +9,52 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- ~N~ creates a portable playlist: the player asks for a name and then for the
+  directory to keep it in, starting in ~orpheus-playlist-new-directory~
+  (=~/Music= by default), and opens it in the editor.  The Playlists tab reads
+  that directory as well as ~orpheus-playlist-directory~, and saving a new
+  queue asks where it goes.  An existing playlist is still overwritten where
+  it is.
+- ~?~ opens a transient menu over the transport, the four modes, the queue,
+  playlists, the library and the views, each entry beside its key.  ~H~ keeps
+  the full table, and the mouse context menus gain the menu and the new
+  playlist.
+- Every key can be remapped with ~orpheus-ui-mode-bindings~, an alist of
+  ~(KEY . COMMAND)~ applied over the defaults, without a hook.
+- The faces are gathered in the ~orpheus-faces~ customization group, so the
+  whole look is one ~customize-group~ away.
+- ~maak demo~ records =screenshots/orpheus-demo.gif= reproducibly: a fixed
+  library is drawn through the real interface once per theme under Xvfb, and
+  ffmpeg assembles the frames.  It needs no player, daemon or network.
+
+*** Changed
+
+- ~orpheus-ui-open~ reuses the selected window, so opening the player no longer
+  splits the frame.  ~orpheus-ui-display-action~ chooses another action.
+- The now-playing card is drawn before the first track too, and its second line
+  is always there, so the list does not jump when playback starts or a track
+  gains an artist line.
+- A tab loaded within ~orpheus-ui-cache-seconds~ is shown from memory; switching
+  between a large queue and a directory no longer reads either again.  ~g~
+  still forces a read.
+- Decoded cover images are cached by file, size, modification time and scale,
+  so a redraw every second does not decode the same cover again.
+- SSH keeps ~32~ completed tracks in its cache instead of ~8~, enough for an
+  album and the tracks the prefetcher has already fetched.
+
+*** Fixed
+
+- A redraw asked for while the buffer is being drawn is queued and run once
+  after it instead of erasing the buffer a second time from inside a callback.
+- The area kept for a cover that has not arrived is reserved in pixels, not in
+  line heights.  A graphical frame used to put the list hundreds of lines
+  below the cover, so opening the player scrolled the tabs, cover and card out
+  of view.
+
 * 0.9.5 (2026-11-09)
 
 *** Added

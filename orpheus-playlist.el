@@ -22,7 +22,16 @@
 (defcustom orpheus-playlist-directory
   (expand-file-name "orpheus/playlists"
                     (or (getenv "XDG_DATA_HOME") "~/.local/share"))
-  "Directory where portable playlists are stored."
+  "Directory where portable playlists are stored.
+`orpheus-ui-save-playlist' writes here unless the playlist is new, in which
+case it asks where to keep it and starts in `orpheus-playlist-new-directory'."
+  :type 'directory :group 'orpheus)
+
+(defcustom orpheus-playlist-new-directory "~/Music"
+  "Directory offered when a new playlist is created.
+The player still asks for the directory every time, so this is a starting
+point rather than a rule; it defaults to the music directory.  Set it to
+`orpheus-playlist-directory' to keep every playlist in one place."
   :type 'directory :group 'orpheus)
 
 (defconst orpheus-playlist--extensions '("m3u" "m3u8" "pls")
@@ -33,18 +42,30 @@
   (member (downcase (or (file-name-extension file) ""))
           orpheus-playlist--extensions))
 
-(defun orpheus-playlist--inside-p (file)
-  "Return non-nil when FILE is inside `orpheus-playlist-directory'."
-  (let ((directory (file-name-as-directory
-                    (expand-file-name orpheus-playlist-directory)))
-        (file (expand-file-name file)))
-    (and (not (equal directory file))
-         (string-prefix-p directory file))))
+(defun orpheus-playlist-directories ()
+  "Return the directories portable playlists are read from, without duplicates."
+  (delete-dups
+   (mapcar (lambda (directory)
+             (file-name-as-directory (expand-file-name directory)))
+           (list orpheus-playlist-directory orpheus-playlist-new-directory))))
 
-(defun orpheus-playlist-file (name)
-  "Return the path of the portable playlist called NAME.
-The name is reduced to its base name, so it cannot choose a path outside
-`orpheus-playlist-directory'."
+(defun orpheus-playlist--inside-p (file &optional directory)
+  "Return non-nil when FILE is inside a playlist directory.
+With DIRECTORY, only that directory counts."
+  (let ((file (expand-file-name file))
+        (directories (if directory
+                         (list (file-name-as-directory
+                                (expand-file-name directory)))
+                       (orpheus-playlist-directories))))
+    (cl-some (lambda (directory)
+               (and (not (equal directory file))
+                    (string-prefix-p directory file)))
+             directories)))
+
+(defun orpheus-playlist--base-name (name)
+  "Return NAME as a safe playlist file name.
+Only the base name survives, so NAME cannot choose a path, and a name without
+an M3U or M3U8 extension gets one."
   (let* ((base (file-name-nondirectory (or name "")))
          (base (cond ((string-empty-p base) "")
                      ((member (downcase (or (file-name-extension base) ""))
@@ -55,19 +76,40 @@ The name is reduced to its base name, so it cannot choose a path outside
     (when (or (string-empty-p safe)
               (member safe '("." ".." ".m3u" ".m3u8")))
       (user-error "Playlist name is empty"))
-    (expand-file-name safe orpheus-playlist-directory)))
+    safe))
+
+(defun orpheus-playlist-file (name &optional directory)
+  "Return the path of the portable playlist called NAME.
+DIRECTORY defaults to `orpheus-playlist-directory'.  The name is reduced to
+its base name, so it cannot choose a path outside DIRECTORY."
+  (expand-file-name (orpheus-playlist--base-name name)
+                    (or directory orpheus-playlist-directory)))
+
+(defun orpheus-playlist-find (name)
+  "Return the existing portable playlist NAME, or nil.
+Both `orpheus-playlist-directory' and `orpheus-playlist-new-directory' are
+searched, so a playlist saved next to the music is found like any other."
+  (let ((base (orpheus-playlist--base-name name)))
+    (cl-find-if (lambda (file) (equal (file-name-nondirectory file) base))
+                (orpheus-playlist-files))))
 
 (defun orpheus-playlist--playlist-file-p (file)
   "Return non-nil when FILE is a regular file with a playlist extension."
   (and (file-regular-p file) (orpheus-playlist--extension-p file)))
 
 (defun orpheus-playlist-files ()
-  "Return the portable playlist files in `orpheus-playlist-directory'."
-  (let ((directory (expand-file-name orpheus-playlist-directory)))
-    (when (file-directory-p directory)
-      (sort (cl-remove-if-not #'orpheus-playlist--playlist-file-p
-                              (directory-files directory t "\\`[^.]"))
-            #'string<))))
+  "Return the portable playlist files in the configured directories.
+`orpheus-playlist-directory' and `orpheus-playlist-new-directory' are both
+read, so a playlist saved next to the music appears in the Playlists tab."
+  (let ((files nil))
+    (dolist (directory (orpheus-playlist-directories))
+      (when (file-directory-p directory)
+        (setq files
+              (append files
+                      (cl-remove-if-not
+                       #'orpheus-playlist--playlist-file-p
+                       (directory-files directory t "\\`[^.]"))))))
+    (sort (delete-dups files) #'string<)))
 
 (defun orpheus-playlist--lines ()
   "Return the lines of the current buffer without line endings."
@@ -164,12 +206,14 @@ URIs are kept as written: a relative path is passed to the backend unchanged."
            (uri (or (file-name-nondirectory uri) uri))
            (t "Unknown")))))
 
-(defun orpheus-playlist-write (file tracks)
+(defun orpheus-playlist-write (file tracks &optional directory)
   "Write TRACKS as an M3U8 playlist to FILE, and return FILE.
-FILE must stay inside `orpheus-playlist-directory'."
+FILE must stay inside one of the configured playlist directories, or inside
+DIRECTORY when the user chose it for a new playlist."
   (let ((file (expand-file-name file)))
-    (unless (orpheus-playlist--inside-p file)
-      (user-error "Playlist must stay inside %s" orpheus-playlist-directory))
+    (unless (orpheus-playlist--inside-p file directory)
+      (user-error "Playlist must stay inside %s"
+                  (or directory orpheus-playlist-directory)))
     (make-directory (file-name-directory file) t)
     (with-temp-buffer
       (insert "#EXTM3U\n")
@@ -187,14 +231,17 @@ FILE must stay inside `orpheus-playlist-directory'."
         (write-region (point-min) (point-max) file nil 'silent)))
     file))
 
-(defun orpheus-playlist-save (name tracks)
-  "Write TRACKS as portable playlist NAME and return its path."
-  (let ((file (orpheus-playlist-file name)))
+(defun orpheus-playlist-save (name tracks &optional directory)
+  "Write TRACKS as portable playlist NAME and return its path.
+A playlist that already exists is overwritten where it is; a new one goes to
+DIRECTORY, or `orpheus-playlist-directory' when DIRECTORY is nil."
+  (let ((file (or (and (null directory) (orpheus-playlist-find name))
+                  (orpheus-playlist-file name directory))))
     (when (and (file-exists-p file)
                (not (y-or-n-p (format "Overwrite %s? "
                                       (file-name-nondirectory file)))))
       (user-error "Playlist not saved"))
-    (orpheus-playlist-write file tracks)))
+    (orpheus-playlist-write file tracks directory)))
 
 (defun orpheus-playlist--track-from-item (item)
   "Return a track for queue ITEM, or nil when it has no URI."
@@ -213,9 +260,10 @@ FILE must stay inside `orpheus-playlist-directory'."
     (setf (orpheus-track-uri copy) uri)
     copy))
 
-(defun orpheus-playlist-save-queue (name callback)
+(defun orpheus-playlist-save-queue (name callback &optional directory)
   "Save the current queue as portable playlist NAME.
-Call CALLBACK with the file path, or nil when the queue is empty."
+Call CALLBACK with the file path, or nil when the queue is empty.  A new
+playlist is written to DIRECTORY, `orpheus-playlist-directory' by default."
   (let ((backend orpheus-backend-current))
     (unless backend
       (user-error "No backend is connected"))
@@ -233,8 +281,28 @@ Call CALLBACK with the file path, or nil when the queue is empty."
                                 (orpheus-backend-portable-uri backend uri))
                              track)))
                        tracks))
-              (file (and tracks (orpheus-playlist-save name tracks))))
+              (file (and tracks
+                         (orpheus-playlist-save name tracks directory))))
          (when callback (funcall callback file)))))))
+
+(defun orpheus-playlist-create (name directory)
+  "Create an empty portable playlist NAME in DIRECTORY and return its path.
+DIRECTORY is the directory the player asked for; it is made when missing, and
+NAME is reduced to a safe base name so it cannot climb out of it."
+  (interactive
+   (list (read-string "New playlist name: ")
+         (read-directory-name
+          "Store playlist in: "
+          (file-name-as-directory
+           (expand-file-name orpheus-playlist-new-directory))
+          nil nil)))
+  (let* ((directory (file-name-as-directory (expand-file-name directory)))
+         (file (orpheus-playlist-file name directory)))
+    (when (file-exists-p file)
+      (user-error "Playlist %s already exists" file))
+    (make-directory directory t)
+    (orpheus-playlist-write file nil directory)
+    file))
 
 (defun orpheus-playlist-uris (file &optional backend)
   "Return the URIs in portable playlist FILE.
@@ -470,7 +538,7 @@ selects a row and mouse-3 opens the row menu."
                   (format " %s  M-<up>/M-<down> reorder  i insert  d remove  C-x C-s save  q bury"
                           (file-name-nondirectory file)))
       (orpheus-playlist-editor--render))
-    (pop-to-buffer buffer)
+    (pop-to-buffer buffer '(display-buffer-same-window))
     buffer))
 
 (defun orpheus-playlist-items ()
