@@ -5,7 +5,7 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:usage.org][Using orpheus]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
+[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:usage.org][Using orpheus]] · [[file:glossary.org][Words and ideas]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
 
 Every option below lives in the ~orpheus~ customization group, so
 
@@ -17,6 +17,26 @@ shows the same list with widgets and documentation.  The tables are the quick
 reference; the examples at the end show the settings that are easiest to get
 wrong.  Backend-specific setup, including MPD passwords and SSH keys, is in
 [[file:backends.org][Backends]].
+
+You do not need to set any of this to try the player.  The defaults are meant
+to be sensible, and the five-minute path in [[file:usage.org][Using orpheus]] works without
+a single option.  Come back here when you want to change where a backend looks,
+how long it waits or how the player looks.
+
+* How to read this page
+
+- A *default* is what happens if you never mention the option.  ~nil~ usually
+  means “use the built-in choice” or “off”; ~t~ means on.  [[file:glossary.org#nil-and-t][Words and ideas]]
+  explains both if Emacs Lisp is new.
+- Set an option in your init file with ~setq~, or change it for the session
+  with ~M-x set-variable~.  ~M-x customize-group RET orpheus RET~ is the
+  discoverable form with descriptions and widgets.
+- The examples use complete ~setq~ forms.  Copy one, change the paths to
+  yours, and evaluate it.  A wrong path usually means an empty tab, not a
+  broken player.
+
+Backends are explained in [[file:backends.org][Backends]]; if you only want to know which one to
+pick, the [[file:usage.org#choose-a-backend][backend chooser]] is shorter.
 
 * Options
 :PROPERTIES:
@@ -42,7 +62,8 @@ wrong.  Backend-specific setup, including MPD passwords and SSH keys, is in
 ~orpheus-backend~ chooses the backend when the player starts.  In the player,
 ~B~ (or ~M-x orpheus-switch-backend~) disconnects the current backend,
 connects the chosen one and rebuilds the tabs, so trying another backend does
-not need a restart.
+not need a restart.  The backend is the part that reaches your music; the
+interface stays the same.
 
 The cache lives in =~/.cache/orpheus= by default and survives a reboot.
 Tracks and covers are deleted, least recently used first, when the directory
@@ -237,4 +258,5 @@ the text without it.
 
 - [[file:backends.org][Backends]] turns these options into a working connection.
 - [[file:usage.org][Using orpheus]] explains what the keys do once the player is open.
+- [[file:glossary.org][Words and ideas]] explains a term you have not met before.
 - [[file:development.org][Development]] is for testing a change to an option or a backend.

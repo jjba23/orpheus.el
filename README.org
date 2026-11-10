@@ -17,9 +17,9 @@ music daemon, or mpv, from inside Emacs.
 #+attr_html: :width 640
 [[./screenshots/orpheus-demo.gif]]
 
-The six player themes, the ready-player controls, every tab, four library
-views, the compact and cover layouts and the Ember and Ice visualizer ramps,
-recorded reproducibly with =maak demo=.  Stills:
+The six player themes, the media controls, every tab, four library views, the
+compact and cover layouts and the Ember and Ice visualizer ramps, recorded
+reproducibly with =maak demo=.  Stills:
 [[./screenshots/theme-aegean.png][Aegean]], [[./screenshots/theme-nord.png][Nord]],
 [[./screenshots/theme-gruvbox.png][Gruvbox]],
 [[./screenshots/theme-rose-pine.png][Rosé Pine]],
@@ -33,6 +33,12 @@ layouts, and the [[./screenshots/visualizer-ember.png][Ember]] and
 library, playlists, cover art and a spectrum visualizer, with the keys Emacs
 fingers already know.  MPD, local files and music on another machine all appear
 in the same interface, and ~B~ switches between them without restarting Emacs.
+
+New here?  You do not need to learn everything at once.  Pick the backend that
+matches where your music already lives, install its program, and run
+~M-x orpheus~.  Press ~2~ for the files tab, ~RET~ to open a folder or play a
+track, and ~H~ whenever you want the map.  The [[file:docs/glossary.org][glossary]] explains every word
+below in plain language.
 
 Everything orpheus does is asynchronous.  Replies arrive in process filters and
 the status is read on a timer, so a slow server, a starting player or a hanging
@@ -55,6 +61,7 @@ matches what you are doing; every page links back here and to its neighbours.
 |------+----------------|
 | [[file:docs/features.org][Feature tour]] | the tabs, transfer queue, now-playing card, playlists, equalizer and visualizer |
 | [[file:docs/usage.org][Using orpheus]] | a working backend, MPD passwords, the keys and the graphical fallbacks |
+| [[file:docs/glossary.org][Words and ideas]] | a friendly glossary of backends, queues, tabs, caches and the rest |
 | [[file:docs/configuration.org][Configuration]] | every option, its default and complete examples |
 | [[file:docs/backends.org][Backends]] | MPD, local files, SSH, the backend protocol and platform notes |
 | [[file:docs/troubleshooting.org][Troubleshooting]] | what to check when the player is silent, a password is rejected or a download stalls |
@@ -121,19 +128,21 @@ Music on another machine is copied over ssh and played by mpv here:
 #+end_src
 
 The complete walkthrough, including MPD passwords, SSH keys and the queue's
-behavior, is in [[file:docs/usage.org][Using orpheus]].  For a quick answer without leaving the
-player, ~?~ opens the menu and ~H~ opens the help buffer.
+behavior, is in [[file:docs/usage.org][Using orpheus]].  If you are not sure which backend fits,
+the [[file:docs/usage.org#choose-a-backend][backend chooser]] asks the question in plain language.  For a quick
+answer without leaving the player, ~?~ opens the menu and ~H~ opens the help
+buffer.
 
-* Why write orpheus, yet another Emacs player? (YAEP)
+* Why orpheus is built this way
 :PROPERTIES:
 :CUSTOM_ID: why-orpheus
 :END:
 
-Music players in Emacs tend to be one of two things: a set of transport
-functions around a single daemon, or a full application that only speaks one
-protocol.  orpheus is the third option — an interface written once over a
-protocol small enough to read, with the protocol implemented more than once to
-prove it is real.
+orpheus keeps the interface and the music source apart.  The queue, the tabs,
+the keys and the drawing do not know whether the music comes from a daemon on
+this machine, a folder of files, or another computer.  That separation is what
+lets one player feel the same everywhere, and what makes a new backend a
+small, testable piece instead of a rewrite.
 
 - *The backend is the seam.* :: The queue, the tabs, the keys and the drawing
   know nothing about MPD or mpv. They call ~orpheus-backend-status~,
@@ -152,8 +161,8 @@ prove it is real.
   out of the way; only the visualizer needs to know what the system captures
   with.
 - *MIT, and no dependencies.* :: Emacs built-ins alone, including the SVG
-  drawing. There is nothing to install for the package itself; the players are
-  programs you already have.
+  drawing. There is nothing to install for the package itself; the backend
+  programs are tools you install separately.
 - *Tested against real players.* :: The unit suite runs with no daemon at all
   (it starts a fake MPD on a loopback port), and the integration suite starts a
   real MPD and a real mpv and plays through them.

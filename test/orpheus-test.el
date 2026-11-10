@@ -2144,7 +2144,7 @@ showing almost none of the list."
       (should (text-property-search-forward 'help-echo help)))))
 
 (ert-deftest orpheus-test/ui-transport-is-spaced-and-traditional ()
-  "The transport is ready-player's spaced row, stop before the modes."
+  "The transport is a spaced row, with stop before the modes."
   (let ((orpheus-ui-plain-ascii nil))
     (let* ((status (orpheus-status-create :state 'play :repeat t))
            (row (orpheus-ui--transport status))
@@ -3484,7 +3484,7 @@ directory, so a test never writes to the user's own cache."
       (should-not (cdr (assq 'single commands)))
       (should (string-match-p "off" (car messages))))))
 
-(ert-deftest orpheus-test/transport-uses-the-ready-player-icons ()
+(ert-deftest orpheus-test/transport-uses-the-media-icons ()
   "The card is one row of plain media glyphs, with an ASCII fallback."
   (let ((orpheus-ui-plain-ascii nil)
         (status (orpheus-status-create :state 'stop)))

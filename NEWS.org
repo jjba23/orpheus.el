@@ -9,6 +9,19 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- A glossary at =docs/glossary.org= explains the words the player and this
+  manual use, from backend and daemon to tab, cache and transfer.
+
+*** Changed
+
+- The README, the guide and the in-app help and tutorial now open with a
+  short, friendly path through the player, then go deeper once the first
+  track plays.  The pages no longer compare orpheus to other music players.
+
 * 0.15.0 (2026-11-10)
 
 *** Added
@@ -50,7 +63,7 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   above a disc folder) and one level of child folders such as =Scans/=.  The
   search runs in a separate process on the local backend and in one remote
   command on SSH, so a large folder or a slow link never blocks the interface.
-- The now-playing card's controls are ready-player's media row: ~◁◁~, ~▶~ or
+- The now-playing card's controls follow the familiar media row: ~◁◁~, ~▶~ or
   ~⏸~, ~■~, ~▷▷~ and ~➦~ first, then ~⇆~, ~⤮~, ~①~, ~⊘~, search and help, as
   plain glyphs rather than boxes.  ~orpheus-ui-control-icons~ changes any of
   them.
@@ -516,9 +529,9 @@ The first release.
   with ffmpeg, and URLs delegated to mpv (and so to yt-dlp).  The audio output
   follows the platform: PipeWire with PulseAudio and ALSA as fallbacks on
   Linux, CoreAudio on macOS, WASAPI on Windows.
-- =orpheus-ui.el=, the interface: seven tabs in rmpc's order, a status line in
-  the header line, a progress bar, cover art in a graphical frame, faces, the
-  keymap modelled on Emacs and rmpc, mouse selection, and a help buffer.
+- =orpheus-ui.el=, the interface: seven tabs in the usual order, a status
+  line in the header line, a progress bar, cover art in a graphical frame,
+  faces, a keymap modelled on Emacs, mouse selection, and a help buffer.
 - =orpheus-vis.el=, the visualizer: cava over PipeWire, PortAudio or WASAPI,
   read by a process filter and drawn as block characters in a terminal or as an
   SVG bar graph in a graphical frame.

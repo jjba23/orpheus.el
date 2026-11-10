@@ -5,11 +5,14 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:development.org][Development]]
+[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:glossary.org][Words and ideas]]
 
-Start with the player's own diagnostics: ~H~ opens the help buffer, ~?~ opens
-the command menu, and ~M-x orpheus-tutorial~ walks the happy path again.  The
-sections below are ordered from the connection outward.
+A player that goes quiet is usually one check away from working again.  None
+of the checks below change your music, and none of them need a restart
+first.  Start with the player's own diagnostics: ~H~ opens the help buffer,
+~?~ opens the command menu, and ~M-x orpheus-tutorial~ walks the happy path
+again.  The sections are ordered from the connection outward, so you can
+stop as soon as the sound comes back.
 
 * The player says “not connected”
 
@@ -19,12 +22,13 @@ Check the backend before changing an option.
 ** MPD
 
 #+begin_src shell
-mpc status
+pgrep -a mpd
 #+end_src
 
-- If ~mpc~ cannot connect, fix MPD first.  The socket path in
-  ~orpheus-mpd-socket~ must be the one in ~mpd.conf~, and the host and port are
-  used when the socket is nil.
+- No line of output means the daemon is not running; start it the way you
+  usually do before changing anything in Emacs.
+- The socket path in ~orpheus-mpd-socket~ must be the one in ~mpd.conf~, and
+  the host and port are used when the socket is nil.
 - A socket connection still uses ~orpheus-mpd-host~ and ~orpheus-mpd-port~ to
   find the matching password entry.  They must describe the same daemon even
   when the connection itself is a socket.

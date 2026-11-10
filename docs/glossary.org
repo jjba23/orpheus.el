@@ -1,0 +1,217 @@
+#+title: Words and ideas
+#+subtitle: a friendly glossary for the names orpheus uses
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]]
+
+You do not need to memorize this page.  Come back when a word in the guide
+feels heavier than it needs to be.  If a definition below still feels
+technical, that is the page's fault, not yours.
+
+* The short version
+
+Three words carry most of the player:
+
+- A *backend* is where your music lives and how orpheus reaches it.
+- The *queue* is what will play next.
+- A *tab* is one view of your music, such as the queue, a folder or a search.
+
+Everything else is a detail around those three.
+
+* The player and its parts
+
+** Backend
+:PROPERTIES:
+:CUSTOM_ID: backend
+:END:
+
+The part of orpheus that knows how to reach your music.  Three ship here:
+~mpd~ talks to a Music Player Daemon, ~local~ plays files and links on this
+machine, and ~ssh~ copies files from another machine before playing them
+here.  The player looks the same with all three.  Press ~B~ to switch.
+
+** Client and daemon
+:PROPERTIES:
+:CUSTOM_ID: client-and-daemon
+:END:
+
+A *daemon* is a program that keeps running in the background.  MPD is a
+daemon: it owns the music library and often the audio output.  orpheus is the
+*client* that asks it to play, pause, queue and browse.  The local and SSH
+backends do not need a daemon; they start playback themselves.
+
+** Library
+:PROPERTIES:
+:CUSTOM_ID: library
+:END:
+
+The collection of music a backend can see.  For MPD it is the daemon's
+configured music directory.  For the local backend it is
+~orpheus-local-directory~.  For SSH it is the remote directory named by
+~orpheus-ssh-directory~.  orpheus does not move or rename your files.
+
+** Queue
+:PROPERTIES:
+:CUSTOM_ID: queue
+:END:
+
+The list of tracks that will play next.  MPD keeps its queue inside the
+daemon; the local and SSH backends keep theirs in Emacs.  The Queue tab shows
+the queue, and ~D~ clears it.
+
+** Now playing
+:PROPERTIES:
+:CUSTOM_ID: now-playing
+:END:
+
+The track that is playing right now, shown in the card above the list and in
+the header line.  The card's controls are ordinary buttons, so the mouse and
+the keyboard reach the same commands.
+
+** Tab
+:PROPERTIES:
+:CUSTOM_ID: tab
+:END:
+
+One view of your music.  The number keys choose a tab, ~TAB~ moves to the next
+one, and each tab remembers where you were.  A backend may offer a different
+set of tabs depending on what it can do.
+
+** Browse
+:PROPERTIES:
+:CUSTOM_ID: browse
+:END:
+
+Moving through folders, artists or albums instead of playing a single row.
+~RET~ enters the row at point, and ~^~ goes back up one level.
+
+** Mark
+:PROPERTIES:
+:CUSTOM_ID: mark
+:END:
+
+A temporary selection of one or more rows.  ~m~ marks a row, ~u~ unmarks it,
+and ~a~ queues the marked rows.  Marks are a convenience, not a saved change.
+
+** Portable playlist
+:PROPERTIES:
+:CUSTOM_ID: portable-playlist
+:END:
+
+A playlist stored as an M3U8 file instead of inside a backend.  It can be
+opened by another backend when the files are available there.  ~N~ creates
+one, ~e~ edits one, and ~C-x C-s~ saves the queue as one.
+
+** Cache
+:PROPERTIES:
+:CUSTOM_ID: cache
+:END:
+
+A local copy of something fetched earlier, usually a track or cover from
+SSH.  The cache makes a replay instant and survives a restart.  It is safe to
+delete; orpheus fetches the file again when it needs it.
+
+** Transfer
+:PROPERTIES:
+:CUSTOM_ID: transfer
+:END:
+
+A file being copied from another machine.  The Downloads tab shows what is
+queued, moving or finished.  ~d~ cancels a transfer and ~RET~ plays or retries
+one.
+
+** Multiplexing
+:PROPERTIES:
+:CUSTOM_ID: multiplexing
+:END:
+
+A way for SSH to reuse one connection for several small requests.  It saves a
+fresh login for each folder change.  A *control socket* is the little local
+file SSH uses to coordinate that shared connection.  If the path is too long
+or the host refuses it, orpheus retries without multiplexing so browsing
+still works.
+
+** Equalizer
+:PROPERTIES:
+:CUSTOM_ID: equalizer
+:END:
+
+A set of volume adjustments for frequency bands, applied by mpv.  It works
+with the local and SSH backends.  MPD sends its audio straight to the
+daemon's output, so orpheus cannot filter it.
+
+** Visualizer
+:PROPERTIES:
+:CUSTOM_ID: visualizer
+:END:
+
+The spectrum drawing at the bottom of the player.  It listens to what the
+machine is playing through cava, so it is not tied to one backend.
+
+** Command menu
+:PROPERTIES:
+:CUSTOM_ID: command-menu
+:END:
+
+The menu opened by ~?~.  It groups commands by what they do and shows the key
+next to each one.  You can click an entry instead of remembering the key.
+
+** Mode line
+:PROPERTIES:
+:CUSTOM_ID: mode-line
+:END:
+
+The line at the bottom of an Emacs window.  ~orpheus-mode-line-mode~ can show
+the current track there, with clickable controls, without opening the player.
+
+** Init file
+:PROPERTIES:
+:CUSTOM_ID: init-file
+:END:
+
+Your Emacs startup file, usually =~/.emacs.d/init.el= or
+=~/.config/emacs/init.el=.  The examples in this guide are meant to go there,
+or to be evaluated once with ~M-x eval-buffer~ while you experiment.
+
+** Option
+:PROPERTIES:
+:CUSTOM_ID: option
+:END:
+
+A named setting, such as ~orpheus-backend~.  You can set one with ~setq~ in
+your init file or change it with ~M-x customize-group RET orpheus RET~.  The
+[[file:configuration.org][Configuration]] page lists every option.
+
+** nil and t
+:PROPERTIES:
+:CUSTOM_ID: nil-and-t
+:END:
+
+Emacs Lisp's false and true values.  ~nil~ means off, empty or “not set”; ~t~
+means on.  A table that says ~nil~ usually means “use the sensible default”.
+
+* Keyboard words
+:PROPERTIES:
+:CUSTOM_ID: keyboard-words
+:END:
+
+
+- ~M-x~ means hold Alt and press x.  In a terminal where Alt does not work,
+  press Escape, release it, then press x.
+- ~RET~ is the Enter or Return key.
+- ~C-x~ means hold Control and press x.
+- ~S-TAB~ means Shift and Tab together.
+- A *command* is something you can run with ~M-x~ or bind to a key.  Every
+  button in orpheus runs one.
+
+If these are new, the [[file:usage.org#first-five-minutes][first five minutes]] section shows them in context.
+
+* Where to go next
+
+- [[file:usage.org][Using orpheus]] for the first track and the keys.
+- [[file:configuration.org][Configuration]] for every option.
+- [[file:backends.org][Backends]] for MPD, local files and SSH.
+- [[file:troubleshooting.org][Troubleshooting]] when something is quiet or stuck.

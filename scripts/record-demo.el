@@ -12,7 +12,7 @@
 ;;; the fonts and the tools the script checks for.
 ;;;
 ;;; Every player preset is shown over the queue, the directories, an album and
-;;; the transfer tab, so the ready-player controls, the card, the artwork and
+;;; the transfer tab, so the transport controls, the card, the artwork and
 ;;; the palette move together.  Two layout presets and two visualizer ramps end
 ;;; the loop.  Selected frames are also written under screenshots/ as the
 ;;; stills the manual links to.

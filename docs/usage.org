@@ -5,13 +5,40 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
+[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:glossary.org][Words and ideas]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
 
 This page starts where installation stops.  It first gets one backend playing,
 then explains the interface and the keys; the reference tables live in
 [[file:configuration.org][Configuration]] and the protocol is in
 [[file:backends.org][Backends]].  If something does not answer, jump to
 [[file:troubleshooting.org][Troubleshooting]].
+
+There is no wrong way to begin.  You can use the player with the keyboard,
+the mouse or ~M-x~, and you cannot break a file by looking around.  If a word
+is unfamiliar, [[file:glossary.org][Words and ideas]] is written for exactly that moment.
+
+* Choose where your music lives
+:PROPERTIES:
+:CUSTOM_ID: choose-a-backend
+:END:
+
+A backend is the part of orpheus that reaches your music.  Choose the one that
+matches what you already have; you can switch later with ~B~ without
+restarting Emacs.
+
+| Your music is… | Choose | What it needs |
+|----------------+--------+---------------|
+| in a Music Player Daemon library | ~mpd~ | a running MPD and its socket or address |
+| a folder or links on this computer | ~local~ | ~mpv~ on ~exec-path~ |
+| on another computer, with no daemon there | ~ssh~ | ~ssh~, and ~sftp~ when the shell cannot run ~cat~ |
+
+If you already run MPD, ~mpd~ is usually the least surprising choice: the
+daemon keeps the library and the queue, and orpheus is the window onto it.
+If you have a folder of files and no daemon, start with ~local~.  If the music
+is on a server, ~ssh~ copies one track at a time and plays it here.
+
+Every section below is self-contained; read the one that matches your choice
+and skip the others for now.
 
 * Quick start
 :PROPERTIES:
@@ -162,6 +189,43 @@ the tab.  To change backend without restarting Emacs, press ~B~ in the player
 or run ~M-x orpheus-switch-backend~; the current backend is disconnected and
 the tabs follow the new one.
 
+* Your first five minutes
+:PROPERTIES:
+:CUSTOM_ID: first-five-minutes
+:END:
+
+This is a gentle path, not a test.  Each step is reversible, and you can stop
+at any point.
+
+1. Run ~M-x orpheus~.  The player opens in the selected window.  If it says
+   “not connected”, the backend has not finished connecting; give it a moment
+   and read [[file:troubleshooting.org][Troubleshooting]] if it stays that way.
+2. Look at the top of the window.  The header line tells you the backend, what
+   is playing and the time.  The tab row below it is a map of the views your
+   backend offers.
+3. Press ~2~ for the files or Directories tab.  ~RET~ enters a folder or plays
+   a track; ~^~ goes back up.  If you chose MPD, start with ~1~ for the Queue
+   instead.
+4. Press ~SPC~ to pause or resume, ~>~ and ~<~ to change track, and ~s~ to
+   stop.  The now-playing card shows the same controls if you prefer the
+   mouse.
+5. Press ~?~ for the command menu and ~H~ for the full help.  Both explain
+   what a command does before you run it.  ~q~ buries the player and leaves
+   the music alone.
+
+The worst thing that happens if you press an unfamiliar key is usually a
+message in the echo area.  When in doubt, ~H~ is the way back to the map.
+
+** If you are new to Emacs
+
+- ~M-x~ means hold Alt and press x.  If Alt is awkward in a terminal, press
+  Escape, release it, then press x.
+- ~RET~ is Enter or Return.  ~SPC~ is the space bar.
+- ~C-x~ means hold Control and press x; ~S-TAB~ means Shift and Tab.
+
+You do not need to learn Emacs Lisp to use the player.  The code examples are
+only for people who want to keep a setting between sessions.
+
 * Getting help
 :PROPERTIES:
 :CUSTOM_ID: getting-help
@@ -182,10 +246,11 @@ explanation, ~H~.
 :CUSTOM_ID: keys
 :END:
 
-The model is Emacs, and where rmpc and Emacs disagree the Emacs meaning wins —
-~C-n~ and ~C-p~ move, ~C-v~ and ~M-v~ page, ~C-s~ searches, ~C-x C-s~ saves,
-~q~ buries the player.  ~?~ opens a transient menu of the commands, and ~H~
-lists the same table in a buffer.  The mouse
+The keys follow Emacs conventions: ~C-n~ and ~C-p~ move, ~C-v~ and ~M-v~
+page, ~C-s~ searches, ~C-x C-s~ saves, and ~q~ buries the player.  ~?~ opens a
+transient menu of the commands, and ~H~ lists the same table in a buffer.
+If ~C-x~ or ~M-x~ is new notation, [[file:glossary.org#keyboard-words][Keyboard words]] explains it in one
+paragraph.  The mouse
 follows the same actions: mouse-1 selects a row or tab, mouse-2 plays a row,
 and mouse-3 opens the context menu for a row, a tab or a playlist editor row.
 The now-playing card is a control panel too: previous, play or pause, next and
@@ -299,3 +364,6 @@ them can be bound in ~global-map~ or in a repeat map.
 The keys above are the whole player; the options behind them are in
 [[file:configuration.org][Configuration]].  When a row will not play or a backend
 stays silent, [[file:troubleshooting.org][Troubleshooting]] has the checks in order.
+
+If a word still feels mysterious, [[file:glossary.org][Words and ideas]] is the short,
+friendly version.  You are welcome to read it before or after the tour.

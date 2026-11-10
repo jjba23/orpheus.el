@@ -14,12 +14,11 @@
 
 ;;; Commentary:
 
-;;; orpheus plays music without leaving Emacs.  It is, at heart, an MPD client
-;;; in the shape of rmpc: the same queue, the same tabs for directories,
-;;; artists, album artists, albums, playlists and search, the same transport
-;;; keys, cover art and a spectrum visualizer.  Unlike rmpc it does not assume
-;;; MPD is the player: a backend is a small object that implements a handful
-;;; of generics, and three of them ship here.
+;;; orpheus plays music without leaving Emacs.  It is, at heart, an MPD client:
+;;; a queue, tabs for directories, artists, album artists, albums, playlists
+;;; and search, transport keys, cover art and a spectrum visualizer.  But it
+;;; does not assume MPD is the player: a backend is a small object that
+;;; implements a handful of generics, and three of them ship here.
 ;;;
 ;;; - `mpd' talks to a Music Player Daemon over TCP or a unix socket.  The
 ;;; daemon owns the audio output, so PipeWire, PulseAudio, ALSA and CoreAudio
@@ -384,8 +383,8 @@ until the editor felt them."
 
 (defun orpheus-cycle-repeat ()
   "Cycle repeating: off, then the queue, then the current track.
-Ready-player's ~r~: one key for the three states, with the mode flags in the
-status line saying which one is in effect."
+One key for the three states, with the mode flags in the status line
+saying which one is in effect."
   (interactive)
   (let* ((status orpheus-status-current)
          (repeat (and status (orpheus-status-repeat status)))

@@ -5,7 +5,7 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]]
+[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]] · [[file:glossary.org][Words and ideas]]
 
 The project uses [[https://github.com/jjba23/maak][maak]]; each task is one command.  The full gate is what a
 change must pass before it is committed, and the demo is the only part that

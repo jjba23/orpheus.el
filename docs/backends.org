@@ -5,13 +5,15 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:features.org][Feature tour]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]]
+[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]] · [[file:glossary.org][Words and ideas]]
 
-A backend is the only part that knows how to talk to a player.  The interface
-is written once; MPD, mpv and SSH are the three implementations that keep it
-honest.  Choose one first, then follow its section.  In the player, ~B~ (or
-~M-x orpheus-switch-backend~) disconnects the current backend and connects the
-chosen one, rebuilding the tabs without restarting Emacs.
+A backend is how orpheus reaches your music.  The player itself gives you the
+window, the keys and the queue; the backend is the small part that knows how
+to list files, read tags and start playback.  Three ship here, and they look
+the same to use, so start with whichever one matches what you already have.
+In the player, ~B~ (or ~M-x orpheus-switch-backend~) disconnects the current
+backend and connects the chosen one, rebuilding the tabs without restarting
+Emacs.
 
 | Backend | Best for | Needs |
 |---------+----------+-------|
@@ -103,37 +105,36 @@ Three backends are shipped and are the reference implementations:
 Register a constructor and implement the generics:
 
 #+begin_src emacs-lisp
-(cl-defstruct (orpheus-spotify (:include orpheus-backend)
-                               (:constructor make-orpheus-spotify)
-                               (:conc-name orpheus-spotify-instance-))
+(cl-defstruct (my-player (:include orpheus-backend)
+                         (:constructor make-my-player)
+                         (:conc-name my-player--))
   process)
 
-(orpheus-register-backend 'spotify #'make-orpheus-spotify
-                          "Spotify through a command line client")
+(orpheus-register-backend 'my-player #'make-my-player
+                          "My player, through its command line client")
 
-(cl-defmethod orpheus-backend-connected-p ((backend orpheus-spotify))
+(cl-defmethod orpheus-backend-connected-p ((backend my-player))
   "Return non-nil when the client is running."
-  (process-live-p (orpheus-spotify-instance-process backend)))
+  (process-live-p (my-player--process backend)))
 
-(cl-defmethod orpheus-backend-command ((backend orpheus-spotify) action &optional value)
-  "Run ACTION on the Spotify client, with VALUE when it takes one."
+(cl-defmethod orpheus-backend-command ((backend my-player) action &optional value)
+  "Run ACTION on my player, with VALUE when it takes one."
   (ignore backend value)
   (pcase action
-    ('toggle (orpheus--spotify-call "play-pause"))
-    ('next   (orpheus--spotify-call "next"))))
+    ('toggle (my-player--call "play-pause"))
+    ('next   (my-player--call "next"))))
 
-(cl-defmethod orpheus-backend-capabilities ((_backend orpheus-spotify))
-  "Spotify knows a queue and a search, and nothing about MPD's library."
+(cl-defmethod orpheus-backend-capabilities ((_backend my-player))
+  "This player knows a queue and a search, and nothing more."
   '(queue search))
 #+end_src
 
 Two things make a backend feel finished: it calls its callbacks from process
 filters rather than from a blocking read, and it degrades by claiming fewer
 capabilities instead of lying about them.  A skeleton like the one above needs
-a ~orpheus--spotify-call~ of your own — an asynchronous wrapper around
-whichever client you drive, ~spotify_player~ and ~playerctl~ being the usual
-candidates.  No Spotify backend ships here because its authentication belongs
-to your account, not to this repository.
+a ~my-player--call~ of your own: an asynchronous wrapper around the command
+line client you drive.  No backend for a subscription service ships here,
+because its sign-in belongs to your account, not to this repository.
 
 ** YouTube
 :PROPERTIES:

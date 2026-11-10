@@ -223,7 +223,7 @@ Add one with `orpheus-register-backend' rather than by hand.")
 
 (defconst orpheus-backend-browse-kinds
   '(queue downloads directories artists albumartists albums playlists search)
-  "Browse kinds a backend may implement, in rmpc's tab order.")
+  "Browse kinds a backend may implement, in tab order.")
 
 (defun orpheus-register-backend (name constructor &optional doc)
   "Register CONSTRUCTOR as the backend called NAME, described by DOC."

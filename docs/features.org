@@ -9,6 +9,7 @@
 
 This is the long version of the feature list.  The [[file:../README.org][README]] keeps the short
 one; this page says what each part is for and how it behaves at the edges.
+If a word is new, [[file:glossary.org][Words and ideas]] explains it without jargon.
 
 * What the player does
 :PROPERTIES:
@@ -20,11 +21,12 @@ one; this page says what each part is for and how it behaves at the edges.
 :CUSTOM_ID: the-player
 :END:
 
-- *The rmpc tabs.* :: MPD gets Queue, Directories, Artists, Album Artists,
-  Albums, Playlists and Search, numbered 1 to 7, each keeping its own place in
-  the hierarchy while you move between them.  Every backend gets Queue,
-  Directories, Playlists and Search, and one with file transfers adds Downloads
-  after Queue.
+- *The tabs.* :: MPD gets Queue, Directories, Artists, Album Artists, Albums,
+  Playlists and Search, numbered 1 to 7, each keeping its own place in the
+  hierarchy while you move between them.  Every backend gets Queue,
+  Directories, Playlists and Search, and one with file transfers adds
+  Downloads after Queue.  A tab is simply one view of your music; switching
+  tabs never changes what is playing.
 - *A visible transfer queue.* :: SSH downloads run in the background, up to
   ~orpheus-ssh-concurrency~ at once.  A play request jumps ahead of prefetches,
   the next ~orpheus-ssh-prefetch~ queue entries arrive before you need them,
@@ -54,10 +56,10 @@ one; this page says what each part is for and how it behaves at the edges.
   recursive ~ls~.  All three answer asynchronously and put the results in the
   same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
-  artist and album, and a coloured progress bar.  Its controls are
-  ready-player's: one row of plain glyphs — ~◁◁~, ~▶~ or ~⏸~, ~■~, ~▷▷~, ~➦~
-  — followed by the repeat, shuffle, single and consume toggles, search and
-  the menu, each with a tooltip and an ASCII fallback.  A mode that is on takes
+  artist and album, and a coloured progress bar.  Its controls are a media row:
+  one row of plain glyphs — ~◁◁~, ~▶~ or ~⏸~, ~■~, ~▷▷~, ~➦~ — followed by the
+  repeat, shuffle, single and consume toggles, search and the menu, each with a
+  tooltip and an ASCII fallback.  A mode that is on takes
   the gold face instead of changing its glyph, so the row never shifts.
   ~orpheus-ui-control-icons~ changes any of them.  ~orpheus-ui-show-now-playing~
   turns the card off when the header line is enough.
@@ -105,10 +107,11 @@ one; this page says what each part is for and how it behaves at the edges.
 - *The transport, all of it.* :: Play, pause, stop, next, previous, seek
   forward and back, volume up and down, and the four MPD flags — repeat,
   random, single, consume.  ~r~ cycles repeat through off, the queue and the
-  current track, as ready-player's does.  ~i~ prints the track, its tags and
-  the position in the echo area, ~o~ opens the current file in the system's
-  player, and the card's row of media glyphs presses the same commands with
-  the mouse.  Repeat and single work with mpv too, not only with MPD.
+  current track, with the status line showing which mode is active.  ~i~
+  prints the track, its tags and the position in the echo area, ~o~ opens the
+  current file in the system's default program, and the card's row of media
+  glyphs presses the same commands with the mouse.  Repeat and single work
+  with mpv too, not only with MPD.
 - *A status line that does not steal the screen.* :: It lives in
   ~header-line-format~, so it redraws every second while the list, the point and
   the scroll position stay exactly where you left them.  It fits the window,
@@ -155,8 +158,8 @@ portable ones, and still open and play as they did before.  MPD's backend-level
 ~save~ and ~load~ command actions remain for server-playlist compatibility; the
 player never uses them, so the queue is always written as a portable file.
 
-Reading accepts M3U and PLS as well as M3U8, so a playlist exported by another
-player can be dropped into the directory.  Writing is always UTF-8 M3U8 with
+Reading accepts M3U and PLS as well as M3U8, so a playlist exported elsewhere
+can be dropped into the directory.  Writing is always UTF-8 M3U8 with
 ~#EXTM3U~ and ~#EXTINF~ labels.
 
 The editor keeps the parsed tracks, not the M3U8 text, so moving a row with
@@ -211,6 +214,7 @@ itself, because the daemon owns the whole queue.
 
 - [[file:usage.org][Using orpheus]] starts the player, explains the keys and walks through the
   tabs.
+- [[file:glossary.org][Words and ideas]] explains the vocabulary in plain language.
 - [[file:configuration.org][Configuration]] lists every option with its default.
 - [[file:backends.org][Backends]] explains MPD, local files, SSH, and how to add a fourth.
 - [[file:troubleshooting.org][Troubleshooting]] is the symptom-by-symptom page.

@@ -7,7 +7,7 @@
 ;;; Commentary:
 
 ;;; A playlist is a list of URIs, not a backend object.  The core writes the
-;;; queue as an M3U8 file, reads M3U and PLS files from other players, and asks
+;;; queue as an M3U8 file, reads M3U and PLS files written elsewhere, and asks
 ;;; the active backend to queue the URIs.  The active backend decides what a
 ;;; URI means: a local path, an MPD library path or a path on an SSH host.
 
