@@ -2476,6 +2476,33 @@ Otherwise the list below it moves up and down every time a cover arrives."
         (should (eq first same))
         (should-not (eq first other))))))
 
+(ert-deftest orpheus-test/vis-graphical-image-fills-the-window ()
+  "The bars are sized in pixels, so a large font leaves no empty frame."
+  (let ((buffer (get-buffer-create orpheus-vis-buffer-name))
+        (captured nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer (setq orpheus-vis--data '(10 20 30)))
+          (cl-letf (((symbol-function 'display-graphic-p)
+                     (lambda (&optional _frame) t))
+                    ((symbol-function 'get-buffer-window)
+                     (lambda (&optional _buffer _frame) 'fake-window))
+                    ((symbol-function 'window-body-width)
+                     (lambda (&optional _window pixels) (if pixels 1000 100)))
+                    ((symbol-function 'window-body-height)
+                     (lambda (&optional _window pixels) (if pixels 700 30)))
+                    ((symbol-function 'window-frame)
+                     (lambda (_window) nil))
+                    ((symbol-function 'frame-char-height)
+                     (lambda (&optional _frame) 20))
+                    ((symbol-function 'orpheus-vis--image)
+                     (lambda (_levels width height)
+                       (setq captured (list width height)) 'image))
+                    ((symbol-function 'insert-image) #'ignore))
+            (with-current-buffer buffer (orpheus-vis--render t)))
+          (should (equal captured '(1000 680))))
+      (kill-buffer buffer))))
+
 (ert-deftest orpheus-test/vis-filter-marks-a-new-frame ()
   "Each complete frame marks the buffer for a redraw."
   (let ((orpheus-vis--accum "")

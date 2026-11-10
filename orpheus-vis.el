@@ -345,7 +345,10 @@ if the bars look steppy."
 FORCE draws even when the buffer is not shown and even when no new frame
 arrived.  Otherwise a frame is drawn once: cava's frames arrive at its own
 pace, and rebuilding an image the reader cannot tell apart is what makes the
-visualizer feel slow."
+visualizer feel slow.
+
+In a graphical frame the image is sized to the window's pixels, so a large
+font still fills it; the column arithmetic is only for a terminal."
   (let ((buffer (get-buffer orpheus-vis-buffer-name)))
     (when (and (buffer-live-p buffer)
                (or force
@@ -356,6 +359,14 @@ visualizer feel slow."
                (window (get-buffer-window buffer))
                (width (max 20 (if window (window-body-width window) 60)))
                (height (max 4 (if window (- (window-body-height window) 2) 12)))
+               (pixel-width (if window
+                                (window-body-width window t)
+                              (* 8 width)))
+               (pixel-height (if window
+                                 (max 40 (- (window-body-height window t)
+                                            (frame-char-height
+                                             (window-frame window))))
+                               (* 8 height)))
                (levels (if (and orpheus-vis--data
                                 (> (length orpheus-vis--data) 0))
                          orpheus-vis--data
@@ -363,7 +374,7 @@ visualizer feel slow."
           (erase-buffer)
           (let ((image (and orpheus-vis-graphical (display-graphic-p)
                             (orpheus-vis--image (seq-take levels width)
-                                                (* 8 width) (* 8 height)))))
+                                                pixel-width pixel-height))))
             (if image
               (insert-image image " ")
               (insert (orpheus-vis--text levels width height))))

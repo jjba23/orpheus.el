@@ -17,7 +17,17 @@ music daemon, or mpv, from inside Emacs.
 #+attr_html: :width 640
 [[./screenshots/orpheus-demo.gif]]
 
-The player across four themes, recorded reproducibly with =maak demo=.
+The six player themes, the ready-player controls, every tab, four library
+views, the compact and cover layouts and the Ember and Ice visualizer ramps,
+recorded reproducibly with =maak demo=.  Stills:
+[[./screenshots/theme-aegean.png][Aegean]], [[./screenshots/theme-nord.png][Nord]],
+[[./screenshots/theme-gruvbox.png][Gruvbox]],
+[[./screenshots/theme-rose-pine.png][Rosé Pine]],
+[[./screenshots/theme-solarized-light.png][Solarized Light]],
+[[./screenshots/theme-graphite.png][Graphite]],
+[[./screenshots/layout-cover.png][cover]] and [[./screenshots/layout-compact.png][compact]]
+layouts, and the [[./screenshots/visualizer-ember.png][Ember]] and
+[[./screenshots/visualizer-ice.png][Ice]] ramps.
 
 *orpheus.el is a flexible music player for Emacs*: a queue, a couple of tabs, a
 library, playlists, cover art and a spectrum visualizer, with the keys Emacs

@@ -34,14 +34,18 @@ the unit suite on Emacs 29.1 and 31.1, the integration suite against a real
 maak is not installed there.
 
 ~maak demo~ runs =scripts/record-demo.sh=: Emacs under Xvfb draws a fixed
-library through the real interface, once per theme, and ffmpeg assembles the
-frames into =screenshots/orpheus-demo.gif=.  It needs ~xvfb-run~, ~ffmpeg~ and an
-Emacs built with cairo, which is what lets Emacs export each frame as a PNG; it
-needs no player, daemon or network.  The demo data is fixed, so a checkout
-records the same scenes; the font is the one machine-dependent input.
+library through the real interface for each of the six player presets and four
+scenes — the queue, a directory, an album and the transfers — then the compact
+and cover layouts and the Ember and Ice visualizer ramps, and ffmpeg assembles
+the frames into =screenshots/orpheus-demo.gif=.  The same run writes the theme,
+layout and visualizer stills under =screenshots/=, which the README links to.
+It needs ~xvfb-run~, ~ffmpeg~, ~gifsicle~ and an Emacs built with cairo, which
+is what lets Emacs export each frame as a PNG; it needs no player, daemon or
+network.  The demo data is fixed, so a checkout records the same scenes; the
+font is the one machine-dependent input.
 
 The repository carries that environment as =manifest.scm= for Guix and
-=flake.nix= for Nix.  Both include Xvfb, ffmpeg, DejaVu Sans Mono and a
+=flake.nix= for Nix.  Both include Xvfb, ffmpeg, gifsicle, DejaVu Sans Mono and a
 Cairo-capable Emacs.  The Nix shell records the GIF end to end:
 
 #+begin_src shell

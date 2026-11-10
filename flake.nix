@@ -24,6 +24,7 @@
               emacs
               ffmpeg
               findutils
+              gifsicle
               xvfb-run
             ];
             FONTCONFIG_FILE = fonts;

@@ -9,6 +9,21 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Changed
+
+- =maak demo= records all six player themes across the queue, a directory, an
+  album and the transfers, then the compact and cover layouts and the Ember and
+  Ice ramps.  It writes the matching stills under =screenshots/=, and the frame
+  is wide enough for all eight tabs and the full status line.
+
+*** Fixed
+
+- The visualizer sizes its image to the window's pixels in a graphical frame,
+  so a large font no longer leaves the bars in the corner with most of the
+  window empty.
+
 * 0.14.0 (2026-11-10)
 
 *** Added
