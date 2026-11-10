@@ -30,6 +30,7 @@
 (require 'orpheus-playlist)
 (require 'orpheus-transient)
 (require 'orpheus-equalizer)
+(require 'orpheus-lyrics)
 (require 'orpheus-vis)
 (require 'button)
 
@@ -1170,7 +1171,7 @@ folder are read at a glance the way Dired shows them."
          ('search
           " RET play  a add  m mark  / search again  g refresh  ? menu  q bury")
          (_
-          " RET play  a add  m mark  d delete  / search  g refresh  ? menu  q bury")))
+          " RET play  a add  m mark  d delete  / search  L lyrics  g refresh  ? menu  q bury")))
 
 (defun orpheus-ui--render ()
   "Draw the buffer from the tabs and rows it holds.
@@ -1399,6 +1400,7 @@ read and are refreshed every tick so their bytes and the header summary move."
       (with-current-buffer buffer
         (orpheus-ui--refresh-downloads)
         (orpheus-ui--update-context-art)
+        (orpheus-lyrics-tick)
         (if orpheus-ui--needs-refresh
             (orpheus-ui-refresh)
           (orpheus-ui--redraw))))))
@@ -1867,6 +1869,8 @@ playlist opens in its editor."
     ("?" "the menu: transport, modes, queue, playlists, views")
     ("H" "this help: concepts, keys, troubleshooting and the tutorial")
     ("E" "the equalizer: toggle it, load a preset, save your own")
+    ("M-E" "the equalizer's bands as a bar graph you can shape")
+    ("L" "lyrics for the current track, following the playback")
     ("B" "switch to another backend")
     ("M-x orpheus-tutorial" "a guided tour through the player")
     ("SPC" "play or pause")
@@ -1965,12 +1969,22 @@ playlist opens in its editor."
          "  that can see the files it names.\n\n")
         (insert (propertize "Equalizer\n" 'face 'orpheus-title-face))
         (insert
-         "  E opens the equalizer: enable it, load flat, bass, vocal, treble\n"
-         "  or loudness, save your own preset, or type the ten gains.  It\n"
-         "  works with the local and ssh backends, which play through mpv.\n"
-         "  MPD's audio leaves through the daemon's own output, so Emacs\n"
-         "  cannot filter it.  Saved presets live in\n"
+         "  E is the simple mode: enable it, pick a preset such as bass,\n"
+         "  vocal, night or podcast, save your own, or type the gains.\n"
+         "  M-E is the advanced one: a bar graph of every band that the\n"
+         "  mouse and the arrow keys shape, with the band width and the\n"
+         "  range.  It works with the local and ssh backends, which play\n"
+         "  through mpv.  MPD's audio leaves through the daemon's own\n"
+         "  output, so Emacs cannot filter it.  Saved presets live in\n"
          (format "  %s.\n\n" orpheus-equalizer-preset-file))
+        (insert (propertize "Lyrics\n" 'face 'orpheus-title-face))
+        (insert
+         "  L shows the words of the current track and marks the line that\n"
+         "  is playing; RET on a line seeks to it.  Each backend reads them\n"
+         "  where it keeps them: a .lrc or .txt file beside a local or SSH\n"
+         "  track, a lyrics tag inside the file, or MPD's own tags through\n"
+         "  the daemon.  LRC files are followed in time; plain text is\n"
+         "  shown as it is.\n\n")
         (insert (propertize "If something is wrong\n" 'face 'orpheus-title-face))
         (insert
          "  A backend that does not answer is retried in the background, so\n"
@@ -2059,13 +2073,18 @@ playlist opens in its editor."
                                              #'orpheus-ui-new-playlist))
                                  "Create a new portable playlist")
         (insert ".\n\n")
-        (insert (propertize "7. Shape the sound\n" 'face 'orpheus-title-face))
+        (insert (propertize "7. Shape the sound and read the words\n"
+                            'face 'orpheus-title-face))
         (insert
-         "   E opens the equalizer.  Load a preset, save the current gains,\n"
-         "   or type ten values.  It needs the local or ssh backend.  ")
+         "   E opens the equalizer's simple mode, M-E its bar-graph editor,\n"
+         "   and L shows the lyrics of the current track.  The equalizer\n"
+         "   needs the local or ssh backend.  ")
         (orpheus-ui--help-button "Open the equalizer"
                                  #'orpheus-equalizer-menu
                                  "Load, save and edit equalizer presets")
+        (insert " or ")
+        (orpheus-ui--help-button "Show the lyrics" #'orpheus-lyrics-open
+                                 "The words of the track that is playing")
         (insert ".\n\n")
         (insert (propertize "8. Get help\n" 'face 'orpheus-title-face))
         (insert
@@ -2127,6 +2146,8 @@ playlist opens in its editor."
     (define-key map (kbd "?") 'orpheus-menu)
     (define-key map (kbd "H") 'orpheus-help)
     (define-key map (kbd "E") 'orpheus-equalizer-menu)
+    (define-key map (kbd "M-E") 'orpheus-equalizer-editor)
+    (define-key map (kbd "L") 'orpheus-lyrics-open)
     (define-key map (kbd "B") 'orpheus-switch-backend)
     (define-key map (kbd "SPC") 'orpheus-play-pause)
     (define-key map (kbd "p") 'orpheus-ui-previous-line)

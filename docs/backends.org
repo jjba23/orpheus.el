@@ -54,11 +54,20 @@ these generics from =orpheus-backend.el=:
 | ~orpheus-backend-portable-uri~   | store a URI as a library-relative path          |
 | ~orpheus-backend-playlist-uri~   | resolve a playlist URI for the backend          |
 | ~orpheus-backend-command~        | play, pause, toggle, stop, next, previous, seek, volume, repeat, random, single, consume, update, rescan, clear, shuffle, delete, save, playpos, playid, load |
-| ~orpheus-backend-equalizer~      | set the mpv audio filter chain, or nil when the backend cannot || ~orpheus-backend-album-art~      | a file path to the cover, or nil |
+| ~orpheus-backend-equalizer~      | set the mpv audio filter chain, or nil when the backend cannot |
+| ~orpheus-backend-lyrics~         | an ~orpheus-lyrics~ for a track, or nil      |
+| ~orpheus-backend-album-art~      | a file path to the cover, or nil |
 | ~orpheus-backend-local-file~     | a local file the backend holds for a track, or nil |
 | ~orpheus-backend-downloads~      | active and recent transfers as rows, when it has a ~downloads~ capability |
 | ~orpheus-backend-cancel-download~ | cancel the transfer for a URI                 |
 | ~orpheus-backend-capabilities~   | which of the browse kinds it can do            |
+
+Lyrics are asked for with ~orpheus-backend-lyrics~, and each backend answers in
+its own way because the files are in different places: ~local~ reads a sidecar
+beside the track and then the file's own tags, ~ssh~ runs one quoted command for
+the sidecar on the remote machine, and ~mpd~ reads the sidecar under
+~orpheus-mpd-music-directory~ or asks the daemon for the tags it does not index.
+A new backend answers nil when it cannot read lyrics; the buffer says so.
 
 The browse kinds are ~queue~, ~downloads~, ~directories~, ~artists~,
 ~albumartists~, ~albums~, ~playlists~ and ~search~; the interface draws a tab

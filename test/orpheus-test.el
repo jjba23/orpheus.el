@@ -1748,7 +1748,7 @@ keystroke doubles it and a few of them fill it with copies."
 The double dash marks helpers and the hypothetical function in the extension
 example.  The value types are named as types, so they are allowed by name."
   (let ((checked 0)
-        (types '(orpheus-track orpheus-status orpheus-item)))
+        (types '(orpheus-track orpheus-status orpheus-item orpheus-lyrics)))
     (dolist (file (orpheus-test--documentation-files))
       (let ((text (with-temp-buffer
                     (insert-file-contents file)
@@ -3762,5 +3762,139 @@ directory, so a test never writes to the user's own cache."
                                     (lambda (result) (setq found result)))
              (should (equal found path)))
          (when second (orpheus-backend-disconnect second)))))))
+
+;;; The equalizer editor
+
+(ert-deftest orpheus-test/equalizer-filter-uses-the-width ()
+  "The band width in octaves reaches the filter string."
+  (let ((orpheus-equalizer-bands '(1000))
+        (orpheus-equalizer-width 2))
+    (should (equal (orpheus-equalizer--filter '(3))
+                   "equalizer=frequency=1000:width_type=o:width=2:gain=3"))))
+
+(ert-deftest orpheus-test/equalizer-adjust-keeps-the-other-bands ()
+  "Adjusting one band leaves the others alone and respects the limit."
+  (let ((orpheus-equalizer-bands '(100 1000))
+        (orpheus-equalizer-max-gain 6))
+    (should (equal (orpheus-equalizer-adjust '(0 0) 1 3) '(0 3)))
+    (should (equal (orpheus-equalizer-adjust '(0 5) 1 4) '(0 6)))))
+
+(ert-deftest orpheus-test/equalizer-invert-and-tilt ()
+  "Invert flips the curve and tilt lifts the bass, not the treble."
+  (let ((orpheus-equalizer-bands '(100 1000 10000))
+        (orpheus-equalizer-max-gain 12))
+    (should (equal (orpheus-equalizer-invert-gains '(2 0 -3)) '(-2 0 3)))
+    (let ((tilted (orpheus-equalizer-tilt-gains '(0 0 0))))
+      (should (> (car tilted) 0))
+      (should (< (car (last tilted)) 0)))))
+
+(ert-deftest orpheus-test/equalizer-bar-draws-the-gain ()
+  "The bar fills one column per dB, on the side the gain points to."
+  (let ((orpheus-equalizer-max-gain 4))
+    (should (= 3 (cl-count ?█ (orpheus-equalizer--bar-string 3))))
+    (should (= 2 (cl-count ?█ (orpheus-equalizer--bar-string -2))))
+    (should (string-match-p "│" (orpheus-equalizer--bar-string 0)))))
+
+;;; Lyrics
+
+(ert-deftest orpheus-test/lyrics-parse-lrc ()
+  "LRC times become seconds, and one line may carry several times."
+  (should (equal (orpheus-lyrics--parse
+                  "[ar:Band]\n[00:01.50]Hello\n[00:12.00][00:20.00]Chorus\n")
+                 '((1.5 . "Hello") (12.0 . "Chorus") (20.0 . "Chorus")))))
+
+(ert-deftest orpheus-test/lyrics-parse-offset-and-plain ()
+  "An LRC offset shifts every time; text without times stays plain."
+  (should (equal (orpheus-lyrics--parse "[offset:+500]\n[00:02.00]Late")
+                 '((1.5 . "Late"))))
+  (should (equal (orpheus-lyrics--parse "one\n\ntwo\n")
+                 '((nil . "one") (nil . "") (nil . "two")))))
+
+(ert-deftest orpheus-test/lyrics-index-at ()
+  "The current line is the last one whose time has come."
+  (let ((lines '((1.0 . "a") (5.0 . "b") (9.0 . "c"))))
+    (should (= 1 (orpheus-lyrics--index-at lines 6)))
+    (should (= 0 (orpheus-lyrics--index-at lines 2)))
+    (should-not (orpheus-lyrics--index-at lines 0.5))))
+
+(ert-deftest orpheus-test/lyrics-sidecar-prefers-lrc ()
+  "A sidecar is found beside the track, and .lrc beats .txt."
+  (let* ((dir (make-temp-file "orpheus-lyrics" t))
+         (song (expand-file-name "Song.mp3" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file song (insert "not really audio"))
+          (with-temp-file (expand-file-name "Song.txt" dir) (insert "plain"))
+          (with-temp-file (expand-file-name "Song.LRC" dir)
+            (insert "[00:01.00]hi"))
+          (should (equal (orpheus-lyrics--sidecar song)
+                         (expand-file-name "Song.LRC" dir))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/lyrics-from-file ()
+  "A track reads the lyrics in the file beside it."
+  (let* ((dir (make-temp-file "orpheus-lyrics" t))
+         (song (expand-file-name "a.flac" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file song (insert ""))
+          (with-temp-file (expand-file-name "a.lrc" dir)
+            (insert "[00:01.00]hi"))
+          (let ((lyrics (orpheus-lyrics--from-file song)))
+            (should (orpheus-lyrics-p lyrics))
+            (should (orpheus-lyrics-synced lyrics))
+            (should (equal (orpheus-lyrics-lines lyrics) '((1.0 . "hi"))))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/lyrics-from-tags ()
+  "A daemon's plain lyrics tag is read, with no packing rules invented."
+  (let ((lyrics (orpheus-lyrics--from-tags
+                 '((file . "a.mp3") (unsyncedlyrics . "one\ntwo")))))
+    (should (orpheus-lyrics-p lyrics))
+    (should-not (orpheus-lyrics-synced lyrics))
+    (should (equal (orpheus-lyrics-lines lyrics)
+                   '((nil . "one") (nil . "two"))))))
+
+(ert-deftest orpheus-test/lyrics-come-from-the-local-backend ()
+  "The local backend answers with the sidecar next to the file."
+  (let* ((dir (make-temp-file "orpheus-lyrics" t))
+         (song (expand-file-name "Song.mp3" dir))
+         (answer 'waiting))
+    (unwind-protect
+        (progn
+          (with-temp-file song (insert ""))
+          (with-temp-file (expand-file-name "Song.lrc" dir)
+            (insert "[00:01.00]hi"))
+          (orpheus-backend-lyrics
+           (make-orpheus-local :name 'local)
+           (orpheus-track-create :uri song)
+           (lambda (lyrics) (setq answer lyrics)))
+          (should (orpheus-lyrics-p answer))
+          (should (equal (orpheus-lyrics-lines answer) '((1.0 . "hi")))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/lyrics-come-from-the-mpd-library-root ()
+  "MPD resolves a library path under its configured local root."
+  (let* ((dir (make-temp-file "orpheus-lyrics" t))
+         (orpheus-mpd-music-directory dir)
+         (answer 'waiting))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "Song.mp3" dir) (insert ""))
+          (with-temp-file (expand-file-name "Song.lrc" dir)
+            (insert "[00:01.00]hi"))
+          (orpheus-backend-lyrics
+           (make-orpheus-mpd :name 'mpd)
+           (orpheus-track-create :uri "Song.mp3")
+           (lambda (lyrics) (setq answer lyrics)))
+          (should (orpheus-lyrics-p answer))
+          (should (equal (orpheus-lyrics-lines answer) '((1.0 . "hi")))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/ssh-lyrics-command-quotes-the-paths ()
+  "The remote sidecar command never builds a word out of raw data."
+  (let ((command (orpheus-ssh--lyrics-command "/Music/a b.mp3")))
+    (should (string-match-p "'/Music/a b.lrc'" command))
+    (should (string-match-p "'/Music/a b.txt'" command))))
 
 ;;; orpheus-test.el ends here

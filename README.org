@@ -30,8 +30,9 @@ layouts, and the [[./screenshots/visualizer-ember.png][Ember]] and
 [[./screenshots/visualizer-ice.png][Ice]] ramps.
 
 *orpheus.el is a flexible music player for Emacs*: a queue, a couple of tabs, a
-library, playlists, cover art and a spectrum visualizer, with the keys Emacs
-fingers already know.  MPD, local files and music on another machine all appear
+library, playlists, cover art, an equalizer you can shape with the mouse or the
+keyboard, lyrics that follow the music and a spectrum visualizer, with the keys
+Emacs fingers already know.  MPD, local files and music on another machine all appear
 in the same interface, and ~B~ switches between them without restarting Emacs.
 
 New here?  You do not need to learn everything at once.  Pick the backend that
@@ -59,7 +60,7 @@ matches what you are doing; every page links back here and to its neighbours.
 
 | Page | What it covers |
 |------+----------------|
-| [[file:docs/features.org][Feature tour]] | the tabs, transfer queue, now-playing card, playlists, equalizer and visualizer |
+| [[file:docs/features.org][Feature tour]] | the tabs, transfer queue, now-playing card, playlists, equalizer, lyrics and visualizer |
 | [[file:docs/usage.org][Using orpheus]] | a working backend, MPD passwords, the keys and the graphical fallbacks |
 | [[file:docs/glossary.org][Words and ideas]] | a friendly glossary of backends, queues, tabs, caches and the rest |
 | [[file:docs/configuration.org][Configuration]] | every option, its default and complete examples |

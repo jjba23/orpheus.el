@@ -293,7 +293,9 @@ track.
 | ~M-c~                  | next visualizer colour ramp                              |
 | ~?~                    | the menu: transport, modes, queue, playlists, views      |
 | ~H~                    | help: concepts, keys and troubleshooting                 |
-| ~E~                    | the equalizer: presets, save, delete, set the gains      |
+| ~E~                    | the equalizer's simple mode: presets, save, delete, set the gains |
+| ~M-E~                  | the equalizer's advanced mode: a bar graph of every band |
+| ~L~                    | lyrics for the current track, following the playback      |
 | ~B~                    | switch to another backend                                |
 | ~q~                    | bury the player                                          |
 | ~mouse-1~, ~mouse-2~   | select a row, play it                                    |
@@ -314,6 +316,22 @@ directory URI, because its ~add~ would expand the whole tree.  Connecting never
 queues anything; a queue that is already large was restored by MPD's own
 ~state_file~, and ~D~ empties it.
 
+The equalizer has two faces, and both reach the same gains.  ~E~ loads a
+preset, saves the current curve or reads ten numbers; it works with the local
+and ssh backends, and says so on MPD, whose audio leaves through the daemon.
+~M-E~ draws the curve as ten bars: up, down, left and right move the selected
+band, ~M-<up>~ and ~M-<down>~ move it farther, ~n~ and ~p~ change band, and a
+click inside a bar sets the gain of the column clicked.  ~0~ zeroes the band,
+~r~ resets every band, ~i~ inverts the curve, ~t~ tilts it, ~e~ turns the
+equalizer on or off, and ~P~, ~s~ and ~d~ load, save and delete presets.  A
+right click opens the same commands as a menu.
+
+~L~ shows the lyrics of the current track in a side window and marks the line
+that is playing, when the words carry times.  RET on a line seeks to it, ~SPC~
+plays or pauses, and ~g~ reads them again.  The backend finds the words where
+it keeps them, so the window is available on every backend, though a host
+without ~cat~ or a track without a sidecar or a tag has none to show.
+
 Outside the player buffer:
 
 | Command                  | Meaning                                          |
@@ -323,7 +341,9 @@ Outside the player buffer:
 | ~M-x orpheus-next~       | next track                                       |
 | ~M-x orpheus-help~       | the help buffer: concepts, keys and troubleshooting |
 | ~M-x orpheus-tutorial~   | a guided tour through the player                 |
-| ~M-x orpheus-equalizer-menu~ | equalizer presets, save and delete           |
+| ~M-x orpheus-equalizer-menu~ | the equalizer's simple mode                   |
+| ~M-x orpheus-equalizer-editor~ | the equalizer's bar graph                    |
+| ~M-x orpheus-lyrics-open~ | lyrics for the current track                      |
 | ~M-x orpheus-volume-up~  | volume up by ~orpheus-volume-step~               |
 | ~M-x orpheus-visualizer~ | spectrum visualizer                              |
 | ~M-x orpheus-ssh-diagnose~ | check the remote SSH commands and shell features |

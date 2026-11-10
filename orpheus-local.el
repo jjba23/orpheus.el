@@ -26,6 +26,7 @@
 (require 'subr-x)
 (require 'json)
 (require 'orpheus-backend)
+(require 'orpheus-lyrics)
 
 ;;; Settings
 
@@ -660,6 +661,10 @@ Embedded art is extracted when no cover file is found anywhere near it."
 (cl-defmethod orpheus-backend-album-art ((_local orpheus-local) track callback)
   "Find cover art for TRACK next to the file or inside it, then call CALLBACK."
   (orpheus-local--album-art-file (orpheus-track-uri track) callback))
+
+(cl-defmethod orpheus-backend-lyrics ((_local orpheus-local) track callback)
+  "Read TRACK's sidecar or embedded lyrics, then call CALLBACK with them."
+  (funcall callback (orpheus-lyrics--from-file (orpheus-track-uri track))))
 
 (cl-defmethod orpheus-backend-folder-art ((_local orpheus-local) folder callback)
   "Find cover art for FOLDER, then call CALLBACK with a path or nil."

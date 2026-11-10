@@ -89,11 +89,18 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   player to building a queue, saving a playlist and shaping the sound, with a
   button at each step that runs it.  The help buffer links to it, so the
   answer to "where do I start?" is one command away.
-- *A sound you can shape.* :: ~E~ opens the equalizer: flat, bass, vocal,
-  treble and loudness presets, a ten-band gain line, and presets you save
-  under your own name.  It works with the local and ssh backends, which play
-  through mpv; MPD's audio leaves through the daemon's own output, so Emacs
-  cannot filter it.
+- *A sound you can shape.* :: ~E~ is the equalizer's simple mode: ten presets
+  from flat and bass to night, podcast and club, on or off, and presets you
+  save under your own name.  ~M-E~ is the advanced mode: a bar graph of every
+  band that the arrow keys and the mouse shape, with invert, tilt and reset,
+  the band width and the range in dB beside it.  It works with the local and
+  ssh backends, which play through mpv; MPD's audio leaves through the daemon's
+  own output, so Emacs cannot filter it.
+- *Words that follow the music.* :: ~L~ shows the lyrics of the current track
+  in a side window and marks the line that is playing; RET on a line seeks to
+  it.  Each backend reads them where it keeps them: a ~.lrc~ or ~.txt~ file
+  beside a local or SSH track, a lyrics tag inside the file, or MPD's own tags
+  through the daemon.
 - *A playlist in two answers.* :: ~N~ asks for a name and then where to keep
   it, starting in ~orpheus-playlist-new-directory~ (=~/Music= by default), and
   opens the new playlist in the editor.  Saving a queue asks the same question
@@ -205,7 +212,7 @@ exported with Inkscape — no screenshot of a separate application.
 :CUSTOM_ID: what-is-not-here-yet
 :END:
 
-Named so that nobody guesses: lyrics, per-track rating, a command mode with
+Named so that nobody guesses: per-track rating, a command mode with
 arguments, pane splitting inside a tab, mouse drag of queue rows, and gapless
 playback on the local backend (mpv plays one file at a time there, so the gap
 is the time Emacs takes to load the next).  MPD gives gapless playback by

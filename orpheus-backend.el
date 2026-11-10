@@ -58,6 +58,11 @@ Each function is called with the backend and a description of the event.")
   (songid nil)
   (bitrate nil))
 
+(cl-defstruct (orpheus-lyrics (:constructor orpheus-lyrics-create))
+  "The lyrics of one track: where they came from and their lines.
+Each line is (SECONDS . TEXT); SECONDS is nil for lyrics without timing."
+  source synced lines)
+
 (cl-defstruct (orpheus-item (:constructor orpheus-item-create))
   "One row of a browsable list.
 LABEL and DETAIL are the two columns; KIND says what the row is, and DATA is
@@ -345,6 +350,13 @@ Return non-nil when the backend accepted it.  A backend whose audio leaves
 through another process, such as MPD, returns nil."
   (ignore backend filters)
   nil)
+
+(cl-defgeneric orpheus-backend-lyrics (backend track callback)
+  "Ask BACKEND for the lyrics of TRACK, then call CALLBACK with them.
+CALLBACK receives an `orpheus-lyrics', or nil when the track has none.  The
+default answers nil, for a backend that cannot read them."
+  (ignore backend track)
+  (funcall callback nil))
 
 (cl-defgeneric orpheus-backend-album-art (backend track callback)
   "Fetch cover art for TRACK from BACKEND, then call CALLBACK with a path or nil."

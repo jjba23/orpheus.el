@@ -26,6 +26,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'orpheus-backend)
+(require 'orpheus-lyrics)
 
 (declare-function auth-source-search "auth-source" (&rest args))
 
@@ -59,6 +60,15 @@ what the connection uses, and whatever is found is sent."
 (defcustom orpheus-mpd-search-tag "any"
   "Tag MPD searches in; `any' looks at every tag."
   :type 'string :group 'orpheus)
+
+(defcustom orpheus-mpd-music-directory nil
+  "Local directory that holds the library MPD plays, or nil.
+MPD names its songs relative to its own `music_directory'.  Setting this to
+that same directory lets orpheus read the `.lrc' or `.txt' file beside a song.
+It is only needed for sidecar lyrics: lyrics stored in a file's own tags are
+read through the daemon either way."
+  :type '(choice (const :tag "Not available here" nil) directory)
+  :group 'orpheus)
 
 (defcustom orpheus-mpd-timeout 15
   "Seconds MPD may stay silent while a reply is owed before it is dropped.
@@ -924,6 +934,36 @@ relative paths stay in MPD's own namespace."
          (or (orpheus-backend--relative-uri uri (orpheus-mpd--playlist-root))
              uri))
         (t uri)))
+
+(defun orpheus-mpd--lyrics-file (uri)
+  "Return the local file for URI under `orpheus-mpd-music-directory', or nil."
+  (when (and orpheus-mpd-music-directory
+             (stringp uri)
+             (not (string-empty-p uri))
+             (not (orpheus-backend--url-p uri))
+             (not (file-name-absolute-p uri)))
+    (expand-file-name uri (file-name-as-directory
+                           orpheus-mpd-music-directory))))
+
+(cl-defmethod orpheus-backend-lyrics ((mpd orpheus-mpd) track callback)
+  "Read TRACK's lyrics beside the file or from the daemon's tags.
+The sidecar is only reachable when `orpheus-mpd-music-directory' names the
+library here; `readcomments' covers a library that embeds its lyrics, and
+MPD's own tags are not indexed, which is why it is the command asked."
+  (let* ((uri (orpheus-track-uri track))
+         (file (orpheus-mpd--lyrics-file uri))
+         (local (and file (orpheus-lyrics--from-file file))))
+    (cond
+     ((null uri) (funcall callback nil))
+     (local (funcall callback local))
+     (t
+      (orpheus-mpd--send-command
+       mpd "readcomments" (list (orpheus-mpd--quote uri))
+       (lambda (reply)
+         (funcall callback
+                  (when (plist-get reply :ok)
+                    (orpheus-lyrics--from-tags
+                     (plist-get reply :lines))))))))))
 
 (cl-defmethod orpheus-backend-capabilities ((_mpd orpheus-mpd))
   "Return what MPD can browse."

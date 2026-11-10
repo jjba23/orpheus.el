@@ -29,6 +29,7 @@
     "orpheus-playlist.el"
     "orpheus-transient.el"
     "orpheus-equalizer.el"
+    "orpheus-lyrics.el"
     "orpheus-mpd.el"
     "orpheus-local.el"
     "orpheus-ssh.el"
@@ -52,6 +53,7 @@
 (define compiled-files
   '("orpheus-backend.elc" "orpheus-playlist.elc" "orpheus-transient.elc"
     "orpheus-equalizer.elc"
+    "orpheus-lyrics.elc"
     "orpheus-mpd.elc" "orpheus-local.elc" "orpheus-ssh.elc" "orpheus-ui.elc"
     "orpheus-vis.elc" "orpheus.elc"
     "test/orpheus-test.elc" "test/orpheus-integration-test.elc"

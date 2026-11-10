@@ -141,7 +141,19 @@ still works.
 
 A set of volume adjustments for frequency bands, applied by mpv.  It works
 with the local and SSH backends.  MPD sends its audio straight to the
-daemon's output, so orpheus cannot filter it.
+daemon's output, so orpheus cannot filter it.  The menu on ~E~ is its simple
+mode; the bar graph on ~M-E~ is the advanced one.
+
+** Lyrics
+:PROPERTIES:
+:CUSTOM_ID: lyrics
+:END:
+
+The words of a track, shown by ~L~.  A timed file is called LRC: its lines
+start with a time such as ~[01:12.45]~, which is what lets orpheus mark the
+line that is playing.  A plain text file has no times and is shown as it is.
+Old files keep the words inside themselves instead of beside them, and each
+backend reads whichever of those it can reach.
 
 ** Visualizer
 :PROPERTIES:

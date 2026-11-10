@@ -162,27 +162,76 @@ Only the local and SSH backends can apply it: both play through mpv.  The MPD
 backend returns nil from ~orpheus-backend-equalizer~, and pressing ~E~ says so,
 because its audio leaves through the daemon's output.
 
-| Option                         | Default                          | Meaning |
-|--------------------------------+----------------------------------+---------|
-| ~orpheus-equalizer-enabled~    | ~nil~                            | apply the preset to the backend |
-| ~orpheus-equalizer-preset~     | ~"flat"~                         | preset used when none was loaded yet |
-| ~orpheus-equalizer-bands~      | 31, 62, … 16000                  | frequencies, in Hz, one gain each |
-| ~orpheus-equalizer-max-gain~   | ~12~                             | largest boost or cut, in dB |
+There are two ways in.  ~E~ is the simple mode: on or off, a preset, and a
+saved preset of your own.  ~M-E~ is the advanced mode: a bar graph of every
+band that the arrow keys and the mouse shape, with the band width and the
+range beside it.  Both reach the same gains, so a curve made in the editor is
+what the menu loads next time.
+
+| Option                          | Default                          | Meaning |
+|---------------------------------+----------------------------------+---------|
+| ~orpheus-equalizer-enabled~     | ~nil~                            | apply the preset to the backend |
+| ~orpheus-equalizer-preset~      | ~"flat"~                         | preset used when none was loaded yet |
+| ~orpheus-equalizer-bands~       | 31, 62, … 16000                  | frequencies, in Hz, one gain each |
+| ~orpheus-equalizer-max-gain~    | ~12~                             | largest boost or cut, in dB |
+| ~orpheus-equalizer-width~       | ~1~                              | width of each band, in octaves |
+| ~orpheus-equalizer-gain-step~   | ~1~                              | dB one arrow key moves a band |
+| ~orpheus-equalizer-shift-step~  | ~3~                              | dB one shifted arrow key moves a band |
+| ~orpheus-equalizer-tilt-step~   | ~3~                              | dB the tilt adds to the lowest band |
+| ~orpheus-equalizer-buffer-name~ | ~"*orpheus equalizer*"~          | the editor's buffer |
 | ~orpheus-equalizer-preset-file~ | ~$XDG_DATA_HOME/orpheus/equalizer.json~ | saved presets, as JSON |
 
 A preset is one gain in dB for each frequency in ~orpheus-equalizer-bands~.
-The built-ins are flat, bass, vocal, treble and loudness.  Saving a preset
-writes every user preset to ~orpheus-equalizer-preset-file~, so the file can be
-copied between machines:
+The built-ins are flat, bass, vocal, treble, loudness, night, podcast, acoustic,
+club and v-shape.  Saving a preset writes every user preset to
+~orpheus-equalizer-preset-file~, so the file can be copied between machines:
 
 #+begin_src json
-{"night": [0, 0, -1, -2, 0, 1, 2, 3, 2, 1]}
+{"warm": [0, 0, -1, -2, 0, 1, 2, 3, 2, 1]}
 #+end_src
 
 A user preset with a built-in's name replaces it.
 ~M-x orpheus-equalizer-set-gains~ reads a line of ten numbers for a one-off
 shape, and ~M-x orpheus-equalizer-save-preset~ keeps the current gains under a
 name.
+
+In the editor, up and down (or left and right) move the selected band by
+~orpheus-equalizer-gain-step~, ~M-<up>~ and ~M-<down>~ by
+~orpheus-equalizer-shift-step~, and ~n~ and ~p~ change band.  ~0~ zeroes the
+band, ~r~ resets every band, ~i~ inverts the curve, ~t~ tilts it, ~e~ turns the
+equalizer on or off, and ~P~, ~s~ and ~d~ load, save and delete presets.  A
+click inside a bar sets that band to the gain of the column clicked, and a
+right click opens the same commands as a menu.  ~M-x
+orpheus-equalizer-set-width~ and ~M-x orpheus-equalizer-set-max-gain~ change
+the two numbers the filter is built from.
+
+** Lyrics
+:PROPERTIES:
+:CUSTOM_ID: lyrics
+:END:
+
+~L~ shows the words of the current track in a side window and marks the line
+that is playing.  RET on a line seeks to it, SPC plays or pauses, and ~g~ reads
+the lyrics again.  Each backend reads them where it keeps them:
+
+- ~local~ reads a ~.lrc~ or ~.txt~ file beside the track, then the lyrics tag
+  inside the file (ID3's USLT, Vorbis' LYRICS, MP4's ©lyr) through ~ffprobe~.
+- ~ssh~ runs one quoted command on the remote shell for the same sidecar names.
+  A host without ~cat~ or compound commands has no lyrics, and says so.
+- ~mpd~ reads the sidecar under ~orpheus-mpd-music-directory~ when that names
+  the daemon's library on this machine, and otherwise asks the daemon for the
+  file's tags with ~readcomments~, which includes the tags MPD does not index.
+
+| Option                        | Default              | Meaning |
+|-------------------------------+----------------------+---------|
+| ~orpheus-lyrics-follow~       | ~t~                  | scroll to the line that is playing |
+| ~orpheus-lyrics-buffer-name~  | ~"*orpheus lyrics*"~ | the buffer that shows them |
+| ~orpheus-mpd-music-directory~ | ~nil~                | the local copy of MPD's library, for sidecar lyrics |
+
+LRC times are followed; a file without times is shown as plain text.  A
+positive ~[offset:+500]~ is subtracted from every time, as players do.  A
+backend that cannot read lyrics answers nil, and the buffer says so instead of
+staying empty.
 
 ** The interface and the visualizer
 :PROPERTIES:

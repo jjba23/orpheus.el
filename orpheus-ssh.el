@@ -1571,6 +1571,31 @@ fetched again."
   "Find cover art for remote FOLDER on SSH, then call CALLBACK with a path."
   (orpheus-ssh--folder-art ssh folder callback))
 
+(defun orpheus-ssh--lyrics-command (uri)
+  "Return the remote command that prints URI's sidecar lyrics, if any.
+The loop tries the usual names in one round trip and prints nothing when the
+track has no sidecar file."
+  (let* ((base (file-name-sans-extension uri))
+         (names (mapcar (lambda (extension) (concat base extension))
+                        '(".lrc" ".LRC" ".txt" ".TXT"))))
+    (format (concat "for f in %s; do if [ -f \"$f\" ]; then"
+                    " cat -- \"$f\"; break; fi; done")
+            (mapconcat #'orpheus-ssh--shell-quote names " "))))
+
+(cl-defmethod orpheus-backend-lyrics ((ssh orpheus-ssh) track callback)
+  "Read TRACK's sidecar lyrics on SSH's machine, then call CALLBACK with them."
+  (let ((uri (orpheus-track-uri track)))
+    (if (or (null uri) (string-empty-p uri))
+        (funcall callback nil)
+      (orpheus-ssh--run
+       ssh (orpheus-ssh--lyrics-command uri)
+       (lambda (output)
+         (funcall callback
+                  (when (and output
+                             (not (string-empty-p (string-trim output))))
+                    (orpheus-lyrics--from-text output uri))))
+       t))))
+
 (cl-defmethod orpheus-backend-local-file ((ssh orpheus-ssh) track)
   "Return the local copy of TRACK that SSH has, or nil."
   (let ((uri (orpheus-track-uri track)))

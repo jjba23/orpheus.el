@@ -9,6 +9,44 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- ~E~ is the equalizer's simple mode.  The built-in presets now include night,
+  podcast, acoustic, club and v-shape beside flat, bass, vocal, treble and
+  loudness, and a saved preset is still one key away.
+- ~M-E~ opens the equalizer's advanced mode: a bar graph of every band.  Up,
+  down, left and right move the selected band, ~M-<up>~ and ~M-<down>~ move it
+  farther, ~n~ and ~p~ change band, and a click inside a bar sets the gain of
+  the column clicked.  ~0~ zeroes a band, ~r~ resets every band, ~i~ inverts
+  the curve, ~t~ tilts it, and a right click opens the same commands as a
+  menu.
+- ~orpheus-equalizer-width~ sets the width of each band in octaves, and
+  ~orpheus-equalizer-gain-step~, ~orpheus-equalizer-shift-step~ and
+  ~orpheus-equalizer-tilt-step~ set how far one keystroke moves a band.
+  ~orpheus-equalizer-set-width~ and ~orpheus-equalizer-set-max-gain~ change
+  the two numbers the filter is built from without leaving the editor.
+- ~L~ shows the lyrics of the current track in a side window and follows the
+  playback, marking the line that is playing; RET on a line seeks to it and a
+  click does the same.  LRC time tags, plain text and the offset tag are
+  understood, and a line with several times yields each of them.
+- Every backend answers ~orpheus-backend-lyrics~.  The local backend reads a
+  ~.lrc~ or ~.txt~ file beside the track and then the lyrics tag inside it
+  (ID3 USLT, Vorbis LYRICS, MP4 ©lyr, read with ~ffprobe~); SSH runs one
+  quoted remote command for the sidecar names; MPD reads the sidecar under
+  ~orpheus-mpd-music-directory~ or asks the daemon with ~readcomments~, which
+  returns the tags MPD does not index.
+- ~orpheus-lyrics-follow~ and ~orpheus-lyrics-buffer-name~ say whether the
+  window follows the music and where it lives.
+
+*** Changed
+
+- The equalizer's line of ten gains is now a bar graph, and its filter width
+  follows ~orpheus-equalizer-width~ instead of being fixed at one octave.
+- The help buffer and the tutorial describe the two equalizer modes and the
+  lyrics window.
+
 * 0.15.2 (2026-11-10)
 
 *** Added
