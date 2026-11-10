@@ -9,6 +9,14 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* 0.18.1 (2026-11-10)
+
+*** Added
+
+- The repository carries ~.github/FUNDING.yml~, so GitHub shows a Sponsor
+  button on it that points at
+  [[https://buymeacoffee.com/jjbigorra][Buy Me a Coffee]].
+
 * 0.18.0 (2026-11-10)
 
 *** Added
