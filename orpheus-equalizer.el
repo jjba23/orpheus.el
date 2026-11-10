@@ -53,6 +53,10 @@ The highest band gets the same amount cut, and the bands between move in a
 straight line from one to the other."
   :type 'integer :group 'orpheus)
 
+(defcustom orpheus-equalizer-presets-buffer-name "*orpheus presets*"
+  "Buffer the preset manager is drawn in."
+  :type 'string :group 'orpheus)
+
 (defcustom orpheus-equalizer-buffer-name "*orpheus equalizer*"
   "Name of the buffer that edits the bands visually."
   :type 'string :group 'orpheus)
@@ -316,6 +320,13 @@ starting a player is not the moment to explain an equalizer."
       (when (derived-mode-p 'orpheus-equalizer-mode)
         (orpheus-equalizer--render)))))
 
+(defun orpheus-equalizer--redraw-manager ()
+  "Draw the preset manager again when it is open."
+  (when (buffer-live-p (get-buffer orpheus-equalizer-presets-buffer-name))
+    (with-current-buffer orpheus-equalizer-presets-buffer-name
+      (when (derived-mode-p 'orpheus-equalizer-presets-mode)
+        (orpheus-equalizer--render-presets)))))
+
 (defun orpheus-equalizer--commit (gains note)
   "Store GAINS, apply them to the backend, and say NOTE."
   (setq orpheus-equalizer--gains (orpheus-equalizer--clean gains)
@@ -384,6 +395,7 @@ while its player is not running, so the next start is already equalized."
           orpheus-equalizer-enabled t)
     (orpheus-equalizer--apply)
     (orpheus-equalizer--redraw-editor)
+    (orpheus-equalizer--redraw-manager)
     (orpheus-equalizer--remember)
     (message "Orpheus: equalizer preset %s" name)))
 
@@ -402,6 +414,7 @@ name replaces that built-in preset in the menu."
        (cons (cons name (orpheus-equalizer--current-gains)) presets))
       (setq orpheus-equalizer-preset name)
       (orpheus-equalizer--redraw-editor)
+      (orpheus-equalizer--redraw-manager)
       (message "Orpheus: saved equalizer preset %s" name))))
 
 ;;;###autoload
@@ -416,7 +429,42 @@ name replaces that built-in preset in the menu."
       (user-error "Orpheus: %s is not a saved equalizer preset" name))
     (orpheus-equalizer--write-presets
      (cl-remove name presets :key #'car :test #'equal))
+    (orpheus-equalizer--redraw-editor)
+    (orpheus-equalizer--redraw-manager)
     (message "Orpheus: deleted equalizer preset %s" name)))
+
+;;;###autoload
+(defun orpheus-equalizer-rename-preset (name new-name)
+  "Rename the saved preset NAME to NEW-NAME, keeping its gains.
+NEW-NAME is trimmed, and a name another saved preset already has is refused:
+replacing one preset with another is a deletion nobody asked for.  Renaming
+the preset in effect renames it in the remembered curve too."
+  (interactive
+   (let ((name (completing-read
+                "Rename equalizer preset: "
+                (mapcar #'car (orpheus-equalizer--read-presets)) nil t)))
+     (list name (read-string (format "Rename %s to: " name) name))))
+  (let* ((presets (orpheus-equalizer--read-presets))
+         (new-name (string-trim new-name)))
+    (unless (assoc name presets)
+      (user-error "Orpheus: %s is not a saved equalizer preset" name))
+    (when (string-empty-p new-name)
+      (user-error "Orpheus: a preset needs a name"))
+    (when (and (not (equal name new-name)) (assoc new-name presets))
+      (user-error "Orpheus: a saved preset called %s already exists" new-name))
+    (orpheus-equalizer--write-presets
+     (mapcar (lambda (entry)
+               (if (equal (car entry) name)
+                   (cons new-name (cdr entry))
+                 entry))
+             presets))
+    (when (equal orpheus-equalizer-preset name)
+      (setq orpheus-equalizer-preset new-name)
+      (orpheus-equalizer--remember))
+    (orpheus-equalizer--redraw-editor)
+    (orpheus-equalizer--redraw-manager)
+    (message "Orpheus: renamed equalizer preset %s to %s" name new-name)
+    new-name))
 
 ;;; Sharing presets
 
@@ -493,10 +541,261 @@ its name while the imported gains win."
                                 (orpheus-equalizer--read-presets))))
     (orpheus-equalizer--write-presets (append entries presets))
     (orpheus-equalizer--redraw-editor)
+    (orpheus-equalizer--redraw-manager)
     (message "Orpheus: imported %s (%d preset%s)"
              (file-name-nondirectory file) (length entries)
              (if (= 1 (length entries)) "" "s"))
     names))
+
+(defconst orpheus-equalizer--display-action
+  '(display-buffer-in-side-window
+    (side . bottom)
+    (window-height . 0.35)
+    (dedicated . t)
+    (inhibit-same-window . t))
+  "Where the equalizer and its preset manager are shown.
+A side window keeps the player visible while giving the menu, the editor or
+the manager room; the default transient side window is only as tall as its
+contents.")
+
+;;; Browsing the saved presets
+
+(defconst orpheus-equalizer--sparkline-chars
+  [?· ?▁ ?▂ ?▃ ?▄ ?▅ ?▆ ?▇ ?█]
+  "Glyphs a preset's preview is drawn with, from silence to the full range.")
+
+(defun orpheus-equalizer--sparkline (gains)
+  "Return GAINS as one glyph per band, the loudest at the full height.
+A boost and a cut of the same size stand equally tall; the gains beside the
+preview carry the sign, and the two faces tell them apart."
+  (let ((max (max 1 (abs orpheus-equalizer-max-gain))))
+    (mapconcat
+     (lambda (gain)
+       (propertize
+        (char-to-string
+         (aref orpheus-equalizer--sparkline-chars
+               (min 8 (round (* 8 (/ (abs gain) (float max)))))))
+        'face (if (< gain 0)
+                  'orpheus-progress-empty-face
+                'orpheus-progress-filled-face)))
+     gains "")))
+
+(defun orpheus-equalizer--gains-text (gains)
+  "Return GAINS as a line of signed decibels."
+  (mapconcat (lambda (gain) (format "%+d" gain)) gains " "))
+
+(defvar orpheus-equalizer--preset-at 0
+  "Preset the manager is on, as an index into the saved presets.")
+
+(defvar orpheus-equalizer--preset-markers nil
+  "Vector of markers, one at the start of each preset's row.")
+
+(defvar orpheus-equalizer-preset-item-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] 'orpheus-equalizer-presets-mouse-load)
+    (define-key map [mouse-3] 'orpheus-equalizer-presets-mouse-menu)
+    (define-key map [follow-link] 'mouse-face)
+    map)
+  "Keymap put on each preset's row, so the mouse can load it.")
+
+(defvar orpheus-equalizer--preset-menu
+  (let ((map (make-sparse-keymap "Preset")))
+    (define-key-after map [load]
+      '(menu-item "Load" orpheus-equalizer-presets-load))
+    (define-key-after map [rename]
+      '(menu-item "Rename..." orpheus-equalizer-presets-rename))
+    (define-key-after map [delete]
+      '(menu-item "Delete..." orpheus-equalizer-presets-delete))
+    (define-key-after map [separator] '(menu-item "--"))
+    (define-key-after map [copy]
+      '(menu-item "Copy as JSON" orpheus-equalizer-presets-copy))
+    (define-key-after map [export]
+      '(menu-item "Export to a file..." orpheus-equalizer-presets-export))
+    map)
+  "Menu opened by a right click on a preset.")
+
+(defun orpheus-equalizer--preset-index ()
+  "Return the preset row the manager is on, kept inside the list."
+  (let ((count (length (orpheus-equalizer--read-presets))))
+    (setq orpheus-equalizer--preset-at
+          (max 0 (min (1- count) (or orpheus-equalizer--preset-at 0))))
+    orpheus-equalizer--preset-at))
+
+(defun orpheus-equalizer--preset-at-point ()
+  "Return the preset on the manager's line, or signal a `user-error'."
+  (or (get-text-property (point) 'orpheus-equalizer-preset)
+      (user-error "Orpheus: no preset here")))
+
+(defun orpheus-equalizer--render-presets ()
+  "Draw the manager from the presets saved on disk."
+  (let ((inhibit-read-only t)
+        (presets (orpheus-equalizer--read-presets)))
+    (setq orpheus-equalizer--preset-markers nil)
+    (erase-buffer)
+    (insert (propertize "equalizer presets" 'face 'orpheus-status-face)
+            (propertize (format "   current: %s\n\n" orpheus-equalizer-preset)
+                        'face 'orpheus-muted-face))
+    (if (null presets)
+        (insert (propertize
+                 (concat "Nothing saved yet.  Shape a curve in the editor and"
+                         " press s there, or save one from the menu on E.\n")
+                 'face 'orpheus-muted-face))
+      (dolist (entry presets)
+        (let ((start (point)))
+          (insert (if (equal (car entry) orpheus-equalizer-preset)
+                      (propertize "▶ " 'face 'orpheus-current-face)
+                    "  "))
+          (insert (format "%-16s %s  %s\n"
+                          (car entry)
+                          (orpheus-equalizer--sparkline (cdr entry))
+                          (propertize
+                           (orpheus-equalizer--gains-text (cdr entry))
+                           'face 'orpheus-time-face)))
+          (add-text-properties
+           start (1- (point))
+           (list 'keymap orpheus-equalizer-preset-item-map
+                 'orpheus-equalizer-preset (car entry)
+                 'mouse-face 'highlight))
+          (push (copy-marker start) orpheus-equalizer--preset-markers))))
+    (setq orpheus-equalizer--preset-markers
+          (vconcat (nreverse orpheus-equalizer--preset-markers)))
+    (insert "\n"
+            (propertize
+             (concat " RET load   r rename   d delete   y copy   x export"
+                     "   I import   g refresh   q bury")
+             'face 'orpheus-muted-face))
+    (when (vectorp orpheus-equalizer--preset-markers)
+      (setq orpheus-equalizer--preset-at
+            (max 0 (min (1- (length orpheus-equalizer--preset-markers))
+                        orpheus-equalizer--preset-at)))
+      (goto-char (aref orpheus-equalizer--preset-markers
+                       orpheus-equalizer--preset-at)))))
+
+(defun orpheus-equalizer-presets-next (&optional n)
+  "Move to the next preset, or N presets down."
+  (interactive "p")
+  (setq orpheus-equalizer--preset-at
+        (+ (orpheus-equalizer--preset-index) (or n 1)))
+  (orpheus-equalizer--render-presets))
+
+(defun orpheus-equalizer-presets-previous (&optional n)
+  "Move to the previous preset, or N presets up."
+  (interactive "p")
+  (setq orpheus-equalizer--preset-at
+        (- (orpheus-equalizer--preset-index) (or n 1)))
+  (orpheus-equalizer--render-presets))
+
+(defun orpheus-equalizer-presets-refresh ()
+  "Draw the manager again from the presets on disk."
+  (interactive)
+  (orpheus-equalizer--render-presets))
+
+(defun orpheus-equalizer-presets-load ()
+  "Load the preset on the manager's line and apply it."
+  (interactive)
+  (orpheus-equalizer-load-preset (orpheus-equalizer--preset-at-point))
+  (orpheus-equalizer--render-presets))
+
+(defun orpheus-equalizer-presets-rename ()
+  "Rename the preset on the manager's line."
+  (interactive)
+  (let ((name (orpheus-equalizer--preset-at-point)))
+    (orpheus-equalizer-rename-preset
+     name (read-string (format "Rename %s to: " name) name)))
+  (orpheus-equalizer--render-presets))
+
+(defun orpheus-equalizer-presets-delete ()
+  "Delete the preset on the manager's line, after asking."
+  (interactive)
+  (let ((name (orpheus-equalizer--preset-at-point)))
+    (when (y-or-n-p (format "Delete the equalizer preset %s? " name))
+      (orpheus-equalizer-delete-preset name)
+      (orpheus-equalizer--render-presets))))
+
+(defun orpheus-equalizer-presets-copy ()
+  "Put the preset on the manager's line on the kill ring."
+  (interactive)
+  (orpheus-equalizer-copy-preset (orpheus-equalizer--preset-at-point)))
+
+(defun orpheus-equalizer-presets-export ()
+  "Write the preset on the manager's line to a file you name."
+  (interactive)
+  (let ((name (orpheus-equalizer--preset-at-point)))
+    (orpheus-equalizer-export-preset
+     name (read-file-name "Write the preset to: " nil nil nil
+                          "orpheus-preset.json"))))
+
+(defun orpheus-equalizer-presets-import ()
+  "Import presets from a file into the manager."
+  (interactive)
+  (let ((file (read-file-name "Import equalizer presets: " nil nil t)))
+    (orpheus-equalizer-import-preset file)
+    (orpheus-equalizer--render-presets)))
+
+(defun orpheus-equalizer-presets-mouse-load (event)
+  "Load the preset whose row was clicked in EVENT."
+  (interactive "e")
+  (let* ((start (event-start event))
+         (window (posn-window start))
+         (point (posn-point start)))
+    (when (and (windowp window) (integerp point))
+      (with-selected-window window
+        (goto-char point)
+        (orpheus-equalizer-presets-load)))))
+
+(defun orpheus-equalizer-presets-mouse-menu (event)
+  "Open the preset menu on the row clicked in EVENT."
+  (interactive "e")
+  (let* ((start (event-start event))
+         (window (posn-window start))
+         (point (posn-point start)))
+    (when (and (windowp window) (integerp point))
+      (with-selected-window window
+        (goto-char point)
+        (popup-menu orpheus-equalizer--preset-menu)))))
+
+(defvar orpheus-equalizer-presets-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map (kbd "n") 'orpheus-equalizer-presets-next)
+    (define-key map (kbd "C-n") 'orpheus-equalizer-presets-next)
+    (define-key map (kbd "j") 'orpheus-equalizer-presets-next)
+    (define-key map (kbd "p") 'orpheus-equalizer-presets-previous)
+    (define-key map (kbd "C-p") 'orpheus-equalizer-presets-previous)
+    (define-key map (kbd "k") 'orpheus-equalizer-presets-previous)
+    (define-key map (kbd "RET") 'orpheus-equalizer-presets-load)
+    (define-key map (kbd "r") 'orpheus-equalizer-presets-rename)
+    (define-key map (kbd "d") 'orpheus-equalizer-presets-delete)
+    (define-key map (kbd "y") 'orpheus-equalizer-presets-copy)
+    (define-key map (kbd "x") 'orpheus-equalizer-presets-export)
+    (define-key map (kbd "I") 'orpheus-equalizer-presets-import)
+    (define-key map (kbd "g") 'orpheus-equalizer-presets-refresh)
+    (define-key map (kbd "q") 'quit-window)
+    map)
+  "Keymap of `orpheus-equalizer-presets-mode'.")
+
+(define-derived-mode orpheus-equalizer-presets-mode special-mode
+  "Orpheus-Presets"
+  "Major mode for the equalizer presets you saved.
+Each row is a preset, its shape and its gains.  RET loads it, r renames it and
+d deletes it; the built-in presets are not rows, because they cannot change."
+  (setq-local truncate-lines t)
+  (buffer-disable-undo)
+  (setq-local orpheus-equalizer--preset-markers nil))
+
+;;;###autoload
+(defun orpheus-equalizer-preset-manager ()
+  "Browse, preview, rename and delete the presets you saved.
+Each row holds a preset's shape and its gains, and RET loads it.  The manager
+only lists your own presets: a built-in cannot be renamed or deleted, so it
+lives in the menu instead."
+  (interactive)
+  (let ((buffer (get-buffer-create orpheus-equalizer-presets-buffer-name)))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'orpheus-equalizer-presets-mode)
+        (orpheus-equalizer-presets-mode))
+      (orpheus-equalizer--render-presets))
+    (display-buffer buffer orpheus-equalizer--display-action)))
 
 ;;;###autoload
 (defun orpheus-equalizer-set-gains (gains)
@@ -785,16 +1084,6 @@ the curve-wide commands."
   (buffer-disable-undo)
   (setq-local orpheus-equalizer--markers nil))
 
-(defconst orpheus-equalizer--display-action
-  '(display-buffer-in-side-window
-    (side . bottom)
-    (window-height . 0.35)
-    (dedicated . t)
-    (inhibit-same-window . t))
-  "Where the equalizer is shown.
-A side window keeps the player visible while giving the menu or the editor
-room; the default transient side window is only as tall as its contents.")
-
 (defun orpheus-equalizer-editor ()
   "Open the equalizer as a visual editor of every band.
 The menu on E is the simple mode: presets, on and off.  This is the advanced
@@ -823,6 +1112,8 @@ one, with the curve itself, its width and the range it may move in."
     ("p" "Load a preset..." orpheus-equalizer-load-preset)
     ("s" "Save the current gains..." orpheus-equalizer-save-preset)
     ("d" "Delete a saved preset..." orpheus-equalizer-delete-preset)
+    ("P" "Browse, rename or delete saved presets..."
+     orpheus-equalizer-preset-manager)
     ("g" "Set the ten gains..." orpheus-equalizer-set-gains)]]
   [["Advanced"
     ("v" "Edit the bands visually" orpheus-equalizer-editor)

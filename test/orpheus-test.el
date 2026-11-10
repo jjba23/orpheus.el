@@ -3882,6 +3882,65 @@ directory, so a test never writes to the user's own cache."
     (should (string-match-p "\"flat\"" text))
     (should (equal text (car kill-ring)))))
 
+(ert-deftest orpheus-test/equalizer-sparkline-draws-one-glyph-per-band ()
+  "A preset's preview has a glyph for each band, and silence has its own."
+  (let ((orpheus-equalizer-max-gain 12))
+    (should (= 10 (length (orpheus-equalizer--sparkline
+                           '(0 0 0 0 0 0 0 0 0 0)))))
+    (should (string-match-p "·" (orpheus-equalizer--sparkline
+                                 '(0 0 0 0 0 0 0 0 0 0))))
+    (should-not (string-match-p "·" (orpheus-equalizer--sparkline
+                                     '(12 12 12 12 12 12 12 12 12 12))))))
+
+(ert-deftest orpheus-test/equalizer-rename-preset ()
+  "Renaming keeps the gains and follows the current preset's name."
+  (let* ((dir (make-temp-file "orpheus-eq" t))
+         (orpheus-equalizer-preset-file (expand-file-name "saved.json" dir))
+         (orpheus-equalizer-state-file (expand-file-name "state.json" dir))
+         (orpheus-equalizer-preset "old"))
+    (unwind-protect
+        (progn
+          (orpheus-equalizer--write-presets '(("old" . (1 2 3 4 5 6 7 8 9 10))))
+          (orpheus-equalizer-rename-preset "old" "new")
+          (should (equal (cdr (assoc "new" (orpheus-equalizer--read-presets)))
+                         '(1 2 3 4 5 6 7 8 9 10)))
+          (should-not (assoc "old" (orpheus-equalizer--read-presets)))
+          (should (equal orpheus-equalizer-preset "new")))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/equalizer-rename-refuses-a-collision ()
+  "Renaming onto another saved preset is refused instead of replacing it."
+  (let* ((dir (make-temp-file "orpheus-eq" t))
+         (orpheus-equalizer-preset-file (expand-file-name "saved.json" dir)))
+    (unwind-protect
+        (progn
+          (orpheus-equalizer--write-presets
+           '(("one" . (1 1 1 1 1 1 1 1 1 1))
+             ("two" . (2 2 2 2 2 2 2 2 2 2))))
+          (should-error (orpheus-equalizer-rename-preset "one" "two")
+                        :type 'user-error)
+          (should (equal (cdr (assoc "two" (orpheus-equalizer--read-presets)))
+                         '(2 2 2 2 2 2 2 2 2 2))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/equalizer-preset-manager-lists-the-saved-ones ()
+  "The manager shows your presets and their preview, not the built-ins."
+  (let* ((dir (make-temp-file "orpheus-eq" t))
+         (orpheus-equalizer-preset-file (expand-file-name "saved.json" dir))
+         (orpheus-equalizer-state-file (expand-file-name "state.json" dir)))
+    (unwind-protect
+        (progn
+          (orpheus-equalizer--write-presets
+           '(("warm" . (1 2 3 4 5 6 7 8 9 10))))
+          (orpheus-equalizer-preset-manager)
+          (with-current-buffer orpheus-equalizer-presets-buffer-name
+            (should (string-match-p "warm" (buffer-string)))
+            (should-not (string-match-p "loudness" (buffer-string)))
+            (should (derived-mode-p 'orpheus-equalizer-presets-mode))))
+      (when (get-buffer orpheus-equalizer-presets-buffer-name)
+        (kill-buffer orpheus-equalizer-presets-buffer-name))
+      (delete-directory dir t))))
+
 ;;; Lyrics
 
 (ert-deftest orpheus-test/lyrics-parse-lrc ()

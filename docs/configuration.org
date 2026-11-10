@@ -181,6 +181,7 @@ what the menu loads next time.
 | ~orpheus-equalizer-buffer-name~ | ~"*orpheus equalizer*"~          | the editor's buffer |
 | ~orpheus-equalizer-preset-file~ | ~$XDG_DATA_HOME/orpheus/equalizer.json~ | saved presets, as JSON |
 | ~orpheus-equalizer-state-file~ | ~$XDG_DATA_HOME/orpheus/equalizer-state.json~ | the curve remembered between sessions |
+| ~orpheus-equalizer-presets-buffer-name~ | ~*orpheus presets*~ | where the preset manager is drawn |
 
 A preset is one gain in dB for each frequency in ~orpheus-equalizer-bands~.
 The built-ins are flat, bass, vocal, treble, loudness, night, podcast, acoustic,
@@ -217,6 +218,12 @@ preset to a file you name, ~M-x orpheus-equalizer-import-preset~ reads a file
 holding one preset or many, and ~M-x orpheus-equalizer-copy-preset~ puts one on
 the kill ring.  A file holding a bare array of gains takes its own name.  In
 the editor, ~x~, ~I~ and ~y~ export, import and copy the same way.
+
+~M-x orpheus-equalizer-preset-manager~ lists the presets you saved, each with
+its shape drawn as a sparkline and its gains beside it.  ~RET~ loads the row,
+~r~ renames it, ~d~ deletes it after asking, ~y~, ~x~ and ~I~ copy, export and
+import, and a right click opens the same menu.  The built-in presets are not
+rows: they cannot be renamed or deleted, so the menu on ~E~ lists them.
 
 ** Lyrics
 :PROPERTIES:

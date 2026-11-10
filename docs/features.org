@@ -98,7 +98,8 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   own output, so Emacs cannot filter it.  The curve is remembered between
   sessions and given to every backend that starts, and a preset travels as
   JSON: export it to a file, import a file of them, or copy one to the kill
-  ring.
+  ring.  A preset manager lists the ones you saved, draws their shape, and
+  renames or deletes them.
 - *Words that follow the music.* :: ~L~ shows the lyrics of the current track
   in a side window and marks the line that is playing; RET on a line seeks to
   it.  Each backend reads them where it keeps them: a ~.lrc~ or ~.txt~ file

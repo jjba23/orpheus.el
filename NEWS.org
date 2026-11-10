@@ -23,6 +23,10 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   holds a bare array of gains takes its own name.  The editor binds ~x~, ~I~
   and ~y~ to the same commands.
 - The equalizer menu gains a Share group for the three commands.
+- ~orpheus-equalizer-preset-manager~ lists the presets you saved, each row
+  drawn as a sparkline beside its gains.  ~RET~ loads a preset, ~r~ renames
+  it, ~d~ deletes it after asking, and the share commands are bound too; a
+  right click opens the same menu.
 
 *** Changed
 

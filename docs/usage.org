@@ -327,6 +327,8 @@ equalizer on or off, and ~P~, ~s~ and ~d~ load, save and delete presets.  A
 right click opens the same commands as a menu.  The curve is remembered
 between sessions and given to every backend that starts, so a restart does
 not begin flat; ~x~, ~I~ and ~y~ export, import and copy a preset as JSON.
+~M-x orpheus-equalizer-preset-manager~ lists the ones you saved, with their
+shape and gains, and renames or deletes them from there.
 
 ~L~ shows the lyrics of the current track in a side window and marks the line
 that is playing, when the words carry times.  RET on a line seeks to it, ~SPC~
@@ -348,6 +350,7 @@ Outside the player buffer:
 | ~M-x orpheus-equalizer-export-preset~ | write a preset to a file               |
 | ~M-x orpheus-equalizer-import-preset~ | read presets from a file               |
 | ~M-x orpheus-equalizer-copy-preset~ | put a preset on the kill ring              |
+| ~M-x orpheus-equalizer-preset-manager~ | browse, rename and delete saved presets |
 | ~M-x orpheus-lyrics-open~ | lyrics for the current track                      |
 | ~M-x orpheus-volume-up~  | volume up by ~orpheus-volume-step~               |
 | ~M-x orpheus-visualizer~ | spectrum visualizer                              |
