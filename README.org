@@ -32,7 +32,7 @@ layouts, and the [[./screenshots/visualizer-ember.png][Ember]] and
 *orpheus.el is a flexible music player for Emacs*: a queue, a couple of tabs, a
 library, playlists, cover art and a spectrum visualizer, with the keys Emacs
 fingers already know.  MPD, local files and music on another machine all appear
-in the same interface.
+in the same interface, and ~B~ switches between them without restarting Emacs.
 
 Everything orpheus does is asynchronous.  Replies arrive in process filters and
 the status is read on a timer, so a slow server, a starting player or a hanging

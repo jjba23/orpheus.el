@@ -51,6 +51,14 @@ A new host also needs its key in =~/.ssh/known_hosts= first; use
 ~orpheus-ssh-extra-args~ with ~StrictHostKeyChecking=accept-new~ only once, not
 as a permanent setting.
 
+If ssh reports ~ControlPath too long~ or ~too long for Unix domain socket~,
+orpheus retries the command without multiplexing, so the listing still works.
+Set ~orpheus-ssh-control-directory~ to a short private directory when the
+default under ~$XDG_RUNTIME_DIR~ or =/tmp= is unsuitable, or set
+~orpheus-ssh-multiplex~ nil to stop sharing connections entirely.  To rule out
+the whole backend without restarting Emacs, press ~B~ in the player (or run
+~M-x orpheus-switch-backend~).
+
 * A password is rejected
 
 ~orpheus-mpd-password~ nil means the password comes from ~MPD_PASSWORD~ first,

@@ -155,7 +155,12 @@ passphrase.  A host whose key is not in =~/.ssh/known_hosts= needs one
 ~(setq orpheus-ssh-extra-args '("-o" "StrictHostKeyChecking=accept-new"))~ once.
 mpv must be installed here, and the audio comes out of this machine.  The start
 directory is relative to the login home or absolute; a leading =~= is not
-expanded, because the path is quoted for the remote shell.
+expanded, because the path is quoted for the remote shell.  The shared socket
+lives in a short private directory (~orpheus-ssh-control-directory~); when ssh
+cannot use it, the command is retried without multiplexing rather than failing
+the tab.  To change backend without restarting Emacs, press ~B~ in the player
+or run ~M-x orpheus-switch-backend~; the current backend is disconnected and
+the tabs follow the new one.
 
 * Getting help
 :PROPERTIES:
@@ -224,6 +229,7 @@ track.
 | ~?~                    | the menu: transport, modes, queue, playlists, views      |
 | ~H~                    | help: concepts, keys and troubleshooting                 |
 | ~E~                    | the equalizer: presets, save, delete, set the gains      |
+| ~B~                    | switch to another backend                                |
 | ~q~                    | bury the player                                          |
 | ~mouse-1~, ~mouse-2~   | select a row, play it                                    |
 | ~mouse-1~ on the card  | press a transport button; on the bar, seek to that point |
@@ -256,6 +262,7 @@ Outside the player buffer:
 | ~M-x orpheus-volume-up~  | volume up by ~orpheus-volume-step~               |
 | ~M-x orpheus-visualizer~ | spectrum visualizer                              |
 | ~M-x orpheus-ssh-diagnose~ | check the remote SSH commands and shell features |
+| ~M-x orpheus-switch-backend~ | disconnect the current backend and connect another |
 | ~M-x orpheus-mode-line-mode~ | show the track in the mode line              |
 | ~M-x orpheus-quit~       | stop reading the status and close the player     |
 

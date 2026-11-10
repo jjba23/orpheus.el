@@ -9,6 +9,24 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- ~B~ and ~M-x orpheus-switch-backend~ switch to another registered backend
+  without restarting Emacs.  The current backend is disconnected and the tabs
+  are rebuilt for the new one.
+- ~orpheus-ssh-control-directory~ chooses where ssh keeps its multiplexed
+  control sockets, and ~orpheus-ssh-control-persist~ how long a shared
+  connection stays alive after its last command.
+
+*** Fixed
+
+- SSH multiplexing no longer fails when the temporary directory is too long
+  for a Unix-domain socket.  The control socket now lives in a short private
+  directory under ~$XDG_RUNTIME_DIR~ or =/tmp=, and a host that still rejects
+  it is retried once without multiplexing instead of failing the listing.
+
 * 0.14.1 (2026-11-10)
 
 *** Changed

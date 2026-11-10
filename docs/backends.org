@@ -9,7 +9,9 @@
 
 A backend is the only part that knows how to talk to a player.  The interface
 is written once; MPD, mpv and SSH are the three implementations that keep it
-honest.  Choose one first, then follow its section.
+honest.  Choose one first, then follow its section.  In the player, ~B~ (or
+~M-x orpheus-switch-backend~) disconnects the current backend and connects the
+chosen one, rebuilding the tabs without restarting Emacs.
 
 | Backend | Best for | Needs |
 |---------+----------+-------|
@@ -82,7 +84,10 @@ Three backends are shipped and are the reference implementations:
   prefetches, and the Downloads tab shows each one.  Listings, searches, size
   probes and covers share one multiplexed connection
   (~orpheus-ssh-multiplex~), while downloads keep connections of their own, so
-  a slow link still answers a directory change.  The local backend plays a copy
+  a slow link still answers a directory change.  The control socket is kept in
+  a short private directory (~orpheus-ssh-control-directory~); a host that
+  rejects it is retried once without multiplexing instead of failing the
+  listing.  The local backend plays a copy
   once it is complete.  There is no daemon on the far side, and the cache is
   ordinary files under ~orpheus-cache-directory~: it survives a disconnect and
   a reboot, and ~orpheus-cache-max-bytes~ keeps it bounded.  A listing, search
@@ -181,8 +186,9 @@ as anywhere else.
 
 The local backend asks mpv for ~--ao=wasapi~ on Windows and drives it over a
 named pipe; that path is written and compiled but untested, so treat it as
-unproven rather than supported.  ssh multiplexing is left to OpenSSH, which
-probes it rather than failing the listing; with
+unproven rather than supported.  ssh multiplexing is left to OpenSSH; orpheus
+gives it a short private socket directory and retries without multiplexing
+when OpenSSH rejects it, so a path limit does not fail the listing.  With
 ~(setq orpheus-ssh-multiplex nil)~ the backend opens one connection per
 command, as before.  MPD works wherever MPD does — that includes
 an MPD on another machine, which is the case that needs no platform support at

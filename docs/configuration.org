@@ -39,6 +39,11 @@ wrong.  Backend-specific setup, including MPD passwords and SSH keys, is in
 | ~orpheus-cache-directory~  | ~$XDG_CACHE_HOME/orpheus/~ | downloaded tracks, covers and generated files |
 | ~orpheus-cache-max-bytes~  | ~10737418240~ | largest size of the cache, 10 GiB; nil keeps everything |
 
+~orpheus-backend~ chooses the backend when the player starts.  In the player,
+~B~ (or ~M-x orpheus-switch-backend~) disconnects the current backend,
+connects the chosen one and rebuilds the tabs, so trying another backend does
+not need a restart.
+
 The cache lives in =~/.cache/orpheus= by default and survives a reboot.
 Tracks and covers are deleted, least recently used first, when the directory
 grows past ~orpheus-cache-max-bytes~; the track being played is never one of
@@ -96,6 +101,17 @@ Left nil, the platform decides (see [[file:backends.org#platforms][Platforms]]).
 | ~orpheus-ssh-cache-directory~   | ~nil~   | where downloads are kept; nil is =~/.cache/orpheus/ssh= |
 | ~orpheus-ssh-cache-count~       | ~nil~   | completed tracks kept, or nil for only the size limit |
 | ~orpheus-ssh-multiplex~         | ~t~     | share one connection for listings, search and covers |
+| ~orpheus-ssh-control-directory~ | ~nil~   | where shared control sockets live; nil picks a short private directory |
+| ~orpheus-ssh-control-persist~   | ~600~   | seconds a shared connection stays alive after its last command |
+
+A control socket is a Unix-domain socket, and its path has a hard platform
+limit.  orpheus puts ssh's ~%C~ token in a private directory under
+~$XDG_RUNTIME_DIR~ or =/tmp= and measures the expanded name; if no directory
+has room it turns multiplexing off and says so.  Set
+~orpheus-ssh-control-directory~ to a short private path to choose the
+directory, and ~orpheus-ssh-control-persist~ to change how long the shared
+connection outlives its last command.  If ssh still rejects the socket, the
+command is retried once without multiplexing.
 
 ** Playlists
 :PROPERTIES:

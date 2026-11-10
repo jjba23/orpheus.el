@@ -3254,7 +3254,9 @@ directory, so a test never writes to the user's own cache."
   (should (eq (lookup-key orpheus-ui-mode-map (kbd "H")) 'orpheus-help))
   (should (eq (lookup-key orpheus-ui-mode-map (kbd "E")) 'orpheus-equalizer-menu))
   (should (eq (lookup-key orpheus-ui-mode-map (kbd "N"))
-              'orpheus-ui-new-playlist)))
+              'orpheus-ui-new-playlist))
+  (should (eq (lookup-key orpheus-ui-mode-map (kbd "B"))
+              'orpheus-switch-backend)))
 
 (ert-deftest orpheus-test/ui-bindings-are-customizable ()
   "A (KEY . COMMAND) setting rebinds the player without a hook."
@@ -3533,13 +3535,19 @@ directory, so a test never writes to the user's own cache."
   "Control commands share a master connection; downloads do not use it."
   (let ((orpheus-ssh-host "fake.invalid")
         (orpheus-ssh-multiplex t)
-        (orpheus-ssh--control-directory nil))
+        (orpheus-ssh--control-directory nil)
+        (orpheus-ssh--control-owned nil))
     (unwind-protect
-        (let ((args (orpheus-ssh--control-args)))
+        (let* ((args (orpheus-ssh--control-args))
+               (path (cl-find-if (lambda (arg)
+                                   (string-prefix-p "ControlPath=" arg))
+                                 args)))
           (should (member "ControlMaster=auto" args))
-          (should (cl-some (lambda (arg)
-                             (string-prefix-p "ControlPath=" arg))
-                           args))
+          (should (member "ControlPersist=600" args))
+          (should path)
+          (should (<= (orpheus-ssh--control-path-length
+                       orpheus-ssh--control-directory)
+                      orpheus-ssh--control-path-limit))
           (should (file-directory-p orpheus-ssh--control-directory)))
       (let ((directory orpheus-ssh--control-directory))
         (when directory (ignore-errors (delete-directory directory t))))
@@ -3547,6 +3555,143 @@ directory, so a test never writes to the user's own cache."
   (let ((orpheus-ssh-host "fake.invalid")
         (orpheus-ssh-multiplex nil))
     (should-not (orpheus-ssh--control-args))))
+
+(ert-deftest orpheus-test/ssh-control-path-fits-a-long-temporary-directory ()
+  "A long TMPDIR does not push the control socket past the platform limit."
+  (skip-unless (not (memq system-type '(windows-nt ms-dos))))
+  (let ((orpheus-ssh-host "fake.invalid")
+        (orpheus-ssh-multiplex t)
+        (orpheus-ssh-control-directory nil)
+        (orpheus-ssh--control-directory nil)
+        (orpheus-ssh--control-owned nil)
+        (orpheus-ssh--control-warned nil)
+        (temporary-file-directory
+         (expand-file-name
+          "a-temporary-directory-that-is-far-too-long-for-a-control-socket/"
+          temporary-file-directory))
+        (process-environment (cons "XDG_RUNTIME_DIR=" process-environment)))
+    (unwind-protect
+        (let* ((args (orpheus-ssh--control-args))
+               (path (cl-find-if (lambda (arg)
+                                   (string-prefix-p "ControlPath=" arg))
+                                 args)))
+          (should path)
+          (should (<= (orpheus-ssh--control-path-length
+                       orpheus-ssh--control-directory)
+                      orpheus-ssh--control-path-limit))
+          (should (file-directory-p orpheus-ssh--control-directory)))
+      (let ((directory orpheus-ssh--control-directory))
+        (when directory (ignore-errors (delete-directory directory t))))
+      (setq orpheus-ssh--control-directory nil))))
+
+(ert-deftest orpheus-test/ssh-control-directory-and-lifetime-are-configurable ()
+  "A chosen control directory is used, has room, and is left alone on close."
+  (skip-unless (not (memq system-type '(windows-nt ms-dos))))
+  (let* ((directory (make-temp-file "orpheus-short-" t))
+         (orpheus-ssh-host "fake.invalid")
+         (orpheus-ssh-multiplex t)
+         (orpheus-ssh-control-directory directory)
+         (orpheus-ssh-control-persist 30)
+         (orpheus-ssh--control-directory nil)
+         (orpheus-ssh--control-owned t))
+    (unwind-protect
+        (let* ((args (orpheus-ssh--control-args))
+               (path (cl-find-if (lambda (arg)
+                                   (string-prefix-p "ControlPath=" arg))
+                                 args)))
+          (should (member "ControlPersist=30" args))
+          (should (equal orpheus-ssh--control-directory directory))
+          (should (equal (file-name-directory (substring path (length "ControlPath=")))
+                         (file-name-as-directory directory)))
+          (should-not orpheus-ssh--control-owned))
+      (delete-directory directory t))))
+
+(ert-deftest orpheus-test/ssh-control-errors-are-recognized ()
+  "A socket path failure is told apart from a login or permission failure."
+  (should (orpheus-ssh--control-error-p "ControlPath too long"))
+  (should (orpheus-ssh--control-error-p
+           "unix_listener: path too long for Unix domain socket"))
+  (should-not (orpheus-ssh--control-error-p
+               "Permission denied (publickey).")))
+
+(ert-deftest orpheus-test/ssh-control-failure-retries-without-multiplexing ()
+  "A host that rejects the control socket still answers the command."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((orpheus-ssh-multiplex t)
+           (ssh (orpheus-make-backend 'ssh))
+           (result 'waiting)
+           (warned nil))
+       (unwind-protect
+           (progn
+             (cl-letf (((symbol-function 'message)
+                        (lambda (format &rest arguments)
+                          (when (string-match-p "multiplex" format)
+                            (setq warned t))
+                          (apply #'format-message format arguments))))
+               (orpheus-ssh--run ssh "ls -1p"
+                                 (lambda (output) (setq result output)))
+               (should (orpheus-test--wait
+                        (lambda () (not (eq result 'waiting))) 20)))
+             (should (equal result "Album/\nSong.mp3\nnotes.txt\n"))
+             (should (orpheus-ssh-instance-control-failed ssh))
+             (should warned)
+             (should-not (orpheus-ssh--control-args ssh)))
+         (orpheus-backend-disconnect ssh))))
+   "nomux"))
+
+(ert-deftest orpheus-test/switch-backend-disconnects-and-rebuilds-the-player ()
+  "Switching stops the old backend, starts the new one and rebuilds the tabs."
+  (let ((orpheus-backend 'local)
+        (orpheus-backend-current (orpheus-make-backend 'local))
+        (orpheus--timer nil)
+        (orpheus--failures 3)
+        (orpheus--retry-at 100)
+        (orpheus-ui-buffer-name
+         (generate-new-buffer-name "*orpheus-switch-test*"))
+        (disconnected nil)
+        (connected nil)
+        (started 0)
+        (refreshed nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+            (orpheus-ui-mode))
+          (cl-letf (((symbol-function 'orpheus-backend-disconnect)
+                     (lambda (backend)
+                       (push (orpheus-backend-name backend) disconnected)))
+                    ((symbol-function 'orpheus-backend-connect)
+                     (lambda (backend callback)
+                       (setq connected (orpheus-backend-name backend))
+                       (funcall callback backend)))
+                    ((symbol-function 'orpheus-start)
+                     (lambda () (cl-incf started)))
+                    ((symbol-function 'orpheus--tick) #'ignore)
+                    ((symbol-function 'orpheus-ui-refresh)
+                     (lambda (&optional force) (setq refreshed force)))
+                    ((symbol-function 'orpheus-ui--render) #'ignore))
+            (should (eq (orpheus-switch-backend 'mpd) 'mpd)))
+          (should (eq orpheus-backend 'mpd))
+          (should (eq (orpheus-backend-name orpheus-backend-current) 'mpd))
+          (should (memq 'local disconnected))
+          (should (eq connected 'mpd))
+          (should (= started 1))
+          (should refreshed)
+          (should (= orpheus--failures 0))
+          (with-current-buffer orpheus-ui-buffer-name
+            (should (eq orpheus-ui--backend orpheus-backend-current))
+            (should (memq 'artists
+                          (mapcar #'orpheus-ui-tab-kind
+                                  (append orpheus-ui--tabs nil))))))
+      (when (get-buffer orpheus-ui-buffer-name)
+        (kill-buffer orpheus-ui-buffer-name)))))
+
+(ert-deftest orpheus-test/switch-backend-refuses-an-unknown-name ()
+  "A typo or a backend that is not registered changes nothing."
+  (let ((orpheus-backend 'local)
+        (orpheus-backend-current (orpheus-make-backend 'local)))
+    (should-error (orpheus-switch-backend 'nonsense))
+    (should (eq orpheus-backend 'local))))
 
 (ert-deftest orpheus-test/ssh-cache-survives-a-restart ()
   "A track fetched in one session is played from the cache in the next."

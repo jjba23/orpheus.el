@@ -20,6 +20,7 @@
 (declare-function orpheus-equalizer-menu "orpheus-equalizer" ())
 (declare-function orpheus-tutorial "orpheus-ui" ())
 (declare-function orpheus-cycle-theme "orpheus-ui" ())
+(declare-function orpheus-switch-backend "orpheus" (&optional backend))
 (declare-function orpheus-ui-cycle-layout "orpheus-ui" ())
 (declare-function orpheus-vis-cycle-theme "orpheus-vis" ())
 
@@ -65,6 +66,7 @@
     ("M-l" "Next layout" orpheus-ui-cycle-layout)
     ("M-c" "Next visualizer theme" orpheus-vis-cycle-theme)
     ("E" "Equalizer presets" orpheus-equalizer-menu)
+    ("B" "Switch to another backend" orpheus-switch-backend)
     ("H" "Help, tutorial and every key" orpheus-help)
     ("t" "Tutorial" orpheus-tutorial)
     ("q" "Bury the player" quit-window)]])

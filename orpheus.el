@@ -161,6 +161,41 @@ Register another with `orpheus-register-backend'."
          (when callback (funcall callback backend)))
        (message "orpheus: cannot connect to %s" orpheus-backend)))))
 
+(defun orpheus-switch-backend (backend)
+  "Switch to the registered BACKEND and reconnect the player.
+The current backend is disconnected first, so its player and transfers stop.
+An open player buffer is rebuilt for the new backend's tabs.  Interactively,
+BACKEND is chosen from the registered backends with completion."
+  (interactive
+   (list (intern
+          (completing-read
+           "Backend: "
+           (mapcar (lambda (entry) (symbol-name (car entry)))
+                   orpheus-backend-registry)
+           nil t nil nil (symbol-name orpheus-backend)))))
+  (unless (orpheus-backend-exists-p backend)
+    (user-error "Orpheus: no backend called %s" backend))
+  (if (eq backend orpheus-backend)
+      (message "orpheus: already using the %s backend" backend)
+    (orpheus-quit)
+    (setq orpheus-backend backend
+          orpheus--failures 0
+          orpheus--retry-at 0)
+    (orpheus--ensure-backend)
+    (orpheus-start)
+    (orpheus-connect
+     (lambda (connected)
+       (when (get-buffer orpheus-ui-buffer-name)
+         (with-current-buffer orpheus-ui-buffer-name
+           (when (derived-mode-p 'orpheus-ui-mode)
+             (orpheus-ui--setup-tabs)
+             (orpheus-ui--render)
+             (when connected (orpheus-ui-refresh t)))))
+       (if connected
+           (message "orpheus: switched to the %s backend" backend)
+         (message "orpheus: switched to %s, but it did not connect" backend)))))
+  backend)
+
 (defun orpheus--offline ()
   "Slow down while the backend is not answering."
   (setq orpheus--failures (1+ orpheus--failures))

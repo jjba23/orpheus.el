@@ -15,6 +15,15 @@
 
 (let ((command (car (last command-line-args-left)))
       (mode (getenv "ORPHEUS_TEST_FAKE_SSH")))
+  (when (and (equal mode "nomux")
+             (catch 'multiplexed
+               (dolist (argument command-line-args-left)
+                 (when (or (string-prefix-p "ControlPath=" argument)
+                           (equal argument "ControlMaster=auto"))
+                   (throw 'multiplexed t)))
+               nil))
+    (princ "ControlPath too long\n" 'external-debugging-output)
+    (kill-emacs 255))
   (cond
    ((and command (string-prefix-p "sleep " command))
     (sleep-for 10)

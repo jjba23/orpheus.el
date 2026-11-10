@@ -92,8 +92,26 @@ without a second transfer."
   "Whether SSH reuses one connection for browsing, searching and covers.
 A full key exchange on a saturated link can take seconds; a master connection
 answers a listing at once.  Downloads open connections of their own, so their
-bytes never queue in front of a directory listing."
+bytes never queue in front of a directory listing.  When the connection fails
+before it can be shared, orpheus retries the command without multiplexing."
   :type 'boolean :group 'orpheus)
+
+(defcustom orpheus-ssh-control-directory nil
+  "Directory for SSH's multiplexed control sockets, or nil to choose one.
+The socket name is `%C', which ssh expands to a 40-character hash, so the
+directory must be short enough for a Unix-domain socket.  When nil, orpheus
+uses a private directory under `$XDG_RUNTIME_DIR' or `/tmp'; if the configured
+directory leaves no room, it falls back to one of those and says so."
+  :type '(choice (const :tag "Choose a short directory" nil) directory)
+  :group 'orpheus)
+
+(defcustom orpheus-ssh-control-persist 600
+  "Seconds SSH keeps a shared connection after its last command.
+The value is passed as `ControlPersist'; nil leaves ssh's own default.  A
+longer life saves a key exchange between two directory changes, while a
+shorter one gives the connection back sooner."
+  :type '(choice (const :tag "ssh's default" nil) integer)
+  :group 'orpheus)
 
 (defcustom orpheus-ssh-command-timeout 20
   "Seconds ssh may stay silent on a listing, search or cover command.
@@ -134,6 +152,7 @@ current one is still playing.  More than two rarely improves a single link."
   (processes nil)
   (cache nil)
   current-file
+  control-failed
   search-fallback
   search-warned
   size-failed
@@ -170,47 +189,149 @@ current one is still playing.  More than two rarely improves a single link."
   "Return STRING quoted as one POSIX shell word."
   (concat "'" (string-replace "'" "'\\''" string) "'"))
 
+(defconst orpheus-ssh--control-path-limit 100
+  "Longest ssh ControlPath orpheus builds, in characters.
+OpenSSH keeps it in a Unix-domain socket address: macOS allows 104 bytes and
+Linux 108, counting the terminating NUL, so 100 has room for both.")
+
+(defconst orpheus-ssh--control-hash-length 40
+  "Characters ssh substitutes for `%C' in a ControlPath.")
+
 (defvar orpheus-ssh--control-directory nil
   "Directory holding SSH's multiplexed connection sockets.")
 
-(defun orpheus-ssh--control-args ()
+(defvar orpheus-ssh--control-owned nil
+  "Non-nil when orpheus created the control directory and may delete it.")
+
+(defvar orpheus-ssh--control-warned nil
+  "Whether the missing-room warning has already been shown.")
+
+(defun orpheus-ssh--control-path (directory)
+  "Return the ControlPath pattern inside DIRECTORY."
+  (expand-file-name "%C" directory))
+
+(defun orpheus-ssh--control-path-length (directory)
+  "Return the real length of the ControlPath inside DIRECTORY.
+The pattern contains `%C', which ssh expands to a 40-character hash."
+  (+ (- (length (orpheus-ssh--control-path directory)) 2)
+     orpheus-ssh--control-hash-length))
+
+(defun orpheus-ssh--control-path-fits-p (directory)
+  "Return non-nil when SSH's socket under DIRECTORY fits the platform limit."
+  (<= (orpheus-ssh--control-path-length directory)
+      orpheus-ssh--control-path-limit))
+
+(defun orpheus-ssh--make-control-directory (parent)
+  "Make a private temporary directory under PARENT, if its socket fits."
+  (condition-case nil
+      (let* ((temporary-file-directory (file-name-as-directory parent))
+             (directory (make-temp-file "orpheus-" t)))
+        (if (orpheus-ssh--control-path-fits-p directory)
+            directory
+          (delete-directory directory)
+          nil))
+    (error nil)))
+
+(defun orpheus-ssh--automatic-control-directory ()
+  "Return a fresh short control directory, or nil when none has room."
+  (let ((runtime (getenv "XDG_RUNTIME_DIR")))
+    (catch 'found
+      (dolist (parent
+               (delq nil
+                     (list (and runtime
+                                (not (string-empty-p runtime))
+                                (file-directory-p runtime)
+                                (file-name-as-directory runtime))
+                           (and (not (memq system-type
+                                           '(windows-nt ms-dos)))
+                                (file-directory-p "/tmp")
+                                (file-name-as-directory "/tmp"))
+                           temporary-file-directory)))
+        (let ((directory (orpheus-ssh--make-control-directory parent)))
+          (when directory
+            (setq orpheus-ssh--control-owned t)
+            (throw 'found directory)))))))
+
+(defun orpheus-ssh--new-control-directory ()
+  "Return a configured or automatic control directory with room, or nil."
+  (setq orpheus-ssh--control-owned nil)
+  (let ((configured orpheus-ssh-control-directory))
+    (if (not configured)
+        (orpheus-ssh--automatic-control-directory)
+      (let ((directory (expand-file-name configured)))
+        (condition-case err
+            (progn
+              (unless (file-directory-p directory)
+                (make-directory directory t))
+              (if (orpheus-ssh--control-path-fits-p directory)
+                  directory
+                (message
+                 "orpheus: `%s' is too long for an ssh control socket; finding a shorter directory"
+                 configured)
+                (orpheus-ssh--automatic-control-directory)))
+          (error
+           (message "orpheus: cannot use `%s': %s"
+                    configured (error-message-string err))
+           (orpheus-ssh--automatic-control-directory)))))))
+
+(defun orpheus-ssh--control-args (&optional ssh)
   "Return the ssh arguments that share one connection, or nil.
 Only the commands that answer a small question use them, so a listing never
-waits behind a download's bytes."
-  (when (and orpheus-ssh-multiplex (orpheus-ssh--host))
-    (or orpheus-ssh--control-directory
-        (setq orpheus-ssh--control-directory
-              (make-temp-file "orpheus-ssh-control-" t)))
-    (list "-o" "ControlMaster=auto"
-          "-o" (concat "ControlPath="
-                       (expand-file-name "%C" orpheus-ssh--control-directory))
-          "-o" "ControlPersist=600")))
+waits behind a download's bytes.  SSH is left out after its control socket
+failed, so a broken multiplexing setup does not fail every command twice."
+  (when (and orpheus-ssh-multiplex
+             (orpheus-ssh--host)
+             (not (and ssh
+                       (orpheus-ssh-instance-control-failed ssh))))
+    (unless orpheus-ssh--control-directory
+      (setq orpheus-ssh--control-directory
+            (orpheus-ssh--new-control-directory)))
+    (if (not orpheus-ssh--control-directory)
+        (unless orpheus-ssh--control-warned
+          (setq orpheus-ssh--control-warned t)
+          (message
+           "orpheus: no directory has room for ssh's control socket; multiplexing is off.  Set `orpheus-ssh-control-directory'.")
+          nil)
+      (setq orpheus-ssh--control-warned nil)
+      (append
+       (list "-o" "ControlMaster=auto"
+             "-o" (concat "ControlPath="
+                          (orpheus-ssh--control-path
+                           orpheus-ssh--control-directory)))
+       (when orpheus-ssh-control-persist
+         (list "-o" (format "ControlPersist=%s"
+                            orpheus-ssh-control-persist)))))))
 
 (defun orpheus-ssh--close-multiplex ()
   "Ask SSH's shared connection to exit and forget its socket."
   (let ((directory orpheus-ssh--control-directory)
+        (owned orpheus-ssh--control-owned)
         (host (orpheus-ssh--host)))
-    (setq orpheus-ssh--control-directory nil)
+    (setq orpheus-ssh--control-directory nil
+          orpheus-ssh--control-owned nil)
     (when (and directory (file-directory-p directory))
-      (let ((process
-             (and host
-                  (ignore-errors
-                    (make-process
-                     :name "orpheus-ssh-close"
-                     :command (list (orpheus-ssh--program)
-                                    "-o" "ControlMaster=no"
-                                    "-o" (concat
-                                           "ControlPath="
-                                           (expand-file-name "%C" directory))
-                                    "-O" "exit" host)
-                     :buffer nil :noquery t
-                     :sentinel
-                     (lambda (process _event)
-                       (unless (process-live-p process)
+      (let ((process nil))
+        (when host
+          (setq process
+                (ignore-errors
+                  (make-process
+                   :name "orpheus-ssh-close"
+                   :command (list (orpheus-ssh--program)
+                                  "-o" "ControlMaster=no"
+                                  "-o" (concat
+                                         "ControlPath="
+                                         (orpheus-ssh--control-path directory))
+                                  "-O" "exit" host)
+                   :buffer nil :noquery t
+                   :sentinel
+                   (lambda (process _event)
+                     (unless (process-live-p process)
+                       (when owned
                          (ignore-errors
                            (delete-directory directory t)))))))))
         (unless process
-          (ignore-errors (delete-directory directory t)))))))
+          (when owned
+            (ignore-errors (delete-directory directory t))))))))
 
 (defconst orpheus-ssh--speed-window 5.0
   "Seconds of byte samples that make up a transfer's rolling speed.")
@@ -406,24 +527,42 @@ OUTPUT is the newline separated result of `orpheus-ssh--search-command'."
        (funcall callback nil)))
    t))
 
-(defun orpheus-ssh--run (_ssh command callback &optional quiet)
-  "Run COMMAND on ssh's host, then call CALLBACK with its output or nil.
+(defun orpheus-ssh--control-error-p (output)
+  "Return non-nil when OUTPUT says ssh could not use its control socket."
+  (let ((case-fold-search t))
+    (and output
+         (string-match-p
+          (concat "ControlPath.*too long"
+                  "\\|too long for Unix domain socket"
+                  "\\|unix_listener:.*too long"
+                  "\\|control socket.*too long"
+                  "\\|ControlMaster.*not supported")
+          output))))
+
+(defun orpheus-ssh--run (ssh command callback &optional quiet retried)
+  "Run COMMAND on SSH's host, then call CALLBACK with its output or nil.
 When QUIET is non-nil, do not report a command that failed; the caller has a
 more useful message.  An empty successful command yields an empty string.  A
 command that stays silent for `orpheus-ssh-command-timeout' is killed and
-answered with nil, so a slow link cannot hold a tab loading forever."
+answered with nil, so a slow link cannot hold a tab loading forever.  When ssh
+cannot create a shared connection, the command is retried once without
+multiplexing; a login or permission failure is reported and not retried."
   (if-let* ((host (orpheus-ssh--host)))
            (let* ((buffer (generate-new-buffer " *orpheus-ssh-command*"))
+                  (stderr (generate-new-buffer " *orpheus-ssh-stderr*"))
                   (done nil)
                   (timed-out nil)
                   (timer nil)
                   (process nil)
+                  (control (unless retried
+                             (orpheus-ssh--control-args ssh)))
                   (finish
                    (lambda (success output)
                      (unless done
                        (setq done t)
                        (when (timerp timer) (cancel-timer timer))
                        (when (buffer-live-p buffer) (kill-buffer buffer))
+                       (when (buffer-live-p stderr) (kill-buffer stderr))
                        (if success
                            (funcall callback output)
                          (funcall callback nil))))))
@@ -448,26 +587,49 @@ answered with nil, so a slow link cannot hold a tab loading forever."
                         :name "orpheus-ssh"
                         :command (append (list (orpheus-ssh--program))
                                          orpheus-ssh-extra-args
-                                         (orpheus-ssh--control-args)
+                                         control
                                          (list host command))
                         :buffer buffer
-                        :stderr (get-buffer-create "*orpheus ssh*")
+                        :stderr stderr
                         :noquery t
                         :sentinel
                         (lambda (process _event)
                           (unless (process-live-p process)
-                            (let ((success
-                                   (and (eq (process-status process) 'exit)
-                                        (zerop (process-exit-status process))))
-                                  (output (and (buffer-live-p buffer)
-                                               (with-current-buffer buffer
-                                                 (buffer-string)))))
-                              (when (and (not success) (not timed-out)
-                                         (not quiet))
-                                (message
-                                 "orpheus: ssh could not run %s; see *orpheus ssh*"
-                                 command))
-                              (funcall finish success output))))))
+                            (let* ((success
+                                    (and (eq (process-status process) 'exit)
+                                         (zerop (process-exit-status process))))
+                                   (output
+                                    (and (buffer-live-p buffer)
+                                         (with-current-buffer buffer
+                                           (buffer-string))))
+                                   (errors
+                                    (and (buffer-live-p stderr)
+                                         (with-current-buffer stderr
+                                           (buffer-string)))))
+                              (when (and errors (not (string-empty-p errors)))
+                                (with-current-buffer (get-buffer-create
+                                                      "*orpheus ssh*")
+                                  (insert errors)))
+                              (cond
+                               ((and (not success) (not timed-out) control
+                                     (orpheus-ssh--control-error-p errors))
+                                (setq done t)
+                                (when (timerp timer) (cancel-timer timer))
+                                (when (buffer-live-p buffer) (kill-buffer buffer))
+                                (when (buffer-live-p stderr) (kill-buffer stderr))
+                                (unless (orpheus-ssh-instance-control-failed ssh)
+                                  (setf (orpheus-ssh-instance-control-failed ssh) t)
+                                  (unless quiet
+                                    (message
+                                     "orpheus: ssh multiplexing failed; retrying without it")))
+                                (orpheus-ssh--run ssh command callback quiet t))
+                               (t
+                                (when (and (not success) (not timed-out)
+                                           (not quiet))
+                                  (message
+                                   "orpheus: ssh could not run %s; see *orpheus ssh*"
+                                   command))
+                                (funcall finish success output))))))))
                (error
                 (unless done
                   (unless quiet
