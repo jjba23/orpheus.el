@@ -9,6 +9,22 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- Any image file can be cover art, not only the names in
+  ~orpheus-local-cover-names~.  Those names still win when several images are
+  in the same folder, so ~cover.jpg~ beats a stray ~scan.jpg~, and
+  ~orpheus-local-art-extensions~ says which extensions count.
+
+*** Fixed
+
+- The SSH cover search quotes the parentheses of its remote ~find~, so the
+  remote shell no longer rejects the command with a syntax error.  A cover
+  search that fails is also silent now: art is optional, and browsing the
+  same folder reports a host that is really down.
+
 * 0.15.1 (2026-11-10)
 
 *** Added

@@ -117,10 +117,12 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   the scroll position stay exactly where you left them.  It fits the window,
   eliding the track name before the time, volume or flags disappear.
 - *Cover art.* :: For the current track and for the album folder being browsed.
-  Local and SSH look for ~cover.jpg~, ~Cover.PNG~, ~cover.webp~, ~folder.*~,
-  ~front.*~, ~album.*~ and ~artwork.*~ regardless of case, in the track's own
-  folder, its parent (the album root above a disc folder) and one level of
-  child folders such as ~Scans/~.  The search runs in a separate process on
+  Local and SSH accept any image file, and try ~cover.jpg~, ~Cover.PNG~,
+  ~cover.webp~, ~folder.*~, ~front.*~, ~album.*~ and ~artwork.*~ first, so a
+  stray ~scan.jpg~ is a cover but loses to ~cover.jpg~ when both are there.
+  They search in the track's own folder, its parent (the album root above a
+  disc folder) and one level of child folders such as ~Scans/~.  The search
+  runs in a separate process on
   both backends, one remote command on SSH, so a big directory or a slow link
   never holds up the interface; SSH copies a remote cover into the cache.
   MPD uses its embedded ~albumart~ or ~readpicture~.  Cached under

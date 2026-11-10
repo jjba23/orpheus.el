@@ -96,12 +96,17 @@ them.  Deleting the directory is always safe: it is read again.
 | ~orpheus-local-audio-driver~ | ~nil~       | what follows ~--ao=~, or nil for the platform |
 | ~orpheus-local-extra-args~   | ~nil~       | more mpv arguments, as a list          |
 | ~orpheus-local-socket~       | ~nil~       | IPC socket path, or nil for a temporary one |
-| ~orpheus-local-cover-names~  | ~cover.jpg~, ~front.jpg~, … | files looked for next to a track or album folder; local and SSH |
+| ~orpheus-local-cover-names~  | ~cover.jpg~, ~front.jpg~, … | names tried first next to a track or album folder |
+| ~orpheus-local-art-extensions~ | ~jpg~, ~png~, ~webp~, … | extensions accepted as cover art; local and SSH |
 | ~orpheus-local-extensions~   | ~mp3~, ~flac~, ~opus~, … | what the files tab shows |
 
 ~orpheus-local-audio-driver~ is the escape hatch for a machine that needs a
 specific device: ~"pipewire"~, ~"coreaudio/1"~, ~"wasapi"~, ~"alsa/hw:1,0"~.
 Left nil, the platform decides (see [[file:backends.org#platforms][Platforms]]).
+
+Any image file can be cover art.  ~orpheus-local-cover-names~ is the order of
+preference, so ~cover.jpg~ wins over a stray ~scan.jpg~ in the same folder;
+~orpheus-local-art-extensions~ says which extensions count as an image.
 
 ** The SSH backend
 :PROPERTIES:

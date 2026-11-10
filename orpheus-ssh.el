@@ -394,18 +394,12 @@ failed, so a broken multiplexing setup does not fail every command twice."
     (format "ls -1p -- %s" (orpheus-ssh--shell-quote dir))))
 
 (defun orpheus-ssh--cover-file (dir output)
-  "Return the first cover path in DIR from the remote `ls' OUTPUT, or nil."
+  "Return the best image path in DIR from the remote `ls' OUTPUT, or nil.
+A name from `orpheus-local-cover-names' wins over another image."
   (when dir
-    (let ((files (split-string (or output "") "\n" t)))
-      (cl-loop
-       for name in orpheus-local-cover-names
-       for base = (file-name-nondirectory name)
-       for match = (cl-find-if
-                    (lambda (file)
-                      (and (not (string-suffix-p "/" file))
-                           (equal (downcase file) (downcase base))))
-                    files)
-       when match return (orpheus-ssh--join dir match)))))
+    (orpheus-local--art-best
+     dir (mapcar (lambda (name) (orpheus-ssh--join dir name))
+                 (split-string (or output "") "\n" t)))))
 
 (defun orpheus-ssh--media-file-p (name)
   "Return non-nil when NAME looks like something mpv can play."
@@ -791,20 +785,15 @@ multiplexing; a login or permission failure is reported and not retried."
       (list dir parent))))
 
 (defun orpheus-ssh--cover-command (dir)
-  "Return the remote find that lists cover art around DIR.
+  "Return the remote find that lists image files around DIR.
 One command looks in DIR, its parent and DIR's child folders, so a slow link
-is crossed once rather than once per folder."
-  (format "find %s -maxdepth 2 -type f \\( %s \\) -print 2>/dev/null"
+is crossed once rather than once per folder.  Every word is quoted for the
+remote shell, including the parentheses around the name tests."
+  (format "find %s -maxdepth 2 -type f %s -print 2>/dev/null"
           (mapconcat #'orpheus-ssh--shell-quote
                      (orpheus-ssh--cover-roots dir) " ")
-          (mapconcat (lambda (name)
-                       (format "-iname %s"
-                               (orpheus-ssh--shell-quote
-                                (file-name-nondirectory name))))
-                     (delete-dups
-                      (mapcar #'file-name-nondirectory
-                              orpheus-local-cover-names))
-                     " -o ")))
+          (mapconcat #'orpheus-ssh--shell-quote
+                     (orpheus-local--art-name-args) " ")))
 
 (defun orpheus-ssh--folder-art (ssh dir callback)
   "Find cover art for remote DIR on SSH, then call CALLBACK with a local path.
@@ -815,6 +804,8 @@ has no find, the folders are listed instead."
    ((orpheus-ssh-instance-search-fallback ssh)
     (orpheus-ssh--folder-art-listing ssh dir callback))
    (t
+    ;; Art is optional, so a failed search is silent; browsing the same
+    ;; folder will report a host that is really down.
     (orpheus-ssh--run
      ssh (orpheus-ssh--cover-command dir)
      (lambda (output)
@@ -823,7 +814,8 @@ has no find, the folders are listed instead."
                            dir (split-string output "\n" t)))))
          (if remote
              (orpheus-ssh--fetch-cover ssh remote callback)
-           (orpheus-ssh--folder-art-listing ssh dir callback))))))))
+           (orpheus-ssh--folder-art-listing ssh dir callback))))
+     t))))
 
 (defun orpheus-ssh--folder-art-listing (ssh dir callback)
   "Find a cover for DIR by listing it and then its parent over SSH."
@@ -845,7 +837,9 @@ has no find, the folders are listed instead."
                                     parent parent-output))))
                   (if remote
                       (orpheus-ssh--fetch-cover ssh remote callback)
-                    (funcall callback nil))))))))))))
+                    (funcall callback nil))))
+              t))))))
+   t))
 
 (defun orpheus-ssh--fetch-cover (ssh remote callback)
   "Copy REMOTE cover from SSH into the cache, then call CALLBACK with its path."

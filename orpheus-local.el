@@ -61,9 +61,20 @@ The value is what follows `--ao=', for example \"pipewire\" or
     "albumart.jpg" "albumart.jpeg" "albumart.png" "albumart.webp"
     "artwork.jpg" "artwork.jpeg" "artwork.png" "artwork.webp"
     "cover art.jpg" "cover art.png" "album art.jpg" "album art.png")
-  "File names looked for next to a track or inside an album folder.
-Matching is case-insensitive, so `Cover.JPG' matches `cover.jpg'.  The local
-and SSH backends share this list."
+  "File names tried first next to a track or inside an album folder.
+Matching is case-insensitive, so `Cover.JPG' matches `cover.jpg', and the
+order decides between two names in one folder: `cover.jpg' wins over
+`folder.jpg'.  Any other image is used when none of these is there.  The
+local and SSH backends share this list."
+  :type '(repeat string) :group 'orpheus)
+
+(defcustom orpheus-local-art-extensions
+  '("jpg" "jpeg" "png" "webp" "gif" "bmp" "tif" "tiff")
+  "Image extensions accepted as cover art.
+A file with one of these extensions is a cover even when its name is not in
+`orpheus-local-cover-names'; the named files still win when both are in the
+same folder.  Matching is case-insensitive, and a leading dot is optional.
+The local and SSH backends share this list."
   :type '(repeat string) :group 'orpheus)
 
 (defcustom orpheus-local-extensions
@@ -487,19 +498,70 @@ CALLBACK is called with the error string, or nil, and the data."
                        (funcall callback
                                 (and (file-readable-p output) output)))))))))
 
+(defun orpheus-local--art-extension-p (name)
+  "Return non-nil when NAME ends in one of `orpheus-local-art-extensions'."
+  (let ((extension (file-name-extension name)))
+    (and extension
+         (member (downcase extension)
+                 (mapcar (lambda (candidate)
+                           (downcase (string-remove-prefix "." candidate)))
+                         orpheus-local-art-extensions)))))
+
+(defun orpheus-local--art-name-index (path)
+  "Return PATH's place in the artwork order, or nil when it is not an image.
+Names in `orpheus-local-cover-names' come first, in that list's order, so
+`cover.jpg' wins over an arbitrary image.  Any other image ranks after them."
+  (let ((name (downcase (file-name-nondirectory path))))
+    (cond
+     ((cl-position name
+                   (mapcar (lambda (candidate)
+                             (downcase (file-name-nondirectory candidate)))
+                           orpheus-local-cover-names)
+                   :test #'equal))
+     ((orpheus-local--art-extension-p name) 1000))))
+
+(defun orpheus-local--art-rank (dir path)
+  "Return PATH's place in DIR's artwork search.
+0 is DIR itself, 1 its parent and 2 a child folder of DIR.  Nil means PATH is
+elsewhere, such as the cover of a sibling album, and must not be shown."
+  (let* ((dir (file-name-as-directory dir))
+         (parent (or (file-name-directory (directory-file-name dir)) dir))
+         (folder (file-name-directory path)))
+    (cond
+     ((equal folder dir) 0)
+     ((equal folder parent) 1)
+     ((and (not (equal parent dir)) (string-prefix-p dir path)) 2)
+     (t nil))))
+
+(defun orpheus-local--art-best (dir paths)
+  "Return the best cover for DIR among PATHS, or nil.
+DIR itself wins over its parent, which wins over a child folder.  Within a
+folder, a name from `orpheus-local-cover-names' wins over any other image, and
+that list's order decides among the names."
+  (let ((candidates
+         (delq nil
+               (mapcar
+                (lambda (path)
+                  (when-let* ((index (orpheus-local--art-name-index path))
+                              (rank (orpheus-local--art-rank dir path)))
+                    (list rank index path)))
+                paths))))
+    (nth 2 (car (sort candidates
+                      (lambda (a b)
+                        (cond ((/= (nth 0 a) (nth 0 b))
+                               (< (nth 0 a) (nth 0 b)))
+                              ((/= (nth 1 a) (nth 1 b))
+                               (< (nth 1 a) (nth 1 b)))
+                              (t (string< (nth 2 a) (nth 2 b))))))))))
+
 (defun orpheus-local--cover-file (dir)
-  "Return the first cover file in DIR, matching names case-insensitively."
+  "Return DIR's best cover image, or nil.
+A name from `orpheus-local-cover-names' wins over another image, and that
+list's order decides among the names."
   (when (and dir (file-directory-p dir))
-    (let ((files (directory-files dir nil "\\`[^.]")))
-      (cl-loop
-       for name in orpheus-local-cover-names
-       for base = (file-name-nondirectory name)
-       for match = (cl-find-if
-                    (lambda (file)
-                      (and (equal (downcase file) (downcase base))
-                           (file-regular-p (expand-file-name file dir))))
-                    files)
-       when match return (expand-file-name match dir)))))
+    (orpheus-local--art-best
+     dir (cl-remove-if-not #'file-regular-p
+                           (directory-files dir t "\\`[^.]")))))
 
 (defun orpheus-local--cover-near (dir)
   "Return a cover for DIR from itself, its parent or a child folder.
@@ -518,54 +580,6 @@ find is not installed."
                  thereis (orpheus-local--cover-file
                           (file-name-as-directory child))))))
 
-(defun orpheus-local--art-rank (dir path)
-  "Return PATH's place in DIR's artwork search.
-0 is DIR itself, 1 its parent and 2 a child folder of DIR.  Nil means PATH is
-elsewhere, such as the cover of a sibling album, and must not be shown."
-  (let* ((dir (file-name-as-directory dir))
-         (parent (or (file-name-directory (directory-file-name dir)) dir))
-         (folder (file-name-directory path)))
-    (cond
-     ((equal folder dir) 0)
-     ((equal folder parent) 1)
-     ((and (not (equal parent dir)) (string-prefix-p dir path)) 2)
-     (t nil))))
-
-(defun orpheus-local--art-name-index (path)
-  "Return PATH's place in `orpheus-local-cover-names', or a large number."
-  (let ((name (downcase (file-name-nondirectory path)))
-        (index 0)
-        (found nil))
-    (dolist (candidate orpheus-local-cover-names)
-      (when (and (not found)
-                 (equal name (downcase (file-name-nondirectory candidate))))
-        (setq found index))
-      (setq index (1+ index)))
-    (or found 999)))
-
-(defun orpheus-local--art-best (dir paths)
-  "Return the best cover for DIR among PATHS, or nil.
-DIR itself wins over its parent, which wins over a child folder, and a name
-early in `orpheus-local-cover-names' wins within a folder."
-  (let ((candidates
-         (delq nil
-               (mapcar
-                (lambda (path)
-                  ;; A find expression should only answer cover names, and a
-                  ;; name outside the list is not a cover even when it is here.
-                  (let ((index (orpheus-local--art-name-index path)))
-                    (when-let* ((rank (and (< index 999)
-                                           (orpheus-local--art-rank dir path))))
-                      (list rank index path))))
-                paths))))
-    (nth 2 (car (sort candidates
-                      (lambda (a b)
-                        (cond ((/= (nth 0 a) (nth 0 b))
-                               (< (nth 0 a) (nth 0 b)))
-                              ((/= (nth 1 a) (nth 1 b))
-                               (< (nth 1 a) (nth 1 b)))
-                              (t (string< (nth 2 a) (nth 2 b))))))))))
-
 (defun orpheus-local--art-roots (dir)
   "Return the folders scanned for art around DIR."
   (let* ((dir (file-name-as-directory (expand-file-name dir)))
@@ -575,16 +589,19 @@ early in `orpheus-local-cover-names' wins within a folder."
       (list dir parent))))
 
 (defun orpheus-local--art-name-args ()
-  "Return the find predicates that match a cover file name."
-  (let ((names (delete-dups
-                (mapcar #'file-name-nondirectory orpheus-local-cover-names))))
+  "Return the find predicates that match an image file name."
+  (let ((extensions
+         (delete-dups
+          (mapcar (lambda (extension)
+                    (downcase (string-remove-prefix "." extension)))
+                  orpheus-local-art-extensions))))
     (append
      '("(")
-     (cl-loop for name in names
+     (cl-loop for extension in extensions
               for first = t then nil
               append (if first
-                         (list "-iname" name)
-                       (list "-o" "-iname" name)))
+                         (list "-iname" (concat "*." extension))
+                       (list "-o" "-iname" (concat "*." extension))))
      '(")"))))
 
 (defun orpheus-local--scan-art (dir callback)

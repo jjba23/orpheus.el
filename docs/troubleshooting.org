@@ -116,12 +116,13 @@ least recently used tracks and covers are dropped after the next transfer.
 
 - Cover art is drawn only in a graphical frame.  A terminal is text on purpose;
   the list, card and progress bar still work.
-- Local and SSH look for the usual names in the track's folder, its parent
-  and one level of child folders: ~cover.jpg~, ~front.jpg~, ~folder.*~,
-  ~album.*~ and variants, regardless of case.  A cover in the album root is
-  found from a disc subfolder, and one in ~Scans/~ is found from the album.
-  The search runs off the main thread; SSH copies a remote cover into its
-  cache.
+- Local and SSH accept any image file in the track's folder, its parent and
+  one level of child folders.  The names in ~orpheus-local-cover-names~ are
+  tried first, so ~cover.jpg~ wins over a stray ~scan.jpg~, and
+  ~orpheus-local-art-extensions~ decides what counts as an image.  A cover in
+  the album root is found from a disc subfolder, and one in ~Scans/~ is found
+  from the album.  The search runs off the main thread; SSH copies a remote
+  cover into its cache.
 - MPD supplies embedded ~albumart~ or ~readpicture~.  A daemon or file without
   either has no cover to draw.
 - An image Emacs cannot decode is skipped.  If the file is unusual, convert it

@@ -2612,9 +2612,15 @@ directory, so a test never writes to the user's own cache."
                  "'It'\\''s/'")))
 
 (ert-deftest orpheus-test/ssh-cover-file ()
-  "A remote cover is found regardless of its case."
+  "A remote cover is the best image, whatever its name or case."
   (should (equal (orpheus-ssh--cover-file
                   "Music/Album" "Cover.JPG\nSong.mp3\nnotes.txt\n")
+                 "Music/Album/Cover.JPG"))
+  (should (equal (orpheus-ssh--cover-file
+                  "Music/Album" "band.png\nSong.mp3\n")
+                 "Music/Album/band.png"))
+  (should (equal (orpheus-ssh--cover-file
+                  "Music/Album" "band.png\nCover.JPG\n")
                  "Music/Album/Cover.JPG"))
   (should-not (orpheus-ssh--cover-file
                "Music/Album" "Song.mp3\nnotes.txt\n")))
@@ -2670,6 +2676,34 @@ directory, so a test never writes to the user's own cache."
                    (should (file-readable-p file))
                    (should (string-match-p "Cover" file)))
                (orpheus-backend-disconnect ssh)))))
+      (delete-directory orpheus-cache-directory t))))
+
+(ert-deftest orpheus-test/ssh-cover-search-is-quiet ()
+  "A failed cover find does not fill the echo area; the listing still answers."
+  (let ((orpheus-cache-directory (make-temp-file "orpheus-cover-cache" t)))
+    (unwind-protect
+        (orpheus-test--with-fake-ssh
+         (lambda ()
+           (let ((ssh (orpheus-make-backend 'ssh))
+                 (file 'waiting)
+                 (messages nil))
+             (unwind-protect
+                 (cl-letf (((symbol-function 'message)
+                            (lambda (format-string &rest args)
+                              (push (apply #'format format-string args)
+                                    messages))))
+                   (orpheus-backend-folder-art
+                    ssh "Music/Album"
+                    (lambda (result) (setq file result)))
+                   (should (orpheus-test--wait
+                            (lambda () (not (eq file 'waiting))) 20))
+                   (should (file-readable-p file))
+                   (should-not
+                    (cl-some (lambda (entry)
+                               (string-match-p "could not run" entry))
+                             messages)))
+               (orpheus-backend-disconnect ssh))))
+         "missing")
       (delete-directory orpheus-cache-directory t))))
 
 (ert-deftest orpheus-test/ssh-fetches-folder-cover-over-sftp ()
@@ -3410,7 +3444,17 @@ directory, so a test never writes to the user's own cache."
     (should (equal (orpheus-local--art-best
                     "/music/Album"
                     '("/music/Album/folder.jpg" "/music/Album/cover.jpg"))
-                   "/music/Album/cover.jpg"))))
+                   "/music/Album/cover.jpg"))
+    ;; Any image is a cover, but a named one still wins over it.
+    (should (equal (orpheus-local--art-best
+                    "/music/Album" '("/music/Album/scan.jpg"))
+                   "/music/Album/scan.jpg"))
+    (should (equal (orpheus-local--art-best
+                    "/music/Album"
+                    '("/music/Album/scan.jpg" "/music/Album/cover.jpg"))
+                   "/music/Album/cover.jpg"))
+    (should-not (orpheus-local--art-best
+                 "/music/Album" '("/music/Album/notes.txt")))))
 
 (ert-deftest orpheus-test/local-art-scan-finds-parent-and-child-covers ()
   "The asynchronous scan looks in the album root and in child folders."
@@ -3525,11 +3569,14 @@ directory, so a test never writes to the user's own cache."
       (should (equal (orpheus-ui-tab-arg tab) '("/music/Album"))))))
 
 (ert-deftest orpheus-test/ssh-cover-command-searches-around-the-folder ()
-  "One remote find covers the folder, its parent and its child folders."
+  "One remote find covers the folder, its parent and every image name."
   (let ((command (orpheus-ssh--cover-command "Music/Album/Disc 1")))
     (should (string-match-p "find 'Music/Album/Disc 1/' 'Music/Album/'" command))
     (should (string-match-p "-maxdepth 2" command))
-    (should (string-match-p "-iname 'cover.jpg'" command))))
+    ;; The parentheses must be shell words, or a remote sh stops at them.
+    (should (string-match-p "'('" command))
+    (should (string-match-p "'-iname' '\\*\\.jpg'" command))
+    (should-not (string-match-p "'-iname' 'cover\\.jpg'" command))))
 
 (ert-deftest orpheus-test/ssh-control-args-share-one-connection ()
   "Control commands share a master connection; downloads do not use it."
