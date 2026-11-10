@@ -16,6 +16,9 @@
 (let ((command (car (last command-line-args-left)))
       (mode (getenv "ORPHEUS_TEST_FAKE_SSH")))
   (cond
+   ((and command (string-prefix-p "sleep " command))
+    (sleep-for 10)
+    (princ "awake"))
    ((and command (string-prefix-p "ls -lL " command))
     (if (member mode '("nosize" "minimal"))
         (kill-emacs 1)

@@ -9,6 +9,62 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- Artwork is looked for in the track's folder, its parent (the album root
+  above a disc folder) and one level of child folders such as =Scans/=.  The
+  search runs in a separate process on the local backend and in one remote
+  command on SSH, so a large folder or a slow link never blocks the interface.
+- The now-playing card's controls are ready-player's media row: ~◁◁~, ~▶~ or
+  ~⏸~, ~■~, ~▷▷~ and ~➦~ first, then ~⇆~, ~⤮~, ~①~, ~⊘~, search and help, as
+  plain glyphs rather than boxes.  ~orpheus-ui-control-icons~ changes any of
+  them.
+- ~r~ cycles repeat through off, the queue and the current track; ~i~ prints
+  the track, its tags and the position in the echo area; ~o~ opens the current
+  file in the system's default program.
+- SSH downloads live in ~orpheus-cache-directory~ (=~/.cache/orpheus/ssh= by
+  default), survive a reboot, and are reused across sessions.
+  ~orpheus-cache-max-bytes~ (10 GiB by default) bounds the whole cache by
+  deleting the least recently used files; the track being played is never one
+  of them.
+- Six colour presets for the player — Aegean, Nord, Gruvbox, Rosé Pine,
+  Solarized Light and Graphite — with ~orpheus-theme~, ~M-x
+  orpheus-apply-theme~ and ~M-t~.  A preset recolours the faces and carries a
+  matching visualizer ramp and background.
+- Five named visualizer ramps (Aurora, Ember, Ice, Spectrum, Mono) with
+  ~orpheus-vis-theme~, ~orpheus-vis-background~ and ~M-c~.
+- ~orpheus-ui-layout~ lists the sections the player draws and in what order;
+  ~orpheus-ui-layout-presets~ names classic, cover, compact and minimal, and
+  ~M-l~ walks them.
+- New faces ~orpheus-time-face~ and ~orpheus-help-key-face~, and
+  ~orpheus-vis-status-face~ for the visualizer footer.
+- ~orpheus-mpd-timeout~ drops a daemon that stops answering and reports the
+  reason to every waiting caller; ~orpheus-ssh-command-timeout~ kills a
+  listing, search or cover command that stays silent, so neither backend can
+  hold a tab loading forever.  Downloads are never timed out.
+
+*** Changed
+
+- ~orpheus-ssh-cache-count~ is nil by default: the size limit decides, and the
+  count is only a second, stricter limit for a small disk.
+- The four modes show their state with the gold face on the same glyph, so the
+  control row does not change width as they are toggled.
+
+*** Fixed
+
+- Changing folder while a download runs clears the old rows and shows
+  ~loading…~ at once, so a slow answer is not mistaken for an ignored key.
+  Listings, searches, size probes and covers share one multiplexed ssh
+  connection (~orpheus-ssh-multiplex~), while downloads keep their own, so a
+  saturated link no longer delays navigation.
+- A lost MPD connection now answers the commands still in flight with the
+  reason instead of leaving their callers waiting.
+- The player drops a reply from an older, slower listing when a newer request
+  has already started, and the test suite covers that race along with the SSH
+  and MPD timeout paths.
+
 * 0.13.0 (2026-11-09)
 
 *** Added

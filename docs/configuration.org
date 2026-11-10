@@ -36,7 +36,13 @@ wrong.  Backend-specific setup, including MPD passwords and SSH keys, is in
 | ~orpheus-seek-step~        | ~5~     | seconds of the seek commands                   |
 | ~orpheus-notifications~    | ~t~     | notify on track change                         |
 | ~orpheus-mode-line-width~  | ~40~    | columns the mode-line track is given           |
-| ~orpheus-cache-directory~  | ~$XDG_CACHE_HOME/orpheus/~ | cover art and generated files |
+| ~orpheus-cache-directory~  | ~$XDG_CACHE_HOME/orpheus/~ | downloaded tracks, covers and generated files |
+| ~orpheus-cache-max-bytes~  | ~10737418240~ | largest size of the cache, 10 GiB; nil keeps everything |
+
+The cache lives in =~/.cache/orpheus= by default and survives a reboot.
+Tracks and covers are deleted, least recently used first, when the directory
+grows past ~orpheus-cache-max-bytes~; the track being played is never one of
+them.  Deleting the directory is always safe: it is read again.
 
 ** The MPD backend
 :PROPERTIES:
@@ -50,6 +56,7 @@ wrong.  Backend-specific setup, including MPD passwords and SSH keys, is in
 | ~orpheus-mpd-socket~      | ~nil~       | unix socket path                           |
 | ~orpheus-mpd-password~    | ~nil~       | password, or nil for ~MPD_PASSWORD~/auth-source |
 | ~orpheus-mpd-search-tag~  | ~"any"~     | the tag search looks in                    |
+| ~orpheus-mpd-timeout~     | ~15~        | seconds a reply may be owed before the connection is dropped |
 
 ** The local backend
 :PROPERTIES:
@@ -85,7 +92,10 @@ Left nil, the platform decides (see [[file:backends.org#platforms][Platforms]]).
 | ~orpheus-ssh-sftp-extra-args~   | ~nil~   | more sftp arguments, as a list                  |
 | ~orpheus-ssh-concurrency~       | ~2~     | simultaneous ssh downloads                      |
 | ~orpheus-ssh-prefetch~          | ~2~     | upcoming queue tracks fetched in the background |
-| ~orpheus-ssh-cache-count~       | ~32~    | completed tracks kept in the cache              |
+| ~orpheus-ssh-command-timeout~   | ~20~    | seconds a listing, search or cover may stay silent |
+| ~orpheus-ssh-cache-directory~   | ~nil~   | where downloads are kept; nil is =~/.cache/orpheus/ssh= |
+| ~orpheus-ssh-cache-count~       | ~nil~   | completed tracks kept, or nil for only the size limit |
+| ~orpheus-ssh-multiplex~         | ~t~     | share one connection for listings, search and covers |
 
 ** Playlists
 :PROPERTIES:
@@ -150,6 +160,9 @@ name.
 | ~orpheus-ui-image-cache-size~ | ~64~    | decoded covers kept for redraws          |
 | ~orpheus-ui-mode-bindings~  | ~nil~     | (KEY . COMMAND) pairs applied to the keymap |
 | ~orpheus-ui-progress-width~ | ~16~      | columns of the progress bar              |
+| ~orpheus-ui-control-icons~  | the media glyphs | (NAME UNICODE . ASCII) pairs for the controls |
+| ~orpheus-theme~             | ~aegean~  | colour preset of the faces; ~M-t~ walks them |
+| ~orpheus-ui-layout~         | classic   | sections drawn, in order; ~M-l~ walks the presets |
 | ~orpheus-progress-filled-char~ | ~━~    | the played part of the bar               |
 | ~orpheus-progress-empty-char~  | ~─~    | the rest of the bar                      |
 | ~orpheus-vis-program~       | ~"cava"~  | the visualizer program                   |
@@ -158,7 +171,14 @@ name.
 | ~orpheus-vis-input~         | ~nil~     | cava's input method, or nil for the platform |
 | ~orpheus-vis-graphical~     | ~t~       | SVG bars in a graphical frame            |
 | ~orpheus-vis-colors~        | five colours | the bar ramp, quiet to loud           |
+| ~orpheus-vis-theme~         | ~nil~     | named ramp from ~orpheus-vis-theme-presets~; ~M-c~ walks them |
+| ~orpheus-vis-background~    | ~nil~     | visualizer background, or nil for the frame's |
 
+~orpheus-theme-presets~ and ~orpheus-vis-theme-presets~ map a name to a plist
+of colours, and ~orpheus-ui-layout-presets~ maps a name to a list of sections.
+Add an entry and it joins the cycle: ~M-t~ walks the player themes, ~M-l~ the
+layouts and ~M-c~ the visualizer ramps, while ~M-x orpheus-apply-theme~ and
+~M-x orpheus-ui-apply-layout~ pick one by name.
 
 * Complete examples
 
@@ -172,7 +192,8 @@ A daemon on this machine, with a shorter refresh and a larger cover:
 (orpheus)
 #+end_src
 
-A local library, with the equalizer ready and the mode line showing the track:
+A local library with a different look and a compact layout, and the equalizer
+ready and the mode line showing the track:
 
 #+begin_src emacs-lisp
 (setq orpheus-backend 'local

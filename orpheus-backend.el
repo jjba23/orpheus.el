@@ -93,6 +93,81 @@ cache directory; NAME only contributes its base name."
     (make-directory dir t)
     (expand-file-name (if (string-empty-p safe) "file" safe) dir)))
 
+(defcustom orpheus-cache-max-bytes (* 10 1024 1024 1024)
+  "Largest total size of `orpheus-cache-directory', in bytes.
+Downloaded tracks and covers are deleted, least recently used first, until the
+directory fits.  The default leaves room for a few thousand tracks and keeps
+the cache across a reboot; nil keeps everything."
+  :type '(choice (const :tag "No limit" nil) integer)
+  :group 'orpheus)
+
+(defconst orpheus-cache-prune-interval 30
+  "Seconds between two automatic prunes of the cache.")
+
+(defvar orpheus-cache--pruned-at 0
+  "When the cache was last pruned, as a float time.")
+
+(defun orpheus-cache-files (&optional directory)
+  "Return the cached files as a list of (PATH SIZE MTIME).
+DIRECTORY is `orpheus-cache-directory' unless given.  A partial download is
+left out: its bytes are still being written."
+  (let ((root (expand-file-name (or directory orpheus-cache-directory))))
+    (when (file-directory-p root)
+      (delq nil
+            (mapcar
+             (lambda (path)
+               (let ((attributes (and (not (string-suffix-p ".part" path))
+                                      (file-attributes path))))
+                 (when (and attributes
+                            (null (file-attribute-type attributes)))
+                   (list path
+                         (or (file-attribute-size attributes) 0)
+                         (float-time
+                          (file-attribute-modification-time attributes))))))
+             (directory-files-recursively root "" t))))))
+
+(defun orpheus-cache-size (&optional directory)
+  "Return the total size of DIRECTORY, `orpheus-cache-directory' by default.
+The answer is in bytes."
+  (cl-loop for entry in (orpheus-cache-files directory) sum (nth 1 entry)))
+
+(defun orpheus-cache-prune (&optional keep directory limit)
+  "Delete the least recently used cached files until the cache fits.
+LIMIT is `orpheus-cache-max-bytes' and DIRECTORY `orpheus-cache-directory'
+unless given.  KEEP is a list of paths never deleted, such as the track being
+played.  Return the bytes freed, or nil when nothing had to go."
+  (let ((limit (or limit orpheus-cache-max-bytes)))
+    (when limit
+      (let* ((files (orpheus-cache-files directory))
+             (total (cl-loop for entry in files sum (nth 1 entry)))
+             (keep (mapcar #'file-truename (delq nil keep)))
+             (freed 0))
+        (dolist (entry (sort files (lambda (a b) (< (nth 2 a) (nth 2 b)))))
+          (when (> total limit)
+            (let ((path (car entry)))
+              (unless (member (file-truename path) keep)
+                (when (ignore-errors (delete-file path) t)
+                  (cl-incf freed (nth 1 entry))
+                  (cl-decf total (nth 1 entry)))))))
+        (when (> freed 0) freed)))))
+
+(defun orpheus-cache-prune-later (&optional keep)
+  "Prune the cache when Emacs is idle, at most every 30 seconds.
+KEEP names the files that must survive, such as the one being played.  The
+directory and the limit are read now, so a caller that binds them for a test
+or a session cannot prune another cache later."
+  (let ((now (float-time))
+        (directory (expand-file-name orpheus-cache-directory))
+        (limit orpheus-cache-max-bytes))
+    (when (and limit
+               (>= (- now orpheus-cache--pruned-at)
+                   orpheus-cache-prune-interval))
+      (setq orpheus-cache--pruned-at now)
+      (run-with-idle-timer
+       1 nil
+       (lambda ()
+         (ignore-errors (orpheus-cache-prune keep directory limit)))))))
+
 (defun orpheus-format-time (seconds)
   "Return SECONDS as a clock string, or dashes when there is no duration."
   (if (or (null seconds) (not (numberp seconds)) (< seconds 0)
@@ -281,6 +356,13 @@ through another process, such as MPD, returns nil."
 FOLDER is the backend's own path to a directory or album."
   (ignore backend folder)
   (funcall callback nil))
+
+(cl-defgeneric orpheus-backend-local-file (backend track)
+  "Return a local file BACKEND holds for TRACK, or nil.
+A backend that copies its tracks here, such as SSH, answers with the copy; one
+whose files live on another machine, such as MPD, answers nil."
+  (ignore backend track)
+  nil)
 
 (cl-defgeneric orpheus-backend-outputs (backend callback)
   "Ask BACKEND for its audio outputs, then call CALLBACK with items."

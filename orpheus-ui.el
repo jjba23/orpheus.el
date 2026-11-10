@@ -30,6 +30,7 @@
 (require 'orpheus-playlist)
 (require 'orpheus-transient)
 (require 'orpheus-equalizer)
+(require 'orpheus-vis)
 (require 'button)
 
 (declare-function orpheus "orpheus" ())
@@ -143,14 +144,14 @@ still gives a readable player."
   :group 'orpheus)
 
 (defface orpheus-button-face
-  '((t :inherit shadow :box t))
+  '((t :inherit shadow))
   "Face of a control under the cover that is off or inert."
   :group 'orpheus)
 
 (defface orpheus-button-on-face
-  '((((background dark)) :inherit bold :box t :foreground "#e6c78a")
-    (((background light)) :inherit bold :box t :foreground "#6b4f1f")
-    (t :inherit bold :box t))
+  '((((background dark)) :inherit bold :foreground "#e6c78a")
+    (((background light)) :inherit bold :foreground "#6b4f1f")
+    (t :inherit bold))
   "Face of a control under the cover that is on: gold, like the status line."
   :group 'orpheus)
 
@@ -168,6 +169,18 @@ still gives a readable player."
   "Face of a download that is still running."
   :group 'orpheus)
 
+(defface orpheus-time-face
+  '((t :inherit shadow))
+  "Face of elapsed and total times, apart from the rest of the row."
+  :group 'orpheus)
+
+(defface orpheus-help-key-face
+  '((((background dark)) :inherit bold :foreground "#e6c78a")
+    (((background light)) :inherit bold :foreground "#6b4f1f")
+    (t :inherit bold))
+  "Face of the key column of the help table."
+  :group 'orpheus)
+
 ;; The faces keep `orpheus' as a group for `customize-group' and are gathered
 ;; under `orpheus-faces' so a reader looking for the look finds the whole set
 ;; in one place.
@@ -177,7 +190,9 @@ still gives a readable player."
                 orpheus-directory-face orpheus-error-face orpheus-marked-face
                 orpheus-progress-filled-face orpheus-progress-empty-face
                 orpheus-button-face orpheus-button-on-face
-                orpheus-download-face orpheus-download-active-face))
+                orpheus-download-face orpheus-download-active-face
+                orpheus-time-face orpheus-help-key-face
+                orpheus-vis-status-face))
   (custom-add-to-group 'orpheus-faces face 'custom-face))
 
 (defcustom orpheus-ui-buffer-name "*orpheus*"
@@ -206,6 +221,213 @@ move while a cover loads and does not move when a track has none."
 (defcustom orpheus-ui-progress-width 16
   "Width of the progress bar in the status line, in columns."
   :type 'integer :group 'orpheus)
+
+(defcustom orpheus-ui-control-icons
+  '((previous "◁◁" . "<<")
+    (play "▶" . ">")
+    (pause "⏸" . "||")
+    (stop "■" . "X")
+    (next "▷▷" . ">>")
+    (open "➦" . "O")
+    (repeat "⇆" . "r")
+    (shuffle "⤮" . "z")
+    (single "①" . "1")
+    (consume "⊘" . "c")
+    (search "⌕" . "?")
+    (help "⁈" . "H"))
+  "Glyph of each control under the cover, as (NAME UNICODE . ASCII).
+The defaults are ready-player's plain media symbols; a font without them is
+what `orpheus-ui-plain-ascii' is for."
+  :type '(alist :key-type symbol
+                :value-type (cons string string))
+  :group 'orpheus)
+
+(defun orpheus-ui--control-icon (name)
+  "Return the glyph of the control NAME, in ASCII when asked."
+  (let ((pair (alist-get name orpheus-ui-control-icons)))
+    (if orpheus-ui-plain-ascii (cdr pair) (car pair))))
+
+;;; Themes and layout
+
+(defcustom orpheus-theme 'aegean
+  "Colour preset of the player's faces.
+`orpheus-apply-theme' applies one and `orpheus-cycle-theme' walks them; the
+presets in `orpheus-theme-presets' also carry a visualizer ramp, so one
+choice restyles the player and the spectrum together.  A preset only sets
+colours: weight, slant and the built-in inheritance stay as the faces
+declare them, which is what lets an Emacs theme keep working underneath."
+  :type '(choice (const :tag "Aegean" aegean)
+                 (symbol :tag "A preset from `orpheus-theme-presets'"))
+  :group 'orpheus)
+
+(defcustom orpheus-theme-presets
+  '((aegean . (:status "#e6c78a" :title "#ece5d8" :artist "#93b8e6"
+               :album "#c3aede" :directory "#b7c98a"
+               :download "#7fd1c8" :download-active "#a8e6df"
+               :time "#b9b0a3"
+               :vis ("#23395d" "#3f6f9e" "#7aa8c9" "#c3aede" "#e8cf9a")))
+    (nord . (:status "#88c0d0" :title "#eceff4" :artist "#8fbcbb"
+             :album "#b48ead" :directory "#a3be8c"
+             :download "#5e81ac" :download-active "#81a1c1"
+             :time "#d8dee9"
+             :vis ("#2e3440" "#4c566a" "#5e81ac" "#88c0d0" "#a3be8c")
+             :vis-background "#2e3440"))
+    (gruvbox . (:status "#fabd2f" :title "#ebdbb2" :artist "#83a598"
+                :album "#d3869b" :directory "#b8bb26"
+                :download "#8ec07c" :download-active "#b8bb26"
+                :time "#a89984"
+                :vis ("#282828" "#504945" "#d79921" "#fabd2f" "#b8bb26")
+                :vis-background "#1d2021"))
+    (rose-pine . (:status "#f6c177" :title "#e0def4" :artist "#9ccfd8"
+                  :album "#c4a7e7" :directory "#ebbcba"
+                  :download "#31748f" :download-active "#9ccfd8"
+                  :time "#908caa"
+                  :vis ("#191724" "#26233a" "#31748f" "#9ccfd8" "#f6c177")
+                  :vis-background "#191724"))
+    (solarized-light . (:status "#b58900" :title "#073642"
+                        :artist "#268bd2" :album "#6c71c4"
+                        :directory "#859900"
+                        :download "#2aa198" :download-active "#268bd2"
+                        :time "#93a1a1"
+                        :vis ("#eee8d5" "#93a1a1" "#268bd2" "#2aa198"
+                              "#b58900")
+                        :vis-background "#fdf6e3"))
+    (graphite . (:status "#b0b0b0" :title "#e8e8e8" :artist "#c8c8c8"
+                 :album "#a0a0a0" :directory "#d0d0d0"
+                 :download "#909090" :download-active "#f0f0f0"
+                 :time "#888888"
+                 :vis ("#303030" "#505050" "#707070" "#909090" "#c0c0c0")
+                 :vis-background "#101010")))
+  "Named colour presets for the player, in the order `orpheus-cycle-theme' uses.
+Each is a plist of role to colour: `:status' also colours the selected tab,
+the lit controls and the progress fill; `:vis' is the visualizer ramp, quiet
+to loud, and `:vis-background' its background.  Roles left out keep their
+face definition, and a preset without `:vis-background' keeps the frame's."
+  :type '(alist :key-type symbol :value-type plist)
+  :group 'orpheus)
+
+(defconst orpheus-theme--faces
+  '((:status orpheus-status-face)
+    (:tab-active orpheus-tab-active-face)
+    (:button-on orpheus-button-on-face)
+    (:progress orpheus-progress-filled-face)
+    (:title orpheus-title-face)
+    (:artist orpheus-artist-face)
+    (:album orpheus-album-face)
+    (:directory orpheus-directory-face)
+    (:download orpheus-download-face)
+    (:download-active orpheus-download-active-face)
+    (:time orpheus-time-face)
+    (:help-key orpheus-help-key-face)
+    (:vis-status orpheus-vis-status-face))
+  "Face each theme role colours.")
+
+(defun orpheus-theme--color (palette role)
+  "Return PALETTE's colour for ROLE, or the accent when ROLE has none."
+  (or (plist-get palette role)
+      (and (memq role '(:tab-active :button-on :progress :help-key))
+           (plist-get palette :status))))
+
+(defun orpheus-apply-theme (theme)
+  "Apply THEME, one of `orpheus-theme-presets', to the player.
+The visualizer takes the same preset's ramp, unless you pick another one with
+`orpheus-vis-cycle-theme'."
+  (interactive
+   (list (intern
+          (completing-read "Orpheus theme: "
+                           (mapcar #'car orpheus-theme-presets)
+                           nil t nil nil
+                           (when orpheus-theme (symbol-name orpheus-theme))))))
+  (let ((palette (alist-get theme orpheus-theme-presets)))
+    (unless palette
+      (user-error "No such orpheus theme: %s" theme))
+    (setq orpheus-theme theme)
+    (dolist (mapping orpheus-theme--faces)
+      (when-let* ((color (orpheus-theme--color palette (car mapping))))
+        (set-face-attribute (cadr mapping) nil :foreground color)))
+    (when-let* ((ramp (plist-get palette :vis)))
+      (setq orpheus-vis-theme nil
+            orpheus-vis-colors ramp))
+    (setq orpheus-vis-background (plist-get palette :vis-background))
+    (when (get-buffer orpheus-ui-buffer-name)
+      (with-current-buffer orpheus-ui-buffer-name
+        (when (derived-mode-p 'orpheus-ui-mode)
+          (orpheus-ui--redraw))))
+    (force-mode-line-update t)
+    (message "orpheus: %s theme" theme)))
+
+(defun orpheus-cycle-theme ()
+  "Switch to the next colour preset in `orpheus-theme-presets'."
+  (interactive)
+  (let* ((names (mapcar #'car orpheus-theme-presets))
+         (next (or (cadr (memq orpheus-theme names)) (car names))))
+    (orpheus-apply-theme next)))
+
+(defcustom orpheus-ui-layout-presets
+  '((classic . (tabs path art now-playing separator list footer))
+    (cover . (tabs art now-playing path separator list footer))
+    (compact . (tabs path separator list footer))
+    (minimal . (tabs path list footer)))
+  "Named arrangements of the player sections, in drawing order.
+`classic' is the full card above the list; `cover' puts the cover first;
+`compact' leaves out art and card; `minimal' is the tabs, the rows and the
+hint line."
+  :type '(alist :key-type symbol :value-type (repeat symbol))
+  :group 'orpheus)
+
+(defcustom orpheus-ui-layout
+  (alist-get 'classic orpheus-ui-layout-presets)
+  "Sections of the player buffer, in the order they are drawn.
+Each symbol draws one: `tabs' the logo and tabs, `path' the current folder,
+`art' the cover, `now-playing' the card, `separator' the rule, `list' the
+rows and `footer' the hint line.  A section left out is not drawn, and
+`orpheus-ui-show-art' and `orpheus-ui-show-now-playing' still hide theirs.
+`orpheus-ui-layout-presets' names complete arrangements, and
+`orpheus-ui-cycle-layout' walks them."
+  :type '(repeat (choice (const :tag "Logo and tabs" tabs)
+                         (const :tag "Current folder" path)
+                         (const :tag "Cover art" art)
+                         (const :tag "Now-playing card" now-playing)
+                         (const :tag "Rule" separator)
+                         (const :tag "Rows" list)
+                         (const :tag "Hint line" footer)))
+  :group 'orpheus)
+
+(defun orpheus-ui-apply-layout (preset)
+  "Switch the player to layout PRESET from `orpheus-ui-layout-presets'."
+  (interactive
+   (list (intern
+          (completing-read
+           "Orpheus layout: " (mapcar #'car orpheus-ui-layout-presets)
+           nil t nil nil
+           (when-let* ((current (car (rassoc orpheus-ui-layout
+                                            orpheus-ui-layout-presets))))
+             (symbol-name current))))))
+  (let ((layout (alist-get preset orpheus-ui-layout-presets)))
+    (unless layout
+      (user-error "No such orpheus layout: %s" preset))
+    (setq orpheus-ui-layout layout)
+    (when (get-buffer orpheus-ui-buffer-name)
+      (with-current-buffer orpheus-ui-buffer-name
+        (when (derived-mode-p 'orpheus-ui-mode)
+          (orpheus-ui--redraw))))
+    (message "orpheus: %s layout" preset)))
+
+(defun orpheus-ui-cycle-layout ()
+  "Switch to the next arrangement in `orpheus-ui-layout-presets'."
+  (interactive)
+  (let* ((names (mapcar #'car orpheus-ui-layout-presets))
+         (current (car (rassoc orpheus-ui-layout orpheus-ui-layout-presets)))
+         (next (or (cadr (memq current names)) (car names))))
+    (orpheus-ui-apply-layout next)))
+
+(defun orpheus-ui--redraw-now ()
+  "Redraw the player if it is open, for a change that is purely visual."
+  (when (get-buffer orpheus-ui-buffer-name)
+    (with-current-buffer orpheus-ui-buffer-name
+      (when (derived-mode-p 'orpheus-ui-mode)
+        (orpheus-ui--redraw))))
+  (force-mode-line-update t))
 
 (defcustom orpheus-ui-icons t
   "Whether each row starts with a glyph for what it is.
@@ -753,9 +975,9 @@ so the list below it never moves while a cover arrives."
 (defun orpheus-ui--button (label help command &optional face)
   "Return LABEL as a button that runs COMMAND, with HELP as its tooltip.
 A control in a player is a thing to click, so the label carries its own
-keymap, a hand for the pointer and the box of FACE, which defaults to
-`orpheus-button-face'."
-  (propertize (format "  %s  " label)
+keymap and a hand for the pointer.  The plain glyphs and the space around them
+are the media row of ready-player; FACE defaults to `orpheus-button-face'."
+  (propertize (format " %s " label)
               'face (or face 'orpheus-button-face)
               'mouse-face 'highlight
               'pointer 'hand
@@ -770,40 +992,53 @@ keymap, a hand for the pointer and the box of FACE, which defaults to
 
 (defun orpheus-ui--transport (status)
   "Return the transport buttons for STATUS, as a row the mouse can press.
-The four mode toggles show their state in their face, the way the flags in
-the status line spell it out.  Stop sits with the other transport controls,
-and a gap keeps the modes from reading as part of the transport."
-  (let* ((ascii orpheus-ui-plain-ascii)
-         (playing (and status (eq (orpheus-status-state status) 'play)))
+The row is ready-player's: previous, play or pause, stop, next and open
+elsewhere first, then the mode toggles, with search and help at the end.  A
+mode that is on keeps its glyph and takes the gold face, so nothing shifts."
+  (let* ((playing (and status (eq (orpheus-status-state status) 'play)))
          (mood (lambda (on) (if on 'orpheus-button-on-face 'orpheus-button-face))))
     (concat
-     (orpheus-ui--button (if ascii "<<" "⏮") "Previous track"
-                         'orpheus-previous)
+     (orpheus-ui--button (orpheus-ui--control-icon 'previous)
+                         "Previous track" 'orpheus-previous)
      " "
-     (orpheus-ui--button (cond (playing (if ascii "||" "⏸"))
-                               (ascii ">")
-                               (t "▶"))
+     (orpheus-ui--button (orpheus-ui--control-icon (if playing 'pause 'play))
                          (if playing "Pause" "Play") 'orpheus-play-pause)
      " "
-     (orpheus-ui--button (if ascii ">>" "⏭") "Next track" 'orpheus-next)
+     (orpheus-ui--button (orpheus-ui--control-icon 'stop)
+                         "Stop" 'orpheus-stop)
      " "
-     (orpheus-ui--button (if ascii "X" "⏹") "Stop" 'orpheus-stop)
+     (orpheus-ui--button (orpheus-ui--control-icon 'next)
+                         "Next track" 'orpheus-next)
      "   "
-     (orpheus-ui--button "R" "Repeat" 'orpheus-toggle-repeat
+     (orpheus-ui--button (orpheus-ui--control-icon 'open)
+                         "Open in another program" 'orpheus-open-externally)
+     " "
+     (orpheus-ui--button (orpheus-ui--control-icon 'repeat)
+                         "Repeat: off, the queue, or this track"
+                         'orpheus-cycle-repeat
                          (funcall mood (and status
                                             (orpheus-status-repeat status))))
      " "
-     (orpheus-ui--button "Z" "Shuffle" 'orpheus-toggle-random
+     (orpheus-ui--button (orpheus-ui--control-icon 'shuffle)
+                         "Shuffle" 'orpheus-toggle-random
                          (funcall mood (and status
                                             (orpheus-status-random status))))
      " "
-     (orpheus-ui--button "S" "Single track" 'orpheus-toggle-single
+     (orpheus-ui--button (orpheus-ui--control-icon 'single)
+                         "Single track" 'orpheus-toggle-single
                          (funcall mood (and status
                                             (orpheus-status-single status))))
      " "
-     (orpheus-ui--button "C" "Consume" 'orpheus-toggle-consume
+     (orpheus-ui--button (orpheus-ui--control-icon 'consume)
+                         "Consume" 'orpheus-toggle-consume
                          (funcall mood (and status
-                                            (orpheus-status-consume status)))))))
+                                            (orpheus-status-consume status))))
+     "   "
+     (orpheus-ui--button (orpheus-ui--control-icon 'search)
+                         "Search the library" 'orpheus-ui-search)
+     " "
+     (orpheus-ui--button (orpheus-ui--control-icon 'help)
+                         "The orpheus menu" 'orpheus-menu))))
 
 (defun orpheus-ui--seek-seconds (point start width total elapsed)
   "Return the seconds to seek for a click at POINT on a bar at START.
@@ -859,7 +1094,7 @@ there, so the list below it does not jump when the first track starts."
            (times (propertize (format "%s / %s"
                                       (orpheus-format-time elapsed)
                                       (orpheus-format-time total))
-                              'face 'orpheus-muted-face))
+                              'face 'orpheus-time-face))
            (line (concat bar "  " times)))
       (insert (make-string (max 0 (/ (- width (string-width line)) 2)) ?\s))
       (let ((from (point)))
@@ -950,32 +1185,43 @@ while this one runs is done once after it, never inside it."
            (tab (orpheus-ui--current-tab))
            (width (max 24 (if window (window-body-width window) 80))))
       (erase-buffer)
-      (insert (or (orpheus-ui--logo-string) "")
-              (orpheus-ui--tab-string) "\n")
-      (when (orpheus-ui-tab-arg tab)
-        (insert (propertize (orpheus-ui--path-string)
-                            'face 'orpheus-muted-face)
-                "\n"))
-      (when orpheus-ui-show-art
-        (orpheus-ui--insert-art width))
-      (when orpheus-ui-show-now-playing
-        (orpheus-ui--insert-now-playing width))
-      (insert (propertize (make-string width ?─) 'face 'orpheus-muted-face)
-              "\n")
-      (let ((items (orpheus-ui-tab-items tab)))
-        (if (null items)
-            (insert (propertize
-                     (if (orpheus-ui-tab-loading tab)
-                         "  loading…"
-                       "  nothing here yet")
-                     'face 'orpheus-muted-face)
-                    "\n")
-          (let ((index 0))
-            (dolist (item items)
-              (orpheus-ui--insert-item item index width)
-              (setq index (1+ index))))))
-      (insert (propertize (orpheus-ui--footer (and tab (orpheus-ui-tab-kind tab)))
-                          'face 'orpheus-muted-face))
+      (dolist (section orpheus-ui-layout)
+        (pcase section
+          ('tabs
+           (insert (or (orpheus-ui--logo-string) "")
+                   (orpheus-ui--tab-string) "\n"))
+          ('path
+           (when (orpheus-ui-tab-arg tab)
+             (insert (propertize (orpheus-ui--path-string)
+                                 'face 'orpheus-muted-face)
+                     "\n")))
+          ('art
+           (when orpheus-ui-show-art
+             (orpheus-ui--insert-art width)))
+          ('now-playing
+           (when orpheus-ui-show-now-playing
+             (orpheus-ui--insert-now-playing width)))
+          ('separator
+           (insert (propertize (make-string width ?─)
+                               'face 'orpheus-muted-face)
+                   "\n"))
+          ('list
+           (let ((items (orpheus-ui-tab-items tab)))
+             (if (null items)
+                 (insert (propertize
+                          (if (orpheus-ui-tab-loading tab)
+                              "  loading…"
+                            "  nothing here yet")
+                          'face 'orpheus-muted-face)
+                         "\n")
+               (let ((index 0))
+                 (dolist (item items)
+                   (orpheus-ui--insert-item item index width)
+                   (setq index (1+ index)))))))
+          ('footer
+           (insert (propertize
+                    (orpheus-ui--footer (and tab (orpheus-ui-tab-kind tab)))
+                    'face 'orpheus-muted-face)))))
       (orpheus-ui--place-point)
       (when window
         ;; A buffer position is not a place: the art box and the path line
@@ -1328,9 +1574,14 @@ moving between a large queue and a directory does not read either again."
          (setf (orpheus-ui-tab-stack tab)
                (cons (list (orpheus-ui-tab-view tab) (orpheus-ui-tab-arg tab))
                      (orpheus-ui-tab-stack tab)))
+         ;; The old rows go at once: on a slow link the reply may take a
+         ;; while, and a folder that still shows its parent looks stuck.
          (setf (orpheus-ui-tab-view tab) kind
                (orpheus-ui-tab-arg tab) (if (listp arg) arg (list arg))
-               (orpheus-ui-tab-index tab) 0)
+               (orpheus-ui-tab-index tab) 0
+               (orpheus-ui-tab-items tab) nil
+               (orpheus-ui-tab-loaded tab) nil
+               (orpheus-ui-tab-loading tab) t)
          (orpheus-ui-invalidate)
          (orpheus-ui--render)
          (orpheus-ui-refresh)))
@@ -1365,7 +1616,10 @@ moving between a large queue and a directory does not read either again."
                (setf (orpheus-ui-tab-stack tab) (cdr (orpheus-ui-tab-stack tab)))
                (setf (orpheus-ui-tab-view tab) (car parent)
                      (orpheus-ui-tab-arg tab) (car (cdr parent))
-                     (orpheus-ui-tab-index tab) 0)
+                     (orpheus-ui-tab-index tab) 0
+                     (orpheus-ui-tab-items tab) nil
+                     (orpheus-ui-tab-loaded tab) nil
+                     (orpheus-ui-tab-loading tab) t)
                (orpheus-ui-invalidate)
                (orpheus-ui--render)
                (orpheus-ui-refresh))
@@ -1621,10 +1875,16 @@ playlist opens in its editor."
     ("mouse-1 on the card" "press a transport button or seek on the bar")
     ("M-<up> / M-<down>, + / -" "volume up and down")
     ("z / x / c / v" "repeat, random, consume, single")
+    ("r" "cycle repeat: off, the queue, then this track")
+    ("i" "the track, its tags and the position in the echo area")
+    ("o" "open the current file in another program")
     ("M-u / M-U" "update the library, rescan it")
     ("C-x C-s" "save the queue as a portable M3U8 playlist")
     ("g" "refresh the status and this tab")
     ("V" "spectrum visualizer")
+    ("M-t" "next player colour preset")
+    ("M-l" "next layout preset")
+    ("M-c" "next visualizer colour ramp")
     ("mouse-3" "open the row, tab or playlist context menu")
     ("q" "bury the player"))
   "The keys `orpheus-ui-mode' binds, as rows of key and meaning.")
@@ -1675,9 +1935,16 @@ playlist opens in its editor."
         (insert (propertize "The transport\n" 'face 'orpheus-title-face))
         (insert
          "  SPC plays or pauses, s stops, > and < change track, f and b seek,\n"
-         "  and + and - change the volume.  z, x, c and v toggle repeat,\n"
-         "  random, consume and single.  The card's buttons do the same, and\n"
-         "  mouse-1 selects a row, mouse-2 plays it and mouse-3 opens its menu.\n\n")
+         "  and + and - change the volume.  r cycles repeat through off, the\n"
+         "  queue and this track; z, x, c and v toggle repeat, random, consume\n"
+         "  and single.  i prints the track in the echo area and o opens it in\n"
+         "  another program.  The card's media row does the same, and mouse-1\n"
+         "  selects a row, mouse-2 plays it and mouse-3 opens its menu.\n\n")
+        (insert (propertize "Themes and layout\n" 'face 'orpheus-title-face))
+        (insert
+         "  M-t cycles the colour presets, M-l the layouts and M-c the\n"
+         "  visualizer ramps.  A preset recolours the faces rather than\n"
+         "  replacing your Emacs theme, so the two combine.\n\n")
         (insert (propertize "The queue and playlists\n" 'face 'orpheus-title-face))
         (insert
          "  m and u mark and unmark rows, a queues the marks or the row, A\n"
@@ -1702,7 +1969,7 @@ playlist opens in its editor."
         (dolist (row orpheus-ui--help-lines)
           (insert "  "
                   (propertize (format "%-24s" (car row))
-                              'face 'orpheus-status-face)
+                              'face 'orpheus-help-key-face)
                   " "
                   (propertize (cadr row) 'face 'orpheus-title-face)
                   "\n"))
@@ -1848,11 +2115,17 @@ playlist opens in its editor."
     (define-key map (kbd "x") 'orpheus-toggle-random)
     (define-key map (kbd "c") 'orpheus-toggle-consume)
     (define-key map (kbd "v") 'orpheus-toggle-single)
+    (define-key map (kbd "r") 'orpheus-cycle-repeat)
+    (define-key map (kbd "i") 'orpheus-show-info)
+    (define-key map (kbd "o") 'orpheus-open-externally)
     (define-key map (kbd "M-u") 'orpheus-update-database)
     (define-key map (kbd "M-U") 'orpheus-rescan-database)
     (define-key map (kbd "g") 'orpheus-refresh)
     (define-key map (kbd "C-x C-s") 'orpheus-ui-save-playlist)
     (define-key map (kbd "V") 'orpheus-visualizer)
+    (define-key map (kbd "M-t") 'orpheus-cycle-theme)
+    (define-key map (kbd "M-l") 'orpheus-ui-cycle-layout)
+    (define-key map (kbd "M-c") 'orpheus-vis-cycle-theme)
     (define-key map (kbd "q") 'quit-window)
     map)
   "Keymap of `orpheus-ui-mode'.")

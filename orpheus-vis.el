@@ -59,8 +59,36 @@ The value is a cava input method: `pipewire', `pulse', `alsa',
 
 (defcustom orpheus-vis-colors
   '("#23395d" "#3f6f9e" "#7aa8c9" "#c3aede" "#e8cf9a")
-  "Colours of the SVG bars, from quiet to loud: deep Aegean to gold."
+  "Colours of the bars, from quiet to loud: deep Aegean to gold.
+Used when `orpheus-vis-theme' is nil; every player theme sets this to its
+own ramp when applied."
   :type '(repeat color) :group 'orpheus)
+
+(defcustom orpheus-vis-background nil
+  "Background of the graphical visualizer, or nil for the frame's."
+  :type '(choice (const :tag "The frame's background" nil) color)
+  :group 'orpheus)
+
+(defcustom orpheus-vis-theme nil
+  "Colour ramp from `orpheus-vis-theme-presets', or nil for your own colours.
+Your own colours are `orpheus-vis-colors' and `orpheus-vis-background'.
+`orpheus-vis-cycle-theme' walks the presets; applying a player theme sets this
+back to nil."
+  :type '(choice (const :tag "My own colours" nil) symbol)
+  :group 'orpheus)
+
+(defcustom orpheus-vis-theme-presets
+  '((aurora :colors ("#23395d" "#3f6f9e" "#7aa8c9" "#c3aede" "#e8cf9a"))
+    (ember :colors ("#3a1e17" "#7a2e2b" "#b54a3a" "#e07a4f" "#f0c987")
+     :background "#160d0a")
+    (ice :colors ("#1d2b3a" "#2f5d8a" "#5aa0c8" "#9ad4e0" "#e6f7fb")
+     :background "#0d1620")
+    (spectrum :colors ("#2b1b3d" "#5b2a86" "#a03fa8" "#e05a7e" "#f2a65a")
+     :background "#140d1d")
+    (mono :colors ("#2a2a2a" "#4d4d4d" "#737373" "#a6a6a6" "#d9d9d9")))
+  "Named visualizer ramps: quiet to loud colours and an optional background."
+  :type '(alist :key-type symbol :value-type plist)
+  :group 'orpheus)
 
 (defcustom orpheus-vis-graphical t
   "Whether to draw SVG bars in a graphical frame."
@@ -124,6 +152,11 @@ channels = mono
 
 ;;; Reading frames
 
+(defface orpheus-vis-status-face
+  '((t :inherit shadow))
+  "Face of the visualizer's footer line."
+  :group 'orpheus)
+
 (defun orpheus-vis--levels (accum chunk)
   "Return the levels in ACCUM followed by CHUNK, and the unfinished rest.
 The car is the list of bar heights, or nil while no frame is complete."
@@ -147,22 +180,53 @@ The car is the list of bar heights, or nil while no frame is complete."
             (make-string (- height filled) orpheus-vis-empty-char))))
 
 (defun orpheus-vis--text (levels width height)
-  "Return LEVELS as a block-character graph WIDTH by HEIGHT."
-  (let* ((levels (if (and levels (> (length levels) 0))
-                   levels (make-list (max 1 width) 0)))
+  "Return LEVELS as a block-character graph WIDTH by HEIGHT.
+Each bar takes its colour from the ramp, so a terminal gets the same spectrum
+as the SVG bars."
+  (let* ((levels (seq-take (if (and levels (> (length levels) 0))
+                             levels (make-list (max 1 width) 0))
+                           (max 1 width)))
          (bars (mapcar (lambda (level) (orpheus-vis--text-bar level height))
-                       (seq-take levels (max 1 width))))
+                       levels))
          (rows nil))
     (dotimes (row height)
-      (push (apply #'string (mapcar (lambda (bar) (aref bar row)) bars)) rows))
+      (push (cl-loop for bar in bars
+                     for level in levels
+                     concat (propertize (string (aref bar row))
+                                        'face (list :foreground
+                                                    (orpheus-vis--color level))))
+            rows))
     (string-join (nreverse rows) "\n")))
+
+(defun orpheus-vis--palette ()
+  "Return the ramp and background in use, as a plist.
+A named theme wins; otherwise the two user options are the palette."
+  (or (alist-get orpheus-vis-theme orpheus-vis-theme-presets)
+      (list :colors orpheus-vis-colors
+            :background orpheus-vis-background)))
 
 (defun orpheus-vis--color (level)
   "Return the colour for a bar at LEVEL."
-  (let* ((colors (or orpheus-vis-colors '("#3f6f9e")))
+  (let* ((colors (or (plist-get (orpheus-vis--palette) :colors)
+                     '("#3f6f9e")))
          (index (min (1- (length colors))
                      (/ (* (max 0 (min 100 level)) (length colors)) 100))))
     (nth index colors)))
+
+(defun orpheus-vis--background-color ()
+  "Return the background the bars are drawn on."
+  (or (plist-get (orpheus-vis--palette) :background)
+      (face-attribute 'default :background)))
+
+(defun orpheus-vis-cycle-theme ()
+  "Switch the visualizer to the next ramp in `orpheus-vis-theme-presets'.
+The first stop is nil, your own `orpheus-vis-colors'."
+  (interactive)
+  (let* ((names (cons nil (mapcar #'car orpheus-vis-theme-presets)))
+         (next (or (cadr (memq orpheus-vis-theme names)) (car names))))
+    (setq orpheus-vis-theme next)
+    (orpheus-vis--render t)
+    (message "orpheus: visualizer %s" (or next "colours"))))
 
 (defun orpheus-vis--svg (levels width height)
   "Return LEVELS as an SVG bar graph WIDTH by HEIGHT."
@@ -171,7 +235,7 @@ The car is the list of bar heights, or nil while no frame is complete."
          (count (max 1 (length levels)))
          (slot (/ width count))
          (bar-width (max 1 (1- slot))))
-    (svg-rectangle svg 0 0 width height :fill (face-attribute 'default :background))
+    (svg-rectangle svg 0 0 width height :fill (orpheus-vis--background-color))
     (dotimes (index count)
       (let* ((level (or (nth index levels) 0))
              (bar-height (max 1 (round (* height (/ level 100.0))))))
@@ -307,7 +371,7 @@ visualizer feel slow."
           (insert (propertize
                    (format " %s, %d bars  (q stops)" (orpheus-vis--input)
                            (length levels))
-                   'face 'orpheus-muted-face))
+                   'face 'orpheus-vis-status-face))
           (goto-char (point-min)))))))
 
 (defun orpheus-visualizer ()

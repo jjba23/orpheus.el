@@ -19,6 +19,9 @@
 
 (declare-function orpheus-equalizer-menu "orpheus-equalizer" ())
 (declare-function orpheus-tutorial "orpheus-ui" ())
+(declare-function orpheus-cycle-theme "orpheus-ui" ())
+(declare-function orpheus-ui-cycle-layout "orpheus-ui" ())
+(declare-function orpheus-vis-cycle-theme "orpheus-vis" ())
 
 ;;; ###autoload
 (transient-define-prefix orpheus-menu ()
@@ -31,8 +34,11 @@
     ("f" "Seek forward" orpheus-seek-forward)
     ("b" "Seek back" orpheus-seek-backward)
     ("+" "Volume up" orpheus-volume-up)
-    ("-" "Volume down" orpheus-volume-down)]
+    ("-" "Volume down" orpheus-volume-down)
+    ("i" "Track info in the echo area" orpheus-show-info)
+    ("o" "Open in another program" orpheus-open-externally)]
    ["Modes"
+    ("r" "Cycle repeat: off, queue, track" orpheus-cycle-repeat)
     ("z" "Repeat" orpheus-toggle-repeat)
     ("x" "Random" orpheus-toggle-random)
     ("c" "Consume" orpheus-toggle-consume)
@@ -55,6 +61,9 @@
     ("TAB" "Next tab" orpheus-ui-next-tab)
     ("g" "Refresh" orpheus-refresh)
     ("V" "Visualizer" orpheus-visualizer)
+    ("M-t" "Next player theme" orpheus-cycle-theme)
+    ("M-l" "Next layout" orpheus-ui-cycle-layout)
+    ("M-c" "Next visualizer theme" orpheus-vis-cycle-theme)
     ("E" "Equalizer presets" orpheus-equalizer-menu)
     ("H" "Help, tutorial and every key" orpheus-help)
     ("t" "Tutorial" orpheus-tutorial)

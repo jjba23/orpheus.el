@@ -88,14 +88,28 @@ keeps that queue, so it starts empty in every session.
   transfer time downloading; the Downloads tab shows the bytes and the ETA.
 - ~d~ cancels the selected transfer.  A failed transfer can be retried with
   ~RET~ after the cause is fixed.
+- A directory change, a search and a cover lookup share one multiplexed ssh
+  connection while downloads keep their own, so a slow answer is the link
+  rather than a lock held by a transfer.  ~orpheus-ssh-multiplex~ turns the
+  shared connection off on a host whose ssh does not support it.
+- The cache is under ~orpheus-cache-directory~ (=~/.cache/orpheus= by
+default).  If the disk is full, lower ~orpheus-cache-max-bytes~ and the
+least recently used tracks and covers are dropped after the next transfer.
+- A command that is owed a reply past its timeout is dropped and says so:
+  ~orpheus-mpd-timeout~ for MPD and ~orpheus-ssh-command-timeout~ for
+  listings, searches and covers.  Transfers are never timed out; cancel one
+  with ~d~ if it really is stuck.
 
 * There is no cover art
 
 - Cover art is drawn only in a graphical frame.  A terminal is text on purpose;
   the list, card and progress bar still work.
-- Local and SSH look for the usual names next to the track or in its album
-  folder: ~cover.jpg~, ~front.jpg~, ~folder.*~, ~album.*~ and variants,
-  regardless of case.  SSH copies a remote cover into its cache.
+- Local and SSH look for the usual names in the track's folder, its parent
+  and one level of child folders: ~cover.jpg~, ~front.jpg~, ~folder.*~,
+  ~album.*~ and variants, regardless of case.  A cover in the album root is
+  found from a disc subfolder, and one in ~Scans/~ is found from the album.
+  The search runs off the main thread; SSH copies a remote cover into its
+  cache.
 - MPD supplies embedded ~albumart~ or ~readpicture~.  A daemon or file without
   either has no cover to draw.
 - An image Emacs cannot decode is skipped.  If the file is unusual, convert it

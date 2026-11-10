@@ -50,8 +50,8 @@ these generics from =orpheus-backend.el=:
 | ~orpheus-backend-portable-uri~   | store a URI as a library-relative path          |
 | ~orpheus-backend-playlist-uri~   | resolve a playlist URI for the backend          |
 | ~orpheus-backend-command~        | play, pause, toggle, stop, next, previous, seek, volume, repeat, random, single, consume, update, rescan, clear, shuffle, delete, save, playpos, playid, load |
-| ~orpheus-backend-equalizer~      | set the mpv audio filter chain, or nil when the backend cannot |
-| ~orpheus-backend-album-art~      | a file path to the cover, or nil               |
+| ~orpheus-backend-equalizer~      | set the mpv audio filter chain, or nil when the backend cannot || ~orpheus-backend-album-art~      | a file path to the cover, or nil |
+| ~orpheus-backend-local-file~     | a local file the backend holds for a track, or nil |
 | ~orpheus-backend-downloads~      | active and recent transfers as rows, when it has a ~downloads~ capability |
 | ~orpheus-backend-cancel-download~ | cancel the transfer for a URI                 |
 | ~orpheus-backend-capabilities~   | which of the browse kinds it can do            |
@@ -66,20 +66,29 @@ Three backends are shipped and are the reference implementations:
 
 - =orpheus-mpd.el= — a complete MPD client on ~make-network-process~: TCP or a
   unix socket, password, serialized replies, ~ACK~ errors, and the ~albumart~
-  and ~readpicture~ binary payloads for cover art.
+  and ~readpicture~ binary payloads for cover art.  A daemon that owes a reply
+  for ~orpheus-mpd-timeout~ seconds is dropped, and every command still waiting
+  is answered with the reason instead of hanging the interface.
 - =orpheus-local.el= — mpv over its JSON IPC socket, with the queue kept in
   Emacs, tags read from mpv's ~metadata~ property, cover art found next to the
   file or in its album folder, or extracted with ffmpeg, and URLs delegated to
   mpv (and so to yt-dlp).
 - =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
-  files tab, ~find~ fills Search, and ~cat~ streams the chosen track into a
-  private cache file; a cover in the track's folder is copied to the same cache.
-  ~sftp~ takes over when the shell rejects ~cat~.  A one-time check reports the
-  remote commands and shell features.  Transfers run
-  in a queue of at most ~orpheus-ssh-concurrency~, a play request goes ahead of
-  the background prefetches, and the Downloads tab shows each one.  The local
-  backend plays a copy once it is complete.  There is no daemon on the far side,
-  and the cache goes away on disconnect and when Emacs exits.
+  files tab, ~find~ fills Search, and ~cat~ streams the chosen track into the
+  cache; a cover near the track's folder is copied to the same cache.  ~sftp~
+  takes over when the shell rejects ~cat~.  A one-time check reports the remote
+  commands and shell features.  Transfers run in a queue of at most
+  ~orpheus-ssh-concurrency~, a play request goes ahead of the background
+  prefetches, and the Downloads tab shows each one.  Listings, searches, size
+  probes and covers share one multiplexed connection
+  (~orpheus-ssh-multiplex~), while downloads keep connections of their own, so
+  a slow link still answers a directory change.  The local backend plays a copy
+  once it is complete.  There is no daemon on the far side, and the cache is
+  ordinary files under ~orpheus-cache-directory~: it survives a disconnect and
+  a reboot, and ~orpheus-cache-max-bytes~ keeps it bounded.  A listing, search
+  or cover command that stays silent for ~orpheus-ssh-command-timeout~ seconds
+  is killed and reported; a transfer, which may legitimately take minutes, is
+  never timed out.
 
 ** Adding one
 :PROPERTIES:
@@ -172,7 +181,10 @@ as anywhere else.
 
 The local backend asks mpv for ~--ao=wasapi~ on Windows and drives it over a
 named pipe; that path is written and compiled but untested, so treat it as
-unproven rather than supported.  MPD works wherever MPD does — that includes
+unproven rather than supported.  ssh multiplexing is left to OpenSSH, which
+probes it rather than failing the listing; with
+~(setq orpheus-ssh-multiplex nil)~ the backend opens one connection per
+command, as before.  MPD works wherever MPD does — that includes
 an MPD on another machine, which is the case that needs no platform support at
 all.  Nothing in the package reads or writes a path in a platform-specific way
 beyond ~temporary-file-directory~ and ~orpheus-cache-directory~.

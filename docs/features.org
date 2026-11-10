@@ -39,17 +39,41 @@ one; this page says what each part is for and how it behaves at the edges.
   ~d~ cancels one and ~RET~ plays a finished copy or retries a failure.  A
   progress update touches the header line, not the queue or another tab behind
   the Downloads tab.
+- *Browsing does not wait for a transfer.* :: Listings, searches and cover
+  lookups share one multiplexed ssh connection, so they never pay a fresh key
+  exchange while downloads saturate a slow link, and their bytes do not queue
+  behind a download.  Entering a folder drops the old rows at once and shows
+  ~loading…~, so a slow answer is visibly a slow answer rather than a key that
+  did nothing.  A listing, search or cover command that stays silent longer
+  than ~orpheus-ssh-command-timeout~ is killed and reported, and an MPD reply
+  that never comes drops the connection after ~orpheus-mpd-timeout~ and tells
+  every waiting caller, so neither backend can hang the interface.
 - *Search close to home.* :: MPD searches its library, the local backend runs
   ~find~ below ~orpheus-local-directory~, and SSH runs ~find~ below
   ~orpheus-ssh-directory~; when the host has no ~find~, SSH falls back to a
   recursive ~ls~.  All three answer asynchronously and put the results in the
   same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
-  artist and album, and a coloured progress bar.  Its controls carry the
-  familiar previous, play or pause, next and stop glyphs, separated from the
-  repeat, random, single and consume toggles, each with a tooltip and an ASCII
-  fallback.  ~orpheus-ui-show-now-playing~ turns the card off when the header
-  line is enough.
+  artist and album, and a coloured progress bar.  Its controls are
+  ready-player's: one row of plain glyphs — ~◁◁~, ~▶~ or ~⏸~, ~■~, ~▷▷~, ~➦~
+  — followed by the repeat, shuffle, single and consume toggles, search and
+  the menu, each with a tooltip and an ASCII fallback.  A mode that is on takes
+  the gold face instead of changing its glyph, so the row never shifts.
+  ~orpheus-ui-control-icons~ changes any of them.  ~orpheus-ui-show-now-playing~
+  turns the card off when the header line is enough.
+- *A look of your own.* :: ~orpheus-theme~ names a colour preset and ~M-t~
+  cycles the six shipped ones: Aegean, Nord, Gruvbox, Rosé Pine, Solarized
+  Light and Graphite.  A preset sets the colours of the status line, title,
+  artist, album, directory, download, time and help-key faces, and carries a
+  matching visualizer ramp and background.  It only sets colours, so weight and
+  the inheritance from built-in faces stay, and an Emacs theme still applies
+  underneath.  ~M-x orpheus-apply-theme~ picks one by name.
+- *A layout of your own.* :: ~orpheus-ui-layout~ is the list of sections the
+  player draws, in order: ~tabs~, ~path~, ~art~, ~now-playing~, ~separator~,
+  ~list~ and ~footer~.  ~orpheus-ui-layout-presets~ names four complete
+  arrangements — classic, cover, compact and minimal — and ~M-l~ walks them.
+  A section left out is not drawn, and ~orpheus-ui-show-art~ and
+  ~orpheus-ui-show-now-playing~ still hide theirs.
 - *A queue you can edit.* :: Play a row, queue a row or everything on the tab,
   mark rows the way Dired does, queue or delete just the marked ones, clear the
   queue, jump to what is playing, save the queue as a portable M3U8 playlist.
@@ -80,18 +104,25 @@ one; this page says what each part is for and how it behaves at the edges.
   — a folder, a track, an album, an artist, a playlist.
 - *The transport, all of it.* :: Play, pause, stop, next, previous, seek
   forward and back, volume up and down, and the four MPD flags — repeat,
-  random, single, consume.  The card groups the four transport buttons apart
-  from the modes and uses the usual media glyphs, with an ASCII fallback.
+  random, single, consume.  ~r~ cycles repeat through off, the queue and the
+  current track, as ready-player's does.  ~i~ prints the track, its tags and
+  the position in the echo area, ~o~ opens the current file in the system's
+  player, and the card's row of media glyphs presses the same commands with
+  the mouse.  Repeat and single work with mpv too, not only with MPD.
 - *A status line that does not steal the screen.* :: It lives in
   ~header-line-format~, so it redraws every second while the list, the point and
   the scroll position stay exactly where you left them.  It fits the window,
   eliding the track name before the time, volume or flags disappear.
 - *Cover art.* :: For the current track and for the album folder being browsed.
   Local and SSH look for ~cover.jpg~, ~Cover.PNG~, ~cover.webp~, ~folder.*~,
-  ~front.*~, ~album.*~ and ~artwork.*~ regardless of case; SSH copies a remote
-  cover into the cache.  MPD uses its embedded ~albumart~ or ~readpicture~.
-  Cached under ~orpheus-cache-directory~, drawn at ~orpheus-ui-art-size~ in a
-  graphical frame, and skipped without a fetch in a terminal.
+  ~front.*~, ~album.*~ and ~artwork.*~ regardless of case, in the track's own
+  folder, its parent (the album root above a disc folder) and one level of
+  child folders such as ~Scans/~.  The search runs in a separate process on
+  both backends, one remote command on SSH, so a big directory or a slow link
+  never holds up the interface; SSH copies a remote cover into the cache.
+  MPD uses its embedded ~albumart~ or ~readpicture~.  Cached under
+  ~orpheus-cache-directory~, drawn at ~orpheus-ui-art-size~ in a graphical
+  frame, and skipped without a fetch in a terminal.
 - *Song change notifications.* :: Through ~notifications-notify~, with the cover
   as the icon, on by default and one flag away.
 - *A Greek palette.* :: Gold, marble, Aegean blue, iris and olive, chosen for a

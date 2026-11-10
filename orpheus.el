@@ -347,6 +347,91 @@ until the editor felt them."
   (interactive)
   (orpheus--toggle 'consume))
 
+(defun orpheus-cycle-repeat ()
+  "Cycle repeating: off, then the queue, then the current track.
+Ready-player's ~r~: one key for the three states, with the mode flags in the
+status line saying which one is in effect."
+  (interactive)
+  (let* ((status orpheus-status-current)
+         (repeat (and status (orpheus-status-repeat status)))
+         (single (and status (orpheus-status-single status)))
+         (backend orpheus-backend-current))
+    (cond
+     ((null backend) (message "orpheus: no backend yet; run M-x orpheus"))
+     ((not (orpheus-backend-connected-p backend))
+      (message "orpheus: %s is not connected" orpheus-backend))
+     ((and repeat single)
+      (orpheus-backend-command backend 'single nil)
+      (orpheus-backend-command backend 'repeat nil)
+      (message "orpheus: repeat off"))
+     (repeat
+      (orpheus-backend-command backend 'single t)
+      (message "orpheus: repeat this track"))
+     (t
+      (orpheus-backend-command backend 'repeat t)
+      (orpheus-backend-command backend 'single nil)
+      (message "orpheus: repeat the queue")))
+    (orpheus-ui-invalidate)
+    (orpheus--tick)))
+
+(defun orpheus-show-info ()
+  "Show the current track, its tags and the position in the echo area."
+  (interactive)
+  (let* ((track orpheus-track-current)
+         (status orpheus-status-current)
+         (separator (if orpheus-ui-plain-ascii " - " " · ")))
+    (if (null track)
+        (message "orpheus: nothing is playing")
+      (message "%s%s%s%s%s%s"
+               (orpheus-track-label track)
+               (if (orpheus-track-album track)
+                   (concat separator (orpheus-track-album track))
+                 "")
+               (if (orpheus-track-year track)
+                   (format " (%s)" (orpheus-track-year track))
+                 "")
+               (format "%s%s / %s"
+                       separator
+                       (orpheus-format-time
+                        (and status (orpheus-status-elapsed status)))
+                       (orpheus-format-time
+                        (and status (orpheus-status-total status))))
+               (format "%svol %d" separator
+                       (if status (orpheus-status-volume status) 0))
+               (if (orpheus-track-uri track)
+                   (concat separator (orpheus-track-uri track))
+                 "")))))
+
+(defun orpheus--open-program ()
+  "Return the program that opens a file with its default application."
+  (pcase system-type
+         ('darwin "open")
+         ('windows-nt "explorer.exe")
+         (_ "xdg-open")))
+
+(defun orpheus-open-externally ()
+  "Open the current track in the system's default program.
+A backend that keeps its files elsewhere, such as MPD, has no local file to
+open, and says so rather than opening a copy that is not here."
+  (interactive)
+  (let* ((backend orpheus-backend-current)
+         (file (and backend
+                    (orpheus-backend-local-file backend
+                                                orpheus-track-current)))
+         (program (orpheus--open-program)))
+    (cond
+     ((null file)
+      (message "orpheus: the current track is not a file here"))
+     ((not (file-readable-p file))
+      (message "orpheus: %s is no longer here" file))
+     ((null (executable-find program))
+      (message "orpheus: %s is not installed" program))
+     (t
+      (make-process :name "orpheus-open"
+                    :command (list (executable-find program) file)
+                    :buffer nil :noquery t)
+      (message "orpheus: opened %s" (file-name-nondirectory file))))))
+
 (defun orpheus-update-database ()
   "Ask the backend to look for new music."
   (interactive)

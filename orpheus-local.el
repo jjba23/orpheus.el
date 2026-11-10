@@ -88,6 +88,7 @@ and SSH backends share this list."
   track
   (repeat nil)
   (random nil)
+  (single nil)
   (volume 100)
   equalizer
   (request-id 0)
@@ -130,11 +131,12 @@ what makes the same default work on a desktop, a laptop and a headless box."
 
 ;;; The queue
 
-(defun orpheus-local--advance (count index repeat random)
+(defun orpheus-local--advance (count index repeat random &optional single)
   "Return the queue index after INDEX of COUNT, or nil at the end.
-REPEAT wraps around; RANDOM picks another entry."
+SINGLE plays INDEX again; REPEAT wraps around; RANDOM picks another entry."
   (cond
     ((<= count 0) nil)
+    (single index)
     ((>= index (1- count)) (when repeat 0))
     (random (let ((candidate (random count)))
               (if (= candidate index) (mod (1+ index) count) candidate)))
@@ -246,7 +248,8 @@ CALLBACK is called with the error string, or nil, and the data."
                                (length (orpheus-local-instance-queue local))
                                (orpheus-local-instance-index local)
                                (orpheus-local-instance-repeat local)
-                               (orpheus-local-instance-random local))))
+                               (orpheus-local-instance-random local)
+                               (orpheus-local-instance-single local))))
                     (if next
                       (orpheus-local--play-index local next)
                       (setf (orpheus-status-state
@@ -498,17 +501,144 @@ CALLBACK is called with the error string, or nil, and the data."
                     files)
        when match return (expand-file-name match dir)))))
 
+(defun orpheus-local--cover-near (dir)
+  "Return a cover for DIR from itself, its parent or a child folder.
+This is the synchronous fallback for `orpheus-local--scan-art', used when
+find is not installed."
+  (let* ((dir (file-name-as-directory (expand-file-name (or dir "~"))))
+         (parent (file-name-directory (directory-file-name dir)))
+         (children (condition-case nil
+                       (directory-files dir t "\\`[^.]")
+                     (error nil))))
+    (or (orpheus-local--cover-file dir)
+        (unless (or (null parent) (equal parent dir))
+          (orpheus-local--cover-file parent))
+        (cl-loop for child in children
+                 when (file-directory-p child)
+                 thereis (orpheus-local--cover-file
+                          (file-name-as-directory child))))))
+
+(defun orpheus-local--art-rank (dir path)
+  "Return PATH's place in DIR's artwork search.
+0 is DIR itself, 1 its parent and 2 a child folder of DIR.  Nil means PATH is
+elsewhere, such as the cover of a sibling album, and must not be shown."
+  (let* ((dir (file-name-as-directory dir))
+         (parent (or (file-name-directory (directory-file-name dir)) dir))
+         (folder (file-name-directory path)))
+    (cond
+     ((equal folder dir) 0)
+     ((equal folder parent) 1)
+     ((and (not (equal parent dir)) (string-prefix-p dir path)) 2)
+     (t nil))))
+
+(defun orpheus-local--art-name-index (path)
+  "Return PATH's place in `orpheus-local-cover-names', or a large number."
+  (let ((name (downcase (file-name-nondirectory path)))
+        (index 0)
+        (found nil))
+    (dolist (candidate orpheus-local-cover-names)
+      (when (and (not found)
+                 (equal name (downcase (file-name-nondirectory candidate))))
+        (setq found index))
+      (setq index (1+ index)))
+    (or found 999)))
+
+(defun orpheus-local--art-best (dir paths)
+  "Return the best cover for DIR among PATHS, or nil.
+DIR itself wins over its parent, which wins over a child folder, and a name
+early in `orpheus-local-cover-names' wins within a folder."
+  (let ((candidates
+         (delq nil
+               (mapcar
+                (lambda (path)
+                  ;; A find expression should only answer cover names, and a
+                  ;; name outside the list is not a cover even when it is here.
+                  (let ((index (orpheus-local--art-name-index path)))
+                    (when-let* ((rank (and (< index 999)
+                                           (orpheus-local--art-rank dir path))))
+                      (list rank index path))))
+                paths))))
+    (nth 2 (car (sort candidates
+                      (lambda (a b)
+                        (cond ((/= (nth 0 a) (nth 0 b))
+                               (< (nth 0 a) (nth 0 b)))
+                              ((/= (nth 1 a) (nth 1 b))
+                               (< (nth 1 a) (nth 1 b)))
+                              (t (string< (nth 2 a) (nth 2 b))))))))))
+
+(defun orpheus-local--art-roots (dir)
+  "Return the folders scanned for art around DIR."
+  (let* ((dir (file-name-as-directory (expand-file-name dir)))
+         (parent (file-name-directory (directory-file-name dir))))
+    (if (or (null parent) (equal parent dir))
+        (list dir)
+      (list dir parent))))
+
+(defun orpheus-local--art-name-args ()
+  "Return the find predicates that match a cover file name."
+  (let ((names (delete-dups
+                (mapcar #'file-name-nondirectory orpheus-local-cover-names))))
+    (append
+     '("(")
+     (cl-loop for name in names
+              for first = t then nil
+              append (if first
+                         (list "-iname" name)
+                       (list "-o" "-iname" name)))
+     '(")"))))
+
+(defun orpheus-local--scan-art (dir callback)
+  "Find cover art for DIR without blocking, then call CALLBACK with a path.
+DIR, its parent and one level of its child folders are searched by find, so an
+album root or a Scans folder is found from a disc folder.  Nothing is read on
+the main thread; when find is missing the fallback reads the same folders."
+  (let ((program (executable-find "find"))
+        (buffer (generate-new-buffer " *orpheus-art*")))
+    (if (null program)
+        (progn
+          (kill-buffer buffer)
+          (funcall callback (orpheus-local--cover-near dir)))
+      (condition-case nil
+          (make-process
+           :name "orpheus-art"
+           :command (append (list program)
+                            (orpheus-local--art-roots dir)
+                            (list "-maxdepth" "2" "-type" "f")
+                            (orpheus-local--art-name-args)
+                            (list "-print"))
+           :buffer buffer
+           :stderr (get-buffer-create "*orpheus find*")
+           :noquery t
+           :sentinel
+           (lambda (process _event)
+             (unless (process-live-p process)
+               (let ((output
+                      (and (eq (process-status process) 'exit)
+                           (zerop (process-exit-status process))
+                           (with-current-buffer buffer (buffer-string)))))
+                 (when (buffer-live-p buffer) (kill-buffer buffer))
+                 (funcall callback
+                          (or (orpheus-local--art-best
+                               dir (split-string (or output "") "\n" t))
+                              (orpheus-local--cover-near dir)))))))
+        (error
+         (when (buffer-live-p buffer) (kill-buffer buffer))
+         (funcall callback (orpheus-local--cover-near dir)))))))
+
 (defun orpheus-local--album-art-file (file callback)
-  "Find cover art for FILE next to it or inside it, then call CALLBACK."
+  "Find cover art near FILE, then call CALLBACK with a path or nil.
+Embedded art is extracted when no cover file is found anywhere near it."
   (let* ((dir (cond ((and file (file-directory-p file)) file)
                     ((and file (file-regular-p file))
-                     (file-name-directory file))))
-         (found (orpheus-local--cover-file dir)))
-    (cond
-      (found (funcall callback found))
-      ((and file (file-regular-p file))
-       (orpheus-local--extract-art file callback))
-      (t (funcall callback nil)))))
+                     (file-name-directory file)))))
+    (if dir
+        (orpheus-local--scan-art
+         dir
+         (lambda (found)
+           (if (or found (null file) (not (file-regular-p file)))
+               (funcall callback found)
+             (orpheus-local--extract-art file callback))))
+      (funcall callback nil))))
 
 (cl-defmethod orpheus-backend-album-art ((_local orpheus-local) track callback)
   "Find cover art for TRACK next to the file or inside it, then call CALLBACK."
@@ -516,7 +646,14 @@ CALLBACK is called with the error string, or nil, and the data."
 
 (cl-defmethod orpheus-backend-folder-art ((_local orpheus-local) folder callback)
   "Find cover art for FOLDER, then call CALLBACK with a path or nil."
-  (funcall callback (orpheus-local--cover-file folder)))
+  (if (and folder (file-directory-p folder))
+      (orpheus-local--scan-art folder callback)
+    (funcall callback nil)))
+
+(cl-defmethod orpheus-backend-local-file ((_local orpheus-local) track)
+  "Return TRACK's own file, which mpv can play as it is."
+  (let ((uri (orpheus-track-uri track)))
+    (and uri (file-regular-p uri) uri)))
 
 ;;; Browsing files
 
@@ -702,6 +839,11 @@ backend, so a parent row here would show the way up twice."
                      (list "volume" (orpheus-local-instance-volume local))))
            ('repeat (setf (orpheus-local-instance-repeat local) (and value t)))
            ('random (setf (orpheus-local-instance-random local) (and value t)))
+           ('single
+            (setf (orpheus-local-instance-single local) (and value t)
+                  (orpheus-status-single
+                   (orpheus-local-instance-status local))
+                  (and value t)))
            ('delete
             (let* ((queue (orpheus-local-instance-queue local))
                    (pos (or value 0))

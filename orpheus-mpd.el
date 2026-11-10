@@ -60,6 +60,14 @@ what the connection uses, and whatever is found is sent."
   "Tag MPD searches in; `any' looks at every tag."
   :type 'string :group 'orpheus)
 
+(defcustom orpheus-mpd-timeout 15
+  "Seconds MPD may stay silent while a reply is owed before it is dropped.
+A slow link is one thing; a daemon or a route that never answers is another,
+and without this the interface waits for it forever.  Nil or zero disables the
+watchdog."
+  :type '(choice (const :tag "Wait forever" nil) number)
+  :group 'orpheus)
+
 ;;; The connection
 
 (cl-defstruct (orpheus-mpd-connection (:constructor orpheus-mpd-connection-create))
@@ -75,7 +83,8 @@ what the connection uses, and whatever is found is sent."
   (binary-left 0)
   (on-ready nil)
   (password nil)
-  (version nil))
+  (version nil)
+  (watchdog nil))
 
 (cl-defstruct (orpheus-mpd (:include orpheus-backend)
                            (:constructor make-orpheus-mpd)
@@ -136,6 +145,33 @@ key, which is how MPD reports a few bare messages."
                                     (concat line "\n") 'binary))
       (orpheus-mpd--lost conn "the connection is closed"))))
 
+(defun orpheus-mpd--unwatch (conn)
+  "Cancel CONN's watchdog, if it has one."
+  (when (timerp (orpheus-mpd-connection-watchdog conn))
+    (cancel-timer (orpheus-mpd-connection-watchdog conn)))
+  (setf (orpheus-mpd-connection-watchdog conn) nil))
+
+(defun orpheus-mpd--watch (conn)
+  "Watch CONN for silence while MPD still owes it a reply.
+One timer per connection, restarted after each reply, so a long but healthy
+queue is fine while a daemon that stops talking is dropped."
+  (unless (timerp (orpheus-mpd-connection-watchdog conn))
+    (when (and (numberp orpheus-mpd-timeout) (> orpheus-mpd-timeout 0))
+      (let (timer)
+        (setq timer
+              (run-at-time
+               orpheus-mpd-timeout nil
+               (lambda ()
+                 (when (and (eq timer
+                                (orpheus-mpd-connection-watchdog conn))
+                            (not (eq (orpheus-mpd-connection-state conn)
+                                     'closed)))
+                   (setf (orpheus-mpd-connection-watchdog conn) nil)
+                   (orpheus-mpd--fail
+                    conn (format "MPD went silent for %ss"
+                                 orpheus-mpd-timeout))))))
+        (setf (orpheus-mpd-connection-watchdog conn) timer)))))
+
 (defun orpheus-mpd--request (conn line callback)
   "Send LINE on CONN and call CALLBACK with the reply when it arrives."
   (setf (orpheus-mpd-connection-queue conn)
@@ -143,10 +179,12 @@ key, which is how MPD reports a few bare messages."
   (if (eq (orpheus-mpd-connection-state conn) 'ready)
     (orpheus-mpd--write conn line)
     (setf (orpheus-mpd-connection-pending conn)
-          (append (orpheus-mpd-connection-pending conn) (list line)))))
+          (append (orpheus-mpd-connection-pending conn) (list line))))
+  (orpheus-mpd--watch conn))
 
 (defun orpheus-mpd--finish (conn error)
   "Close the reply in flight on CONN, with ERROR when MPD refused it."
+  (orpheus-mpd--unwatch conn)
   (let ((callback (car (orpheus-mpd-connection-queue conn)))
         (lines (nreverse (orpheus-mpd-connection-lines conn)))
         (binary (orpheus-mpd-connection-binary conn)))
@@ -155,6 +193,9 @@ key, which is how MPD reports a few bare messages."
           (orpheus-mpd-connection-lines conn) nil
           (orpheus-mpd-connection-binary conn) nil
           (orpheus-mpd-connection-binary-left conn) 0)
+    ;; A pipeline still owes replies; the next one restarts the clock.
+    (when (orpheus-mpd-connection-queue conn)
+      (orpheus-mpd--watch conn))
     (when callback
       (condition-case err
         (funcall callback (list :ok (null error) :error error
@@ -237,7 +278,9 @@ key, which is how MPD reports a few bare messages."
                                  conn (plist-get reply :error)))))))
         (orpheus-mpd--write conn
                             (format "password %s"
-                                    (orpheus-mpd--quote password))))
+                                    (orpheus-mpd--quote password)))
+        ;; A wrong or unanswerable login would otherwise sit in `auth'.
+        (orpheus-mpd--watch conn))
       (orpheus-mpd--ready conn))))
 
 (defun orpheus-mpd--ready (conn)
@@ -248,6 +291,8 @@ key, which is how MPD reports a few bare messages."
     (setf (orpheus-mpd-connection-pending conn) nil
           (orpheus-mpd-connection-on-ready conn) nil)
     (dolist (line pending) (orpheus-mpd--write conn line))
+    (when (or pending (orpheus-mpd-connection-queue conn))
+      (orpheus-mpd--watch conn))
     (dolist (callback callbacks)
       (condition-case err
         (funcall callback conn)
@@ -293,24 +338,41 @@ words before them are a reason, so the rest is dropped."
           (orpheus-mpd--reason err)))
 
 (defun orpheus-mpd--lost (conn event)
-  "Forget CONN's process after EVENT and tell the session."
+  "Forget CONN's process after EVENT and tell the session.
+Every command still waiting for a reply is answered with the reason, so a
+caller never waits for a reply that cannot come."
   (unless (eq (orpheus-mpd-connection-state conn) 'closed)
     (setf (orpheus-mpd-connection-state conn) 'closed)
+    (orpheus-mpd--unwatch conn)
     (let ((backend (orpheus-mpd-connection-backend conn)))
       (when (eq (orpheus-mpd-instance-connection backend) conn)
         (setf (orpheus-mpd-instance-connection backend) nil)))
-    (let ((callbacks (orpheus-mpd-connection-on-ready conn)))
-      (setf (orpheus-mpd-connection-on-ready conn) nil)
+    (let ((callbacks (orpheus-mpd-connection-on-ready conn))
+          (queued (orpheus-mpd-connection-queue conn))
+          (error (format "MPD connection lost: %s" event)))
+      (setf (orpheus-mpd-connection-on-ready conn) nil
+            (orpheus-mpd-connection-queue conn) nil
+            (orpheus-mpd-connection-pending conn) nil
+            (orpheus-mpd-connection-lines conn) nil
+            (orpheus-mpd-connection-binary conn) nil
+            (orpheus-mpd-connection-binary-left conn) 0)
       (dolist (callback callbacks)
-        (condition-case nil (funcall callback nil) (error nil))))
+        (condition-case nil (funcall callback nil) (error nil)))
+      (dolist (callback queued)
+        (condition-case nil
+            (funcall callback (list :ok nil :error error
+                                    :lines nil :binary nil))
+          (error nil))))
     (run-hook-with-args 'orpheus-backend-disconnected-hook
                         (orpheus-mpd-connection-backend conn) event)))
 
 (defun orpheus-mpd--fail (conn message)
-  "Give up on CONN because of MESSAGE."
+  "Give up on CONN because of MESSAGE.
+The reason is delivered before the process goes, so the sentinel's own
+\"deleted\" event cannot replace it in the callers' replies."
+  (orpheus-mpd--lost conn message)
   (let ((process (orpheus-mpd-connection-process conn)))
-    (when (process-live-p process) (delete-process process)))
-  (orpheus-mpd--lost conn message))
+    (when (process-live-p process) (delete-process process))))
 
 (defun orpheus-mpd--sentinel (conn event)
   "Notice CONN dying, as described by EVENT."
@@ -352,6 +414,8 @@ words before them are a reason, so the rest is dropped."
       (progn
         (setf (orpheus-mpd-connection-process conn) process)
         (setf (orpheus-mpd-instance-connection mpd) conn)
+        ;; The greeting is the first thing that could never arrive.
+        (orpheus-mpd--watch conn)
         conn)
       (dolist (cb (orpheus-mpd-connection-on-ready conn))
         (ignore-errors (funcall cb nil)))
@@ -610,6 +674,7 @@ A directory is refused: MPD would expand it to every file below it."
     (when conn
       (setf (orpheus-mpd-instance-connection mpd) nil)
       (setf (orpheus-mpd-connection-state conn) 'closed)
+      (orpheus-mpd--unwatch conn)
       (let ((process (orpheus-mpd-connection-process conn)))
         (when (process-live-p process)
           (ignore-errors (delete-process process)))))))

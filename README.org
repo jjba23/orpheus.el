@@ -32,7 +32,9 @@ cached, so a slow link does not stop the interface.  The list is read when
 something changed, not on every tick, so a queue of thousands costs nothing
 while it plays.  The interface is text, so it is the same in a terminal, in a
 graphical frame and over SSH; in a frame that can draw, it adds cover art, an
-SVG visualizer and a small logo, and in one that cannot, nothing breaks.
+SVG visualizer and a small logo, and in one that cannot, nothing breaks.  Six
+player themes, five visualizer ramps and four layouts are one key away, and
+the layout is a plain list when you want your own.
 
 * Documentation
 

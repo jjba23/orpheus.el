@@ -139,11 +139,16 @@ one-time check when the backend connects reports which remote commands and
 shell features work, and ~M-x orpheus-ssh-diagnose~ shows the same table on
 demand.  Playback begins once the copy is complete, so a large track spends its
 transfer time downloading rather than playing.  While the current track plays, the next
-~orpheus-ssh-prefetch~ queue entries are fetched in the background, and the last
-~orpheus-ssh-cache-count~ completed tracks stay on disk, so replaying one or
-moving to the next needs no second transfer.  A play request always goes ahead
-of a prefetch.  The cache lives in a private temporary directory, which is
-deleted when the backend disconnects and when Emacs exits.  Your key
+~orpheus-ssh-prefetch~ queue entries are fetched in the background, and completed
+tracks stay on disk, so replaying one or moving to the next needs no second
+transfer.  A play request always goes ahead of a prefetch.  The cache lives in
+~orpheus-ssh-cache-directory~, by default ~orpheus-cache-directory~/ssh, which
+is =~/.cache/orpheus/ssh=.  It survives a disconnect and a reboot, and
+~orpheus-cache-max-bytes~ deletes the least recently used files once it passes
+the limit; ~orpheus-ssh-cache-count~ is an optional stricter limit on the
+number of tracks.  Listings, searches and cover lookups share one multiplexed
+ssh connection, so a download does not make a directory change wait, and
+entering a folder shows ~loading…~ at once rather than the old rows.  Your key
 must already let you in, because ssh has no terminal in which to ask for a
 passphrase.  A host whose key is not in =~/.ssh/known_hosts= needs one
 ~ssh music.example.org~ from a terminal first, or
@@ -213,6 +218,9 @@ track.
 | ~C-x C-s~              | save the queue as a portable M3U8 playlist; a new name asks where |
 | ~g~                    | refresh the status and the current tab                   |
 | ~V~                    | the spectrum visualizer                                  |
+| ~M-t~                  | next player colour preset                                |
+| ~M-l~                  | next layout preset                                       |
+| ~M-c~                  | next visualizer colour ramp                              |
 | ~?~                    | the menu: transport, modes, queue, playlists, views      |
 | ~H~                    | help: concepts, keys and troubleshooting                 |
 | ~E~                    | the equalizer: presets, save, delete, set the gains      |
@@ -266,7 +274,10 @@ them can be bound in ~global-map~ or in a repeat map.
   left with too few rows under the cover grows to fit them; an image Emacs
   cannot decode is skipped.  The visualizer is an SVG bar graph with rounded
   bars and a colour ramp, or the block-character graph when Emacs was built
-  without SVG.
+  without SVG.  The ramp comes from the player theme, and ~M-c~ switches to a
+  named visualizer ramp (Aurora, Ember, Ice, Spectrum, Mono) and back to your
+  own colours; ~orpheus-vis-theme-presets~ adds more, and
+  ~orpheus-vis-background~ sets the background behind the SVG bars.
 - *In a terminal* no cover is fetched or drawn, and the list, the status line,
   the progress bar and the faces are unchanged.  The visualizer falls back to
   block characters, which is a real rendering, not a placeholder.

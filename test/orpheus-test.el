@@ -132,8 +132,37 @@ Return PREDICATE's last value, so a test can assert on it."
   (dolist (face '(orpheus-status-face orpheus-title-face orpheus-artist-face
                   orpheus-album-face orpheus-current-face orpheus-tab-face
                   orpheus-tab-active-face orpheus-muted-face
-                  orpheus-directory-face orpheus-error-face))
-    (should (facep face))))
+                  orpheus-directory-face orpheus-error-face
+                  orpheus-time-face orpheus-help-key-face
+                  orpheus-vis-status-face))
+    (should (facep face)))
+  (should (custom-variable-p 'orpheus-theme))
+  (should (custom-variable-p 'orpheus-ui-layout))
+  (should (custom-variable-p 'orpheus-vis-theme)))
+
+(ert-deftest orpheus-test/theme-presets-recolour-faces-and-the-spectrum ()
+  "A preset sets the faces, the visualizer ramp and its background."
+  (unwind-protect
+      (progn
+        (orpheus-apply-theme 'nord)
+        (should (eq orpheus-theme 'nord))
+        (should (equal (face-attribute 'orpheus-status-face :foreground)
+                       "#88c0d0"))
+        (should (equal orpheus-vis-colors
+                       '("#2e3440" "#4c566a" "#5e81ac" "#88c0d0" "#a3be8c")))
+        (should (equal orpheus-vis-background "#2e3440"))
+        (orpheus-cycle-theme)
+        (should (eq orpheus-theme 'gruvbox)))
+    (orpheus-apply-theme 'aegean)))
+
+(ert-deftest orpheus-test/theme-cycle-wraps-around ()
+  "The last preset cycles back to the first."
+  (unwind-protect
+      (progn
+        (setq orpheus-theme (caar (last orpheus-theme-presets)))
+        (orpheus-cycle-theme)
+        (should (eq orpheus-theme (caar orpheus-theme-presets))))
+    (orpheus-apply-theme 'aegean)))
 
 (ert-deftest orpheus-test/headers-are-consistent ()
   "The file header carries the version the README and NEWS document."
@@ -370,6 +399,46 @@ Return PREDICATE's last value, so a test can assert on it."
             (should-not (plist-get reply :ok))
             (should (string-match-p "No such song"
                                     (plist-get reply :error))))
+        (orpheus-backend-disconnect mpd)))))
+
+(ert-deftest orpheus-test/mpd-silent-server-is-dropped ()
+  "A daemon that never answers is dropped, and every waiting caller is told."
+  (orpheus-test--with-fake-mpd
+      (lambda (_line) nil)
+    (let* ((orpheus-mpd-timeout 0.3)
+           (mpd (orpheus-test--mpd-client))
+           (replies nil))
+      (unwind-protect
+          (progn
+            (orpheus-mpd--send-command mpd "status" nil
+                                       (lambda (r) (push r replies)))
+            (orpheus-mpd--send-command mpd "currentsong" nil
+                                       (lambda (r) (push r replies)))
+            (should (orpheus-test--wait
+                     (lambda () (= 2 (length replies))) 5))
+            (should (cl-every (lambda (reply) (not (plist-get reply :ok)))
+                              replies))
+            (should (string-match-p "silent"
+                                    (plist-get (car replies) :error)))
+            (should-not (orpheus-backend-connected-p mpd)))
+        (orpheus-backend-disconnect mpd)))))
+
+(ert-deftest orpheus-test/mpd-watchdog-stops-when-the-reply-arrives ()
+  "A reply cancels the watchdog, which must not fire later."
+  (orpheus-test--with-fake-mpd
+      (lambda (line)
+        (if (string-prefix-p "status" line) "state: play\nOK\n" "OK\n"))
+    (let ((orpheus-mpd-timeout 0.2)
+          (mpd (orpheus-test--mpd-client))
+          (replies nil))
+      (unwind-protect
+          (progn
+            (orpheus-mpd--send-command mpd "status" nil
+                                       (lambda (r) (push r replies)))
+            (should (orpheus-test--wait (lambda () replies) 2))
+            (accept-process-output nil 0.4)
+            (should (= 1 (length replies)))
+            (should (orpheus-backend-connected-p mpd)))
         (orpheus-backend-disconnect mpd)))))
 
 (ert-deftest orpheus-test/mpd-commands-sent-while-connecting-are-kept ()
@@ -948,6 +1017,18 @@ and the password with it."
   ;; An Emacs built without SVG must not signal once per frame.
   (cl-letf (((symbol-function 'image-type-available-p) #'ignore))
     (should-not (orpheus-vis--svg-image '(10 50 100) 120 40))))
+
+(ert-deftest orpheus-test/vis-theme-picks-the-ramp-and-background ()
+  "A named visualizer theme overrides the custom colours."
+  (unwind-protect
+      (progn
+        (setq orpheus-vis-theme 'ember)
+        (should (equal (orpheus-vis--color 100)
+                       (car (last (plist-get
+                                   (alist-get 'ember orpheus-vis-theme-presets)
+                                   :colors)))))
+        (should (equal (orpheus-vis--background-color) "#160d0a")))
+    (setq orpheus-vis-theme nil)))
 
 (ert-deftest orpheus-test/vis-render-falls-back-to-text ()
   "A graphical frame that cannot draw SVG gets the block-character graph."
@@ -1986,6 +2067,67 @@ showing almost none of the list."
       (funcall (lookup-key (get-text-property 0 'keymap button) [mouse-1]) nil)
       (should (= 1 pressed)))))
 
+(ert-deftest orpheus-test/ui-drops-a-listing-that-arrived-late ()
+  "A slow reply from an older request cannot replace a newer list."
+  (let ((orpheus-ui-buffer-name "*orpheus-test-stale*")
+        (orpheus-backend-current 'fake)
+        (callbacks nil))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+          (orpheus-ui-mode)
+          (setq orpheus-ui--tabs
+                (vector (orpheus-ui-tab-create
+                         :kind 'albums :title "Albums" :view 'albums)))
+          (setq orpheus-ui--tab 0)
+          (cl-letf (((symbol-function 'orpheus-backend-connected-p)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'orpheus-backend-browse)
+                     (lambda (_backend _view _arg callback)
+                       (push callback callbacks))))
+            (orpheus-ui--load-tab (aref orpheus-ui--tabs 0) #'ignore)
+            (orpheus-ui--load-tab (aref orpheus-ui--tabs 0) #'ignore)
+            (let ((newest (nth 0 callbacks))
+                  (oldest (nth 1 callbacks)))
+              (funcall newest (list (orpheus-item-create
+                                     :kind 'track :label "new")))
+              (funcall oldest (list (orpheus-item-create
+                                     :kind 'track :label "old")))
+              (should (equal (mapcar #'orpheus-item-label
+                                     (orpheus-ui-tab-items
+                                      (aref orpheus-ui--tabs 0)))
+                             '("new"))))))
+      (kill-buffer orpheus-ui-buffer-name))))
+
+(ert-deftest orpheus-test/ui-layout-presets-arrange-the-sections ()
+  "The layout list decides which sections are drawn and in what order."
+  (let ((orpheus-ui-buffer-name "*orpheus-test-layout*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+          (orpheus-ui-mode)
+          (setq orpheus-ui--tabs
+                (vector (orpheus-ui-tab-create
+                         :kind 'queue :title "Queue" :view 'queue
+                         :items (list (orpheus-item-create
+                                       :kind 'track :label "Row")))))
+          (setq orpheus-ui--tab 0)
+          (let ((orpheus-ui-layout '(list footer)))
+            (orpheus-ui--render)
+            (should (< (string-match-p "Row" (buffer-string))
+                       (string-match-p "RET play" (buffer-string)))))
+          (let ((orpheus-ui-layout '(footer list)))
+            (orpheus-ui--render)
+            (should (< (string-match-p "RET play" (buffer-string))
+                       (string-match-p "Row" (buffer-string))))
+            (should-not (string-match-p "Queue" (buffer-string)))))
+      (kill-buffer orpheus-ui-buffer-name))))
+
+(ert-deftest orpheus-test/ui-layout-cycle-walks-the-presets ()
+  "Cycling the layout applies the next named arrangement."
+  (let ((orpheus-ui-layout (alist-get 'classic orpheus-ui-layout-presets)))
+    (orpheus-ui-cycle-layout)
+    (should (equal orpheus-ui-layout
+                   (alist-get 'cover orpheus-ui-layout-presets)))))
+
 (ert-deftest orpheus-test/ui-transport-is-a-row-of-buttons ()
   "The transport row is previous, play, next, the toggles and stop."
   (with-temp-buffer
@@ -1993,12 +2135,16 @@ showing almost none of the list."
     ;; first character is not stored.
     (insert "\n" (orpheus-ui--transport nil))
     (goto-char (point-min))
-    (dolist (help '("Previous track" "Play" "Next track" "Repeat"
-                    "Shuffle" "Single track" "Consume" "Stop"))
+    ;; In the order of the row, since the search only moves forward.
+    (dolist (help '("Previous track" "Play" "Stop" "Next track"
+                    "Open in another program"
+                    "Repeat: off, the queue, or this track"
+                    "Shuffle" "Single track" "Consume"
+                    "Search the library" "The orpheus menu"))
       (should (text-property-search-forward 'help-echo help)))))
 
 (ert-deftest orpheus-test/ui-transport-is-spaced-and-traditional ()
-  "The transport is a spaced row with stop beside the other transport keys."
+  "The transport is ready-player's spaced row, stop before the modes."
   (let ((orpheus-ui-plain-ascii nil))
     (let* ((status (orpheus-status-create :state 'play :repeat t))
            (row (orpheus-ui--transport status))
@@ -2009,17 +2155,18 @@ showing almost none of the list."
         (text-property-search-forward 'help-echo "Stop")
         (setq stop (point))
         (goto-char (point-min))
-        (text-property-search-forward 'help-echo "Repeat")
+        (text-property-search-forward 'help-echo "Repeat: off, the queue, or this track")
         (setq repeat (point)))
-      (should (string-match-p "  ⏮  " row))
-      (should (string-match-p "  ⏸  " row))
-      (should (string-match-p "  ⏭  " row))
-      (should (string-match-p "  ⏹  " row))
+      (should (string-match-p " ◁◁ " row))
+      (should (string-match-p " ⏸ " row))
+      (should (string-match-p " ▷▷ " row))
+      (should (string-match-p " ■ " row))
+      (should (string-match-p " ➦ " row))
       (should (and stop repeat (< stop repeat)))))
   (let ((orpheus-ui-plain-ascii t))
     (let ((row (orpheus-ui--transport nil)))
-      (should (string-match-p "  <<  " row))
-      (should (string-match-p "  X  " row))
+      (should (string-match-p " << " row))
+      (should (string-match-p " X " row))
       (should-not (string-match-p "\\[\\]" row)))))
 
 (ert-deftest orpheus-test/download-progress-does-not-redraw-another-tab ()
@@ -2167,6 +2314,8 @@ Otherwise the list below it moves up and down every time a cover arrives."
             (orpheus-backend-folder-art
              (orpheus-make-backend 'local) dir
              (lambda (file) (setq found file)))
+            (should (orpheus-test--wait
+                     (lambda () (not (eq found 'waiting))) 20))
             (should (equal found cover))))
       (delete-directory dir t))))
 
@@ -2385,7 +2534,8 @@ Otherwise the list below it moves up and down every time a cover arrives."
 (defun orpheus-test--with-fake-ssh (function &optional mode)
   "Call FUNCTION with ssh and sftp replaced by the suite's fake programs.
 MODE selects a failure the fake ssh should simulate: `empty', `missing',
-`broken', `nosize', `nocat' or `minimal'."
+`broken', `nosize', `nocat' or `minimal'.  The cache is a fresh temporary
+directory, so a test never writes to the user's own cache."
   (let ((orpheus-ssh-program
          (expand-file-name invocation-name invocation-directory))
         (orpheus-ssh-extra-args
@@ -2403,12 +2553,15 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
                 (file-name-directory orpheus-test--source))
                "--"))
         (orpheus-ssh-host "fake.invalid")
+        (orpheus-cache-directory (make-temp-file "orpheus-test-cache" t))
         (process-environment
          (if mode
              (cons (concat "ORPHEUS_TEST_FAKE_SSH=" mode)
                    process-environment)
            process-environment)))
-    (funcall function)))
+    (unwind-protect
+        (funcall function)
+      (delete-directory orpheus-cache-directory t))))
 
 (ert-deftest orpheus-test/ssh-backend-is-local ()
   "The SSH backend plays remote files with mpv, not with MPD."
@@ -2458,6 +2611,19 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
                                        (orpheus-item-data (cadr items)))
                             "Music/Song.mp3")))
          (orpheus-backend-disconnect ssh))))))
+
+(ert-deftest orpheus-test/ssh-command-that-hangs-is-dropped ()
+  "A silent remote command times out instead of loading forever."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((orpheus-ssh-command-timeout 0.2)
+           (result 'waiting)
+           (start (float-time)))
+       (orpheus-ssh--run (orpheus-make-backend 'ssh) "sleep 5"
+                         (lambda (output) (setq result output)))
+       (should (orpheus-test--wait (lambda () (not (eq result 'waiting))) 5))
+       (should (null result))
+       (should (< (- (float-time) start) 3))))))
 
 (ert-deftest orpheus-test/ssh-fetches-folder-cover ()
   "Browsing an album fetches its cover file over ssh."
@@ -2685,10 +2851,12 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
           (orpheus-ssh--transfer-filter ssh transfer "abc")
           (should (= (cdr (car (orpheus-ssh-transfer-samples transfer))) 3))
           (should (equal (with-temp-buffer
-                           (insert-file-contents path)
+                           (insert-file-contents
+                            (orpheus-ssh--part-file path))
                            (buffer-string))
                          "abc")))
-      (when (file-exists-p path) (delete-file path))
+      (dolist (file (list path (orpheus-ssh--part-file path)))
+        (when (file-exists-p file) (delete-file file)))
       (orpheus-backend-disconnect ssh))))
 
 (ert-deftest orpheus-test/ssh-download-rows-show-progress-and-eta ()
@@ -2809,7 +2977,8 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
                             (orpheus-local-instance-status ssh))
                            'play))))
          (orpheus-backend-disconnect ssh))
-       (should-not (file-exists-p (cadr loaded)))))))
+       ;; The cache survives a disconnect, so replaying the track is free.
+       (should (file-exists-p (cadr loaded)))))))
 
 (ert-deftest orpheus-test/ssh-does-not-claim-playback-while-downloading ()
   "A pending copy leaves the player stopped until mpv can open it."
@@ -3140,5 +3309,239 @@ MODE selects a failure the fake ssh should simulate: `empty', `missing',
               (orpheus-status-create :state 'play :elapsed 1 :total 10))
         (orpheus-ui--render)
         (should (= before (count-lines (point-min) (point-max))))))))
+
+;;; The cache, its size limit and the artwork search
+
+(defun orpheus-test--cached-file (directory name age)
+  "Write NAME into DIRECTORY with AGE seconds of age and return its path."
+  (let ((path (expand-file-name name directory)))
+    (with-temp-file path (insert "0123456789"))
+    (set-file-times path
+                    (time-subtract (current-time) (seconds-to-time age)))
+    path))
+
+(ert-deftest orpheus-test/cache-prune-removes-the-oldest-files ()
+  "The cache is trimmed to `orpheus-cache-max-bytes', oldest file first."
+  (let* ((directory (make-temp-file "orpheus-cache" t))
+         (orpheus-cache-directory directory)
+         (orpheus-cache-max-bytes 15))
+    (unwind-protect
+        (let ((old (orpheus-test--cached-file directory "old" 3600))
+              (new (orpheus-test--cached-file directory "new" 60)))
+          (should (= (orpheus-cache-size) 20))
+          (should (= (orpheus-cache-prune) 10))
+          (should-not (file-exists-p old))
+          (should (file-exists-p new))
+          (should (= (orpheus-cache-size) 10)))
+      (delete-directory directory t))))
+
+(ert-deftest orpheus-test/cache-prune-keeps-the-file-in-use ()
+  "A file named in KEEP survives even when it is the oldest one."
+  (let* ((directory (make-temp-file "orpheus-cache" t))
+         (orpheus-cache-directory directory)
+         (orpheus-cache-max-bytes 5))
+    (unwind-protect
+        (let ((playing (orpheus-test--cached-file directory "playing" 3600))
+              (other (orpheus-test--cached-file directory "other" 60)))
+          (orpheus-cache-prune (list playing))
+          (should (file-exists-p playing))
+          (should-not (file-exists-p other)))
+      (delete-directory directory t))))
+
+(ert-deftest orpheus-test/cache-prune-skips-partial-downloads ()
+  "A file still being written is never counted or deleted."
+  (let* ((directory (make-temp-file "orpheus-cache" t))
+         (orpheus-cache-directory directory)
+         (orpheus-cache-max-bytes 0)
+         (part (expand-file-name "track.mp3.part" directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file part (insert "half a track"))
+          (should (= (orpheus-cache-size) 0))
+          (should-not (orpheus-cache-prune))
+          (should (file-exists-p part)))
+      (delete-directory directory t))))
+
+(ert-deftest orpheus-test/art-best-prefers-the-track-folder ()
+  "A cover next to the track wins over the parent and a child folder."
+  (let ((dir "/music/Album/Disc 1"))
+    (should (equal (orpheus-local--art-best
+                    dir '("/music/Album/cover.jpg"
+                          "/music/Album/Disc 1/front.jpg"))
+                   "/music/Album/Disc 1/front.jpg"))
+    (should (equal (orpheus-local--art-best
+                    dir '("/music/Album/cover.jpg"))
+                   "/music/Album/cover.jpg"))
+    (should (equal (orpheus-local--art-best
+                    dir '("/music/Album/Disc 1/Scans/front.jpg"))
+                   "/music/Album/Disc 1/Scans/front.jpg"))
+    ;; A sibling album's cover is not this album's cover.
+    (should-not (orpheus-local--art-best dir '("/music/Other/cover.jpg")))
+    ;; The order of `orpheus-local-cover-names' decides within a folder.
+    (should (equal (orpheus-local--art-best
+                    "/music/Album"
+                    '("/music/Album/folder.jpg" "/music/Album/cover.jpg"))
+                   "/music/Album/cover.jpg"))))
+
+(ert-deftest orpheus-test/local-art-scan-finds-parent-and-child-covers ()
+  "The asynchronous scan looks in the album root and in child folders."
+  (let* ((root (make-temp-file "orpheus-art" t))
+         (album (expand-file-name "Album" root))
+         (disc (expand-file-name "Disc 1" album))
+         (scans (expand-file-name "Scans" disc))
+         (parent-cover (expand-file-name "cover.jpg" album))
+         (child-cover (expand-file-name "front.jpg" scans)))
+    (make-directory scans t)
+    (unwind-protect
+        (progn
+          (with-temp-file parent-cover (insert "jpg"))
+          (let ((found 'waiting))
+            (orpheus-local--scan-art disc (lambda (path) (setq found path)))
+            (should (orpheus-test--wait
+                     (lambda () (not (eq found 'waiting))) 20))
+            (should (equal found parent-cover)))
+          (delete-file parent-cover)
+          (with-temp-file child-cover (insert "jpg"))
+          (let ((found 'waiting))
+            (orpheus-local--scan-art disc (lambda (path) (setq found path)))
+            (should (orpheus-test--wait
+                     (lambda () (not (eq found 'waiting))) 20))
+            (should (equal found child-cover))))
+      (delete-directory root t))))
+
+(ert-deftest orpheus-test/local-file-answers-for-open-externally ()
+  "A local track is its own file; a stream has none."
+  (let ((file (make-temp-file "orpheus-track-"))
+        (local (orpheus-make-backend 'local)))
+    (unwind-protect
+        (progn
+          (should (equal (orpheus-backend-local-file
+                          local (orpheus-track-create :uri file))
+                         file))
+          (should-not (orpheus-backend-local-file
+                       local (orpheus-track-create
+                              :uri "https://example.org/a.mp3"))))
+      (delete-file file))))
+
+(ert-deftest orpheus-test/cycle-repeat-goes-through-three-states ()
+  "`r' moves from off to the queue to this track and back."
+  (let ((orpheus-backend-current (orpheus-make-backend 'local))
+        (commands nil)
+        (messages nil))
+    (cl-letf (((symbol-function 'orpheus-backend-connected-p)
+               (lambda (_backend) t))
+              ((symbol-function 'orpheus-backend-command)
+               (lambda (_backend action &optional value)
+                 (push (cons action value) commands)))
+              ((symbol-function 'orpheus--tick) (lambda () nil))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (push (apply #'format format-string args) messages))))
+      (setq orpheus-status-current (orpheus-status-create :state 'play))
+      (orpheus-cycle-repeat)
+      (should (equal (assq 'repeat commands) '(repeat . t)))
+      (should-not (cdr (assq 'single commands)))
+      (setq commands nil
+            orpheus-status-current
+            (orpheus-status-create :state 'play :repeat t))
+      (orpheus-cycle-repeat)
+      (should (equal (assq 'single commands) '(single . t)))
+      (setq commands nil
+            orpheus-status-current
+            (orpheus-status-create :state 'play :repeat t :single t))
+      (orpheus-cycle-repeat)
+      (should (= 2 (length commands)))
+      (should-not (cdr (assq 'repeat commands)))
+      (should-not (cdr (assq 'single commands)))
+      (should (string-match-p "off" (car messages))))))
+
+(ert-deftest orpheus-test/transport-uses-the-ready-player-icons ()
+  "The card is one row of plain media glyphs, with an ASCII fallback."
+  (let ((orpheus-ui-plain-ascii nil)
+        (status (orpheus-status-create :state 'stop)))
+    (let ((row (orpheus-ui--transport status)))
+      (dolist (glyph '("◁◁" "▶" "■" "▷▷" "➦" "⇆" "⤮" "⌕" "⁈"))
+        (should (string-match-p (regexp-quote glyph) row)))))
+  (let ((orpheus-ui-plain-ascii t)
+        (status (orpheus-status-create :state 'play)))
+    (let ((row (orpheus-ui--transport status)))
+      (should (string-match-p "<<" row))
+      (should (string-match-p "||" row))
+      (should-not (string-match-p "◁◁" row)))))
+
+(ert-deftest orpheus-test/ui-clears-the-list-when-entering-a-folder ()
+  "The old rows go at once, so a slow link still shows that RET worked."
+  (let* ((orpheus-backend-current (orpheus-make-backend 'local))
+         (orpheus-ui-show-art nil)
+         (orpheus-ui-show-now-playing nil)
+         (tab (orpheus-ui-tab-create
+               :kind 'directories :title "Directories" :view 'directories
+               :arg '("/music")
+               :items (list (orpheus-item-create
+                             :label "Album/" :kind 'directory
+                             :data '((browse . (directories "/music/Album"))
+                                     (uri . "/music/Album")))))))
+    (with-temp-buffer
+      (orpheus-ui-mode)
+      (setq orpheus-ui--tabs (vector tab) orpheus-ui--tab 0)
+      (orpheus-ui--render)
+      (orpheus-ui--place-point)
+      (cl-letf (((symbol-function 'orpheus-backend-connected-p)
+                 (lambda (_backend) t))
+                ((symbol-function 'orpheus-backend-browse)
+                 (lambda (&rest _args) nil)))
+        (orpheus-ui-confirm))
+      (should-not (orpheus-ui-tab-items tab))
+      (should (orpheus-ui-tab-loading tab))
+      (should (equal (orpheus-ui-tab-arg tab) '("/music/Album"))))))
+
+(ert-deftest orpheus-test/ssh-cover-command-searches-around-the-folder ()
+  "One remote find covers the folder, its parent and its child folders."
+  (let ((command (orpheus-ssh--cover-command "Music/Album/Disc 1")))
+    (should (string-match-p "find 'Music/Album/Disc 1/' 'Music/Album/'" command))
+    (should (string-match-p "-maxdepth 2" command))
+    (should (string-match-p "-iname 'cover.jpg'" command))))
+
+(ert-deftest orpheus-test/ssh-control-args-share-one-connection ()
+  "Control commands share a master connection; downloads do not use it."
+  (let ((orpheus-ssh-host "fake.invalid")
+        (orpheus-ssh-multiplex t)
+        (orpheus-ssh--control-directory nil))
+    (unwind-protect
+        (let ((args (orpheus-ssh--control-args)))
+          (should (member "ControlMaster=auto" args))
+          (should (cl-some (lambda (arg)
+                             (string-prefix-p "ControlPath=" arg))
+                           args))
+          (should (file-directory-p orpheus-ssh--control-directory)))
+      (let ((directory orpheus-ssh--control-directory))
+        (when directory (ignore-errors (delete-directory directory t))))
+      (setq orpheus-ssh--control-directory nil)))
+  (let ((orpheus-ssh-host "fake.invalid")
+        (orpheus-ssh-multiplex nil))
+    (should-not (orpheus-ssh--control-args))))
+
+(ert-deftest orpheus-test/ssh-cache-survives-a-restart ()
+  "A track fetched in one session is played from the cache in the next."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((first (orpheus-make-backend 'ssh))
+           (path 'waiting)
+           (second nil)
+           (found 'waiting))
+       (unwind-protect
+           (progn
+             (orpheus-ssh--download first "Music/Song.mp3"
+                                    (lambda (result) (setq path result)))
+             (should (orpheus-test--wait
+                      (lambda () (not (eq path 'waiting))) 20))
+             (orpheus-backend-disconnect first)
+             (should (file-exists-p path))
+             (setq second (orpheus-make-backend 'ssh)
+                   orpheus-ssh-program "no-such-ssh-program")
+             (orpheus-ssh--download second "Music/Song.mp3"
+                                    (lambda (result) (setq found result)))
+             (should (equal found path)))
+         (when second (orpheus-backend-disconnect second)))))))
 
 ;;; orpheus-test.el ends here
