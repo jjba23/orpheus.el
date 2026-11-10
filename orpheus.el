@@ -2,7 +2,7 @@
 
 ;;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-;;; Version: 0.15.0
+;;; Version: 0.15.1
 ;;; Author: Josep Bigorra <jjbigorra@gmail.com>
 ;;; Maintainer: Josep Bigorra <jjbigorra@gmail.com>
 ;;; URL: https://github.com/jjba23/orpheus.el
@@ -63,7 +63,7 @@
 
 ;;; Settings
 
-(defconst orpheus-version "0.15.0"
+(defconst orpheus-version "0.15.1"
   "Version of orpheus.")
 
 (defcustom orpheus-backend 'mpd
