@@ -9,7 +9,7 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
-* Unreleased
+* 0.16.0 (2026-11-10)
 
 *** Added
 
