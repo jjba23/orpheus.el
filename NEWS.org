@@ -9,7 +9,25 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
-* 0.16.0 (2026-11-10)
+* Unreleased
+
+*** Added
+
+- The equalizer remembers the curve in effect in
+  ~orpheus-equalizer-state-file~: its gains, whether it is on, and the preset's
+  name.  Every backend that starts, including the one a backend switch brings
+  in, is given that curve, so a restart no longer begins flat.
+- ~orpheus-equalizer-export-preset~ writes a preset to a file you name,
+  ~orpheus-equalizer-import-preset~ reads a file holding one preset or many,
+  and ~orpheus-equalizer-copy-preset~ puts one on the kill ring.  A file that
+  holds a bare array of gains takes its own name.  The editor binds ~x~, ~I~
+  and ~y~ to the same commands.
+- The equalizer menu gains a Share group for the three commands.
+
+*** Changed
+
+- ~orpheus-equalizer--presets-text~ builds the JSON a preset file holds, so
+  saving every preset and exporting one share the same shape.
 
 *** Added
 

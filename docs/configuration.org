@@ -180,6 +180,7 @@ what the menu loads next time.
 | ~orpheus-equalizer-tilt-step~   | ~3~                              | dB the tilt adds to the lowest band |
 | ~orpheus-equalizer-buffer-name~ | ~"*orpheus equalizer*"~          | the editor's buffer |
 | ~orpheus-equalizer-preset-file~ | ~$XDG_DATA_HOME/orpheus/equalizer.json~ | saved presets, as JSON |
+| ~orpheus-equalizer-state-file~ | ~$XDG_DATA_HOME/orpheus/equalizer-state.json~ | the curve remembered between sessions |
 
 A preset is one gain in dB for each frequency in ~orpheus-equalizer-bands~.
 The built-ins are flat, bass, vocal, treble, loudness, night, podcast, acoustic,
@@ -204,6 +205,18 @@ click inside a bar sets that band to the gain of the column clicked, and a
 right click opens the same commands as a menu.  ~M-x
 orpheus-equalizer-set-width~ and ~M-x orpheus-equalizer-set-max-gain~ change
 the two numbers the filter is built from.
+
+The curve in effect is remembered in ~orpheus-equalizer-state-file~: its
+gains, whether the equalizer is on, and the preset's name.  Every backend that
+starts, including the one a switch brings in, is given that curve, so the
+sound is the same after a restart.  Only the curve and the switch are kept;
+the width, the range and the steps stay options in your init.
+
+Presets travel as JSON.  ~M-x orpheus-equalizer-export-preset~ writes one
+preset to a file you name, ~M-x orpheus-equalizer-import-preset~ reads a file
+holding one preset or many, and ~M-x orpheus-equalizer-copy-preset~ puts one on
+the kill ring.  A file holding a bare array of gains takes its own name.  In
+the editor, ~x~, ~I~ and ~y~ export, import and copy the same way.
 
 ** Lyrics
 :PROPERTIES:

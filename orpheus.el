@@ -60,6 +60,7 @@
 
 (declare-function notifications-notify "notifications" (&rest args))
 (declare-function dired-file-name-at-point "dired" ())
+(declare-function orpheus-equalizer-restore "orpheus-equalizer" ())
 
 ;;; Settings
 
@@ -156,7 +157,8 @@ Register another with `orpheus-register-backend'."
    orpheus-backend-current
    (lambda (backend)
      (if backend
-       (progn (orpheus--tick)
+       (progn (orpheus-equalizer-restore)
+         (orpheus--tick)
          (when callback (funcall callback backend)))
        (message "orpheus: cannot connect to %s" orpheus-backend)))))
 

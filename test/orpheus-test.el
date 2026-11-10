@@ -851,13 +851,16 @@ and the password with it."
 (ert-deftest orpheus-test/equalizer-load-preset-applies ()
   "Loading a preset sets the gains, its name and the enabled flag."
   (let* ((file (make-temp-file "orpheus-eq" nil ".json"))
+         (state (make-temp-file "orpheus-eq-state" nil ".json"))
          (orpheus-equalizer-preset-file file)
+         (orpheus-equalizer-state-file state)
          (orpheus-equalizer-enabled nil)
          (orpheus-equalizer--gains nil)
          (applied nil))
     (unwind-protect
         (progn
           (delete-file file)
+          (delete-file state)
           (orpheus-equalizer--write-presets
            '(("mine" . (1 2 3 4 5 6 7 8 9 10))))
           (cl-letf (((symbol-function 'orpheus-equalizer--apply)
@@ -867,8 +870,11 @@ and the password with it."
           (should (equal orpheus-equalizer--gains
                          '(1 2 3 4 5 6 7 8 9 10)))
           (should (equal orpheus-equalizer-preset "mine"))
-          (should orpheus-equalizer-enabled))
-      (ignore-errors (delete-file file)))))
+          (should orpheus-equalizer-enabled)
+          ;; The same curve is what the next session restores.
+          (should (file-exists-p state)))
+      (ignore-errors (delete-file file))
+      (ignore-errors (delete-file state)))))
 
 (ert-deftest orpheus-test/equalizer-save-preset ()
   "Saving writes the current gains under the given name."
@@ -3794,6 +3800,87 @@ directory, so a test never writes to the user's own cache."
     (should (= 3 (cl-count ?█ (orpheus-equalizer--bar-string 3))))
     (should (= 2 (cl-count ?█ (orpheus-equalizer--bar-string -2))))
     (should (string-match-p "│" (orpheus-equalizer--bar-string 0)))))
+
+(ert-deftest orpheus-test/equalizer-state-roundtrip ()
+  "The curve, its preset and the switch survive a restart."
+  (let* ((dir (make-temp-file "orpheus-eq-state" t))
+         (orpheus-equalizer-state-file (expand-file-name "state.json" dir))
+         (orpheus-equalizer-bands '(100 1000))
+         (orpheus-equalizer-enabled t)
+         (orpheus-equalizer-preset "mine")
+         (orpheus-equalizer--gains '(2 -3)))
+    (unwind-protect
+        (progn
+          (orpheus-equalizer--write-state)
+          (setq orpheus-equalizer-enabled nil
+                orpheus-equalizer-preset "flat"
+                orpheus-equalizer--gains nil)
+          (orpheus-equalizer--load-state)
+          (should orpheus-equalizer-enabled)
+          (should (equal orpheus-equalizer-preset "mine"))
+          (should (equal orpheus-equalizer--gains '(2 -3))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/equalizer-restore-keeps-the-curve ()
+  "A backend starting later is given the remembered curve."
+  (let* ((dir (make-temp-file "orpheus-eq-state" t))
+         (orpheus-equalizer-state-file (expand-file-name "state.json" dir))
+         (orpheus-equalizer-bands '(100 1000))
+         (orpheus-equalizer--gains nil)
+         (orpheus-equalizer-enabled nil)
+         (orpheus-backend-current (make-orpheus-mpd :name 'mpd)))
+    (unwind-protect
+        (progn
+          (with-temp-file orpheus-equalizer-state-file
+            (insert "{\"enabled\":true,\"preset\":\"mine\",\"gains\":[1,-2]}"))
+          (orpheus-equalizer-restore)
+          (should orpheus-equalizer-enabled)
+          (should (equal orpheus-equalizer--gains '(1 -2))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/equalizer-export-and-import ()
+  "A preset written to a file comes back with the same gains."
+  (let* ((dir (make-temp-file "orpheus-eq-share" t))
+         (orpheus-equalizer-preset-file (expand-file-name "saved.json" dir))
+         (file (expand-file-name "shared.json" dir)))
+    (unwind-protect
+        (progn
+          (orpheus-equalizer-export-preset "bass" file)
+          (orpheus-equalizer-import-preset file)
+          (should (equal (cdr (assoc "bass" (orpheus-equalizer--read-presets)))
+                         (cdr (assoc "bass" orpheus-equalizer-builtin-presets)))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/equalizer-import-bare-array-names-the-preset ()
+  "A bare array of gains takes the file's own name."
+  (let* ((dir (make-temp-file "orpheus-eq-share" t))
+         (orpheus-equalizer-preset-file (expand-file-name "saved.json" dir))
+         (file (expand-file-name "warm.json" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "[1,2,3,4,5,6,7,8,9,10]"))
+          (orpheus-equalizer-import-preset file)
+          (should (equal (cdr (assoc "warm" (orpheus-equalizer--read-presets)))
+                         '(1 2 3 4 5 6 7 8 9 10))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/equalizer-import-refuses-a-broken-file ()
+  "A preset file that does not fit the bands is an error, not silence."
+  (let* ((dir (make-temp-file "orpheus-eq-share" t))
+         (orpheus-equalizer-preset-file (expand-file-name "saved.json" dir))
+         (file (expand-file-name "broken.json" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "{\"broken\":[1,2]}"))
+          (should-error (orpheus-equalizer-import-preset file)
+                        :type 'user-error))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/equalizer-copy-preset ()
+  "Copying a preset puts JSON on the kill ring."
+  (let ((text (orpheus-equalizer-copy-preset "flat")))
+    (should (string-match-p "\"flat\"" text))
+    (should (equal text (car kill-ring)))))
 
 ;;; Lyrics
 

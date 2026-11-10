@@ -95,7 +95,10 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   band that the arrow keys and the mouse shape, with invert, tilt and reset,
   the band width and the range in dB beside it.  It works with the local and
   ssh backends, which play through mpv; MPD's audio leaves through the daemon's
-  own output, so Emacs cannot filter it.
+  own output, so Emacs cannot filter it.  The curve is remembered between
+  sessions and given to every backend that starts, and a preset travels as
+  JSON: export it to a file, import a file of them, or copy one to the kill
+  ring.
 - *Words that follow the music.* :: ~L~ shows the lyrics of the current track
   in a side window and marks the line that is playing; RET on a line seeks to
   it.  Each backend reads them where it keeps them: a ~.lrc~ or ~.txt~ file

@@ -73,6 +73,15 @@ Built-in presets are not written here; a saved preset with the same name
 replaces the built-in one when the menu is built."
   :type 'file :group 'orpheus)
 
+(defcustom orpheus-equalizer-state-file
+  (expand-file-name "orpheus/equalizer-state.json"
+                    (or (getenv "XDG_DATA_HOME") "~/.local/share"))
+  "JSON file where the curve in effect is remembered between sessions.
+It holds the gains, whether the equalizer is on and the preset's name, and is
+restored when a backend starts, so the sound is the same after a restart.
+A file that cannot be read is reported once and the default curve is used."
+  :type 'file :group 'orpheus)
+
 (defconst orpheus-equalizer-builtin-presets
   '(("flat" . (0 0 0 0 0 0 0 0 0 0))
     ("bass" . (6 5 3 1 0 0 0 0 0 0))
@@ -175,6 +184,18 @@ entries do not fit the bands, signals a `user-error' instead of vanishing."
                  (orpheus-equalizer--clean (append (cdr entry) nil))))
          data))))))
 
+(defun orpheus-equalizer--presets-text (presets)
+  "Return PRESETS as the JSON object text a preset file holds.
+PRESETS is an alist of (NAME . GAINS)."
+  (concat "{"
+          (mapconcat
+           (lambda (entry)
+             (concat (json-serialize (car entry))
+                     ":"
+                     (json-serialize (vconcat (cdr entry)))))
+           presets ",")
+          "}\n"))
+
 (defun orpheus-equalizer--write-presets (presets)
   "Write PRESETS to `orpheus-equalizer-preset-file' as JSON.
 PRESETS is an alist of (NAME . GAINS), as `orpheus-equalizer--read-presets'
@@ -189,16 +210,7 @@ old presets intact."
       (unwind-protect
           (progn
             (with-temp-file temporary
-              ;; json-serialize wants symbol keys for an object, so write the
-              ;; braces and colons here; it still quotes the names and arrays.
-              (insert "{"
-                      (mapconcat
-                       (lambda (entry)
-                         (concat (json-serialize (car entry))
-                                 ":"
-                                 (json-serialize (vconcat (cdr entry)))))
-                       presets ",")
-                      "}\n"))
+              (insert (orpheus-equalizer--presets-text presets)))
             (rename-file temporary file t))
         (when (file-exists-p temporary)
           (delete-file temporary))))))
@@ -226,6 +238,77 @@ A user preset replaces a built-in one of the same name."
             (orpheus-equalizer--clean
              (orpheus-equalizer--preset orpheus-equalizer-preset)))))
 
+(defun orpheus-equalizer--write-state (&optional file)
+  "Write the curve in effect to FILE, `orpheus-equalizer-state-file' by default.
+The file is disposable: a write that fails is reported and ignored, because a
+lost curve is a fresh start and not a lost preset."
+  (let ((file (expand-file-name (or file orpheus-equalizer-state-file))))
+    (condition-case err
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert (json-serialize
+                     (list (cons 'enabled orpheus-equalizer-enabled)
+                           (cons 'preset orpheus-equalizer-preset)
+                           (cons 'gains
+                                 (vconcat
+                                  (orpheus-equalizer--current-gains)))))))
+          file)
+      (error
+       (message "orpheus: cannot remember the equalizer: %s"
+                (error-message-string err))
+       nil))))
+
+(defun orpheus-equalizer--read-state (&optional file)
+  "Return the saved state in FILE as an alist, or nil."
+  (let ((file (expand-file-name (or file orpheus-equalizer-state-file))))
+    (when (file-readable-p file)
+      (let ((text (with-temp-buffer
+                    (insert-file-contents file)
+                    (buffer-string))))
+        (condition-case err
+            (json-parse-string text :object-type 'alist
+                               :null-object nil :false-object nil)
+          (error
+           (message "orpheus: cannot read the saved equalizer: %s"
+                    (error-message-string err))
+           nil))))))
+
+(defun orpheus-equalizer--load-state ()
+  "Bring the remembered curve into this session, when there is one."
+  (let ((state (orpheus-equalizer--read-state)))
+    (when state
+      (condition-case err
+          (setq orpheus-equalizer-enabled
+                (and (alist-get 'enabled state) t)
+                orpheus-equalizer-preset
+                (or (alist-get 'preset state) orpheus-equalizer-preset)
+                orpheus-equalizer--gains
+                (orpheus-equalizer--clean
+                 (append (alist-get 'gains state) nil)))
+        (user-error
+         (message "orpheus: the saved equalizer does not fit these bands: %s"
+                  (error-message-string err)))))))
+
+(defun orpheus-equalizer--remember ()
+  "Save the curve in effect, so the next session starts with it."
+  (orpheus-equalizer--write-state))
+
+(defun orpheus-equalizer-restore ()
+  "Give a backend that has just started the curve already in effect.
+The curve is the one shaped in this session, or the one remembered in
+`orpheus-equalizer-state-file' the first time this session asks.  A backend
+that cannot filter is told, and answers nil; nothing is reported, because
+starting a player is not the moment to explain an equalizer."
+  (unless orpheus-equalizer--gains
+    (orpheus-equalizer--load-state))
+  (when (and orpheus-equalizer-enabled orpheus-equalizer--gains)
+    (let ((backend orpheus-backend-current))
+      (when backend
+        (orpheus-backend-equalizer
+         backend (orpheus-equalizer--filter
+                  (orpheus-equalizer--current-gains)))))))
+
 (defun orpheus-equalizer--redraw-editor ()
   "Draw the equalizer editor again when it is open."
   (when (buffer-live-p (get-buffer orpheus-equalizer-buffer-name))
@@ -239,6 +322,7 @@ A user preset replaces a built-in one of the same name."
         orpheus-equalizer-enabled t)
   (orpheus-equalizer--apply)
   (orpheus-equalizer--redraw-editor)
+  (orpheus-equalizer--remember)
   (message "Orpheus: equalizer %s" note)
   orpheus-equalizer--gains)
 
@@ -267,7 +351,8 @@ while its player is not running, so the next start is already equalized."
   (interactive)
   (setq orpheus-equalizer-enabled t)
   (orpheus-equalizer--apply)
-  (orpheus-equalizer--redraw-editor))
+  (orpheus-equalizer--redraw-editor)
+  (orpheus-equalizer--remember))
 
 ;;;###autoload
 (defun orpheus-equalizer-disable ()
@@ -275,7 +360,8 @@ while its player is not running, so the next start is already equalized."
   (interactive)
   (setq orpheus-equalizer-enabled nil)
   (orpheus-equalizer--apply)
-  (orpheus-equalizer--redraw-editor))
+  (orpheus-equalizer--redraw-editor)
+  (orpheus-equalizer--remember))
 
 ;;;###autoload
 (defun orpheus-equalizer-toggle ()
@@ -298,6 +384,7 @@ while its player is not running, so the next start is already equalized."
           orpheus-equalizer-enabled t)
     (orpheus-equalizer--apply)
     (orpheus-equalizer--redraw-editor)
+    (orpheus-equalizer--remember)
     (message "Orpheus: equalizer preset %s" name)))
 
 ;;;###autoload
@@ -330,6 +417,86 @@ name replaces that built-in preset in the menu."
     (orpheus-equalizer--write-presets
      (cl-remove name presets :key #'car :test #'equal))
     (message "Orpheus: deleted equalizer preset %s" name)))
+
+;;; Sharing presets
+
+(defun orpheus-equalizer-export-preset (name file)
+  "Write preset NAME to FILE as JSON that another orpheus can import.
+NAME may be a built-in or a saved preset.  FILE is written where it names,
+because the user chose it."
+  (interactive
+   (list (completing-read "Export equalizer preset: "
+                          (mapcar #'car (orpheus-equalizer-presets)) nil t)
+         (read-file-name "Write the preset to: " nil nil nil
+                         "orpheus-preset.json")))
+  (let ((gains (orpheus-equalizer--preset name)))
+    (with-temp-file file
+      (insert (orpheus-equalizer--presets-text (list (cons name gains)))))
+    (message "Orpheus: exported preset %s to %s"
+             name (file-name-nondirectory file))
+    file))
+
+(defun orpheus-equalizer-copy-preset (name)
+  "Put preset NAME on the kill ring as JSON, ready to paste anywhere."
+  (interactive
+   (list (completing-read "Copy equalizer preset: "
+                          (mapcar #'car (orpheus-equalizer-presets)) nil t)))
+  (let ((text (orpheus-equalizer--presets-text
+               (list (cons name (orpheus-equalizer--preset name))))))
+    (kill-new text)
+    (message "Orpheus: copied preset %s" name)
+    text))
+
+(defun orpheus-equalizer--preset-entries (file)
+  "Return FILE as (NAME . GAINS) entries, or signal a `user-error'.
+FILE holds either an object of name to gains, as the preset file does, or a
+bare array of gains, which takes the file's own name."
+  (unless (file-readable-p file)
+    (user-error "Orpheus: cannot read %s" file))
+  (let* ((text (with-temp-buffer
+                 (insert-file-contents file)
+                 (buffer-string)))
+         (data (condition-case err
+                   (let ((json-object-type 'alist)
+                         (json-key-type 'string))
+                     (json-read-from-string text))
+                 (error
+                  (user-error "Orpheus: %s is not a preset file: %s"
+                              file (error-message-string err))))))
+    (cond
+     ((null data)
+      (user-error "Orpheus: %s holds no presets" file))
+     ((vectorp data)
+      (list (cons (file-name-base file)
+                  (orpheus-equalizer--clean (append data nil)))))
+     ((listp data)
+      (mapcar
+       (lambda (entry)
+         (unless (and (stringp (car entry))
+                      (not (string-empty-p (car entry))))
+           (user-error "Orpheus: a preset in %s has no name" file))
+         (cons (car entry)
+               (orpheus-equalizer--clean (append (cdr entry) nil))))
+       data))
+     (t (user-error "Orpheus: %s is not a preset file" file)))))
+
+(defun orpheus-equalizer-import-preset (file)
+  "Import every preset in FILE, replacing saved ones of the same name.
+The imported ones are listed among your own afterwards, and a built-in keeps
+its name while the imported gains win."
+  (interactive (list (read-file-name "Import equalizer presets: " nil nil t)))
+  (unless (file-regular-p file)
+    (user-error "Orpheus: %s is not a file" file))
+  (let* ((entries (orpheus-equalizer--preset-entries file))
+         (names (mapcar #'car entries))
+         (presets (cl-remove-if (lambda (entry) (member (car entry) names))
+                                (orpheus-equalizer--read-presets))))
+    (orpheus-equalizer--write-presets (append entries presets))
+    (orpheus-equalizer--redraw-editor)
+    (message "Orpheus: imported %s (%d preset%s)"
+             (file-name-nondirectory file) (length entries)
+             (if (= 1 (length entries)) "" "s"))
+    names))
 
 ;;;###autoload
 (defun orpheus-equalizer-set-gains (gains)
@@ -565,6 +732,7 @@ it lands on, so the bar is also the control."
   (setq orpheus-equalizer-width (abs width))
   (orpheus-equalizer--apply)
   (orpheus-equalizer--redraw-editor)
+  (orpheus-equalizer--remember)
   (message "Orpheus: equalizer bands %.2g octaves wide"
            orpheus-equalizer-width))
 
@@ -576,6 +744,7 @@ it lands on, so the bar is also the control."
                                   (orpheus-equalizer--current-gains)))
   (orpheus-equalizer--apply)
   (orpheus-equalizer--redraw-editor)
+  (orpheus-equalizer--remember)
   (message "Orpheus: equalizer range ±%d dB" orpheus-equalizer-max-gain))
 
 (defvar orpheus-equalizer-mode-map
@@ -601,6 +770,9 @@ it lands on, so the bar is also the control."
     (define-key map (kbd "P") 'orpheus-equalizer-load-preset)
     (define-key map (kbd "s") 'orpheus-equalizer-save-preset)
     (define-key map (kbd "d") 'orpheus-equalizer-delete-preset)
+    (define-key map (kbd "x") 'orpheus-equalizer-export-preset)
+    (define-key map (kbd "y") 'orpheus-equalizer-copy-preset)
+    (define-key map (kbd "I") 'orpheus-equalizer-import-preset)
     (define-key map (kbd "q") 'quit-window)
     map)
   "Keymap of `orpheus-equalizer-mode'.")
@@ -658,7 +830,11 @@ one, with the curve itself, its width and the range it may move in."
     ("m" "Largest gain in dB..." orpheus-equalizer-set-max-gain)
     ("0" "Reset every band" orpheus-equalizer-flatten)
     ("i" "Invert the curve" orpheus-equalizer-invert)
-    ("t" "Tilt: bass up, treble down" orpheus-equalizer-tilt)]])
+    ("t" "Tilt: bass up, treble down" orpheus-equalizer-tilt)]
+   ["Share"
+    ("x" "Export a preset to a file..." orpheus-equalizer-export-preset)
+    ("y" "Copy a preset as JSON" orpheus-equalizer-copy-preset)
+    ("I" "Import presets from a file..." orpheus-equalizer-import-preset)]])
 
 ;;;###autoload
 (defun orpheus-equalizer-menu ()
