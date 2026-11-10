@@ -9,6 +9,14 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* 0.18.2 (2026-11-10)
+
+*** Changed
+
+- The funding file now carries a custom funding URL that points at
+  [[https://buymeacoffee.com/jjbigorra][Buy Me a Coffee]], so the repository
+  shows a Sponsor button.
+
 * 0.18.1 (2026-11-10)
 
 *** Added
