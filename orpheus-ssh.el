@@ -133,6 +133,16 @@ Nil or zero turns prefetching off.  Prefetches use spare download slots and are
 always behind a track the user asked to play."
   :type 'integer :group 'orpheus)
 
+(defcustom orpheus-ssh-split-images t
+  "Whether a track of a remote disc image is fetched as a byte range.
+When the host has ffmpeg it cuts the track there and sends only its minutes.
+When it has no ffmpeg, this backend reads only the bytes the track occupies
+and cuts them here with the local ffmpeg, so a track of a 400 MB image costs
+its own megabytes rather than the whole image.  The image is best a FLAC file
+with a seek table; without one the position is estimated and corrected from
+the first frame.  Nil copies the whole image once and lets mpv seek inside it."
+  :type 'boolean :group 'orpheus)
+
 (defcustom orpheus-ssh-concurrency 2
   "Maximum number of simultaneous ssh downloads.
 One is enough to keep playback going; two lets the next track arrive while the
@@ -146,7 +156,7 @@ current one is still playing.  More than two rarely improves a single link."
                (:conc-name orpheus-ssh-transfer-))
   "One track SSH is fetching, or has finished fetching."
   uri path state (bytes 0) total started samples callbacks process
-  retried batch timer)
+  retried batch timer stage range)
 
 (cl-defstruct (orpheus-ssh (:include orpheus-local)
                            (:constructor orpheus-ssh--create)
@@ -156,6 +166,7 @@ current one is still playing.  More than two rarely improves a single link."
   (transfers nil)
   (processes nil)
   (cache nil)
+  (images (make-hash-table :test #'equal))
   current-file
   control-failed
   search-fallback
@@ -437,40 +448,31 @@ A name from `orpheus-local-cover-names' wins over another image."
 
 ;;; Listing and searching a remote directory
 
-(defconst orpheus-ssh--cue-marker "@@FILE@@"
-  "Line that starts each cue sheet in a batched remote cat.")
-
 (defun orpheus-ssh--cue-names (output)
   "Return the cue sheets in a remote `ls -1p' OUTPUT."
   (let ((case-fold-search t))
     (cl-remove-if-not (lambda (name) (string-match-p "\\.cue\\'" name))
                       (split-string (or output "") "\n" t))))
 
-(defun orpheus-ssh--cue-command (dir names)
-  "Return the remote command that prints the cue sheets in NAMES below DIR.
-The sheets come back in one round trip, each after a line naming its file."
-  (format "for f in %s; do printf '%%s\\n' %s\"$f\"; cat -- \"$f\"; done"
-          (mapconcat (lambda (name)
-                       (orpheus-ssh--shell-quote (orpheus-ssh--join dir name)))
-                     names " ")
-          (orpheus-ssh--shell-quote orpheus-ssh--cue-marker)))
-
-(defun orpheus-ssh--cue-sheets (output)
-  "Return the cue sheets in OUTPUT as an alist of remote path and text."
-  (let ((sheets nil)
-        (path nil)
-        (lines nil))
-    (dolist (line (split-string (or output "") "\n"))
-      (if (string-prefix-p orpheus-ssh--cue-marker line)
-          (progn
-            (when path
-              (push (cons path (string-join (nreverse lines) "\n")) sheets))
-            (setq path (substring line (length orpheus-ssh--cue-marker))
-                  lines nil))
-        (when path (push line lines))))
-    (when path
-      (push (cons path (string-join (nreverse lines) "\n")) sheets))
-    (nreverse sheets)))
+(defun orpheus-ssh--fetch-cue-sheets (ssh dir names callback)
+  "Call CALLBACK with the cue sheets SSH finds in NAMES below DIR.
+Each sheet is one cat of its own, so a restricted shell with no loops, pipes
+or command substitution still answers.  A sheet that cannot be read is left
+out rather than failing the folder."
+  (let ((sheets nil))
+    (cl-labels
+        ((next (remaining)
+           (if (null remaining)
+               (funcall callback (nreverse sheets))
+             (let ((path (orpheus-ssh--join dir (car remaining))))
+               (orpheus-ssh--run
+                ssh (format "cat -- %s" (orpheus-ssh--shell-quote path))
+                (lambda (text)
+                  (when (and text (not (string-empty-p text)))
+                    (push (cons path text) sheets))
+                  (next (cdr remaining)))
+                t)))))
+      (next names))))
 
 (defun orpheus-ssh--cue-for (name sheets)
   "Return the cue text in SHEETS that belongs to the file NAME, or nil.
@@ -488,15 +490,24 @@ The sheet is the one named after the file, with any case."
     (if-let* ((tracks (and cue (orpheus-local--cue-tracks cue))))
              (mapcar
               (lambda (track)
-                (let ((start (plist-get track :start))
-                      (end (plist-get track :end)))
+                (let* ((start (plist-get track :start))
+                       (end (plist-get track :end))
+                       (uri (orpheus-track-range-uri path start end))
+                       (item-track
+                        (orpheus-local--remember-track
+                         (orpheus-track-create
+                          :uri uri
+                          :title (plist-get track :title)
+                          :artist (plist-get track :artist)
+                          :album (plist-get track :album)
+                          :trackno (plist-get track :number)
+                          :duration (and end (- end start))))))
                   (orpheus-item-create
                    :label (format "%02d  %s" (or (plist-get track :number) 0)
                                   (or (plist-get track :title) name))
                    :detail (orpheus-format-time (and end (- end start)))
                    :kind 'track
-                   :data (list (cons 'uri (orpheus-track-range-uri
-                                           path start end))))))
+                   :data (list (cons 'uri uri) (cons 'track item-track)))))
               tracks)
       (list (orpheus-item-create
              :label name :kind 'track
@@ -547,38 +558,76 @@ into one row per track."
         (substring path (length root))
       path)))
 
-(defun orpheus-ssh--search-items (query output)
-  "Return track rows from search OUTPUT matching QUERY.
-OUTPUT is the newline separated result of `orpheus-ssh--search-command'."
-  (let ((needle (downcase query)))
-    (delq nil
-          (mapcar
-           (lambda (line)
-             (let ((path (string-remove-prefix "./" line)))
-               (when (and (orpheus-ssh--media-file-p path)
-                          (string-match-p (regexp-quote needle)
-                                          (downcase path)))
-                 (orpheus-item-create
-                  :label (orpheus-ssh--relative-label path)
-                  :kind 'track
-                  :detail (upcase (or (file-name-extension path) "file"))
-                  :data (list (cons 'uri path))))))
-           (split-string output "\n" t)))))
+(defun orpheus-ssh--search-paths (output)
+  "Return the file paths in find OUTPUT."
+  (mapcar (lambda (line) (string-remove-prefix "./" line))
+          (split-string (or output "") "\n" t)))
 
-(defun orpheus-ssh--search-listing-items (query output)
-  "Return track rows from recursive ls OUTPUT matching QUERY."
+(defun orpheus-ssh--listing-paths (output)
+  "Return the file paths in recursive ls OUTPUT."
   (let ((dir nil)
         (paths nil))
-    (dolist (line (split-string output "\n"))
+    (dolist (line (split-string (or output "") "\n"))
       (cond
        ((string-empty-p line))
        ((string-suffix-p ":" line)
         (setq dir (string-remove-suffix ":" line)))
        ((string-suffix-p "/" line))
-       ((orpheus-ssh--media-file-p line)
+       (t
         (push (orpheus-ssh--join (if (equal dir ".") "" dir) line)
               paths))))
-    (orpheus-ssh--search-items query (string-join (nreverse paths) "\n"))))
+    (nreverse paths)))
+
+(defun orpheus-ssh--search-sheets (ssh paths callback)
+  "Fetch the cue sheets among PATHS over SSH, then call CALLBACK with them.
+Each sheet is one cat, grouped by directory.  A library with no cue sheets
+costs no extra command."
+  (let ((groups (make-hash-table :test #'equal)))
+    (dolist (path paths)
+      (when (string-match-p "\\.cue\\'" path)
+        (let ((dir (or (file-name-directory path) "")))
+          (puthash dir
+                   (cons (file-name-nondirectory path) (gethash dir groups))
+                   groups))))
+    (let ((dirs (hash-table-keys groups))
+          (sheets nil))
+      (cl-labels
+          ((next (remaining)
+             (if (null remaining)
+                 (funcall callback (nreverse sheets))
+               (let* ((dir (car remaining))
+                      (names (gethash dir groups)))
+                 (orpheus-ssh--fetch-cue-sheets
+                  ssh dir names
+                  (lambda (found)
+                    (setq sheets (append found sheets))
+                    (next (cdr remaining))))))))
+        (if (null dirs)
+            (funcall callback nil)
+          (next dirs))))))
+
+(defun orpheus-ssh--search-items (query output &optional sheets)
+  "Return track rows from search OUTPUT matching QUERY.
+OUTPUT is the newline separated result of `orpheus-ssh--search-command'.
+SHEETS are the cue sheets fetched for the paths, so a song title matches its
+track of a disc image."
+  (when (and query (not (string-empty-p query)))
+    (delq nil
+          (mapcan
+           (lambda (line)
+             (let* ((path (string-remove-prefix "./" line))
+                    (dir (or (file-name-directory path) ""))
+                    (name (file-name-nondirectory path)))
+               (when (orpheus-ssh--media-file-p path)
+                 (orpheus-search-filter
+                  (orpheus-ssh--disc-items dir name sheets)
+                  query path))))
+           (split-string (or output "") "\n" t)))))
+
+(defun orpheus-ssh--search-listing-items (query output)
+  "Return track rows from recursive ls OUTPUT matching QUERY."
+  (orpheus-ssh--search-items
+   query (string-join (orpheus-ssh--listing-paths output) "\n")))
 
 (defun orpheus-ssh--search (ssh query callback)
   "Search SSH for QUERY and call CALLBACK with rows."
@@ -594,7 +643,12 @@ OUTPUT is the newline separated result of `orpheus-ssh--search-command'."
        (if (null output)
            (orpheus-ssh--search-listing ssh query callback)
          (setf (orpheus-ssh-instance-search-warned ssh) nil)
-         (funcall callback (orpheus-ssh--search-items query output))))
+         (let ((paths (orpheus-ssh--search-paths output)))
+           (orpheus-ssh--search-sheets
+            ssh paths
+            (lambda (sheets)
+              (funcall callback
+                       (orpheus-ssh--search-items query output sheets)))))))
      t))))
 
 (defun orpheus-ssh--search-listing (ssh query callback)
@@ -608,7 +662,13 @@ OUTPUT is the newline separated result of `orpheus-ssh--search-command'."
            (unless (orpheus-ssh-instance-search-warned ssh)
              (setf (orpheus-ssh-instance-search-warned ssh) t)
              (message "orpheus: remote find is unavailable; using a recursive listing"))
-           (funcall callback (orpheus-ssh--search-listing-items query output)))
+           (let ((paths (orpheus-ssh--listing-paths output)))
+             (orpheus-ssh--search-sheets
+              ssh paths
+              (lambda (sheets)
+                (funcall callback
+                         (orpheus-ssh--search-items
+                          query (string-join paths "\n") sheets))))))
        (setf (orpheus-ssh-instance-search-fallback ssh) t)
        (unless (orpheus-ssh-instance-search-warned ssh)
          (setf (orpheus-ssh-instance-search-warned ssh) t)
@@ -751,9 +811,12 @@ multiplexing; a login or permission failure is reported and not retried."
           (if (alist-get 'substitution capabilities) "yes" "no")
           (if (alist-get 'compound capabilities) "yes" "no")
           (if (alist-get 'cat capabilities) "cat" "sftp")
-          (if (alist-get 'ffmpeg capabilities)
-              ", disc tracks cut out of the image on the host"
-            ", disc images whole")))
+          (cond
+           ((alist-get 'ffmpeg capabilities)
+            ", disc tracks cut out of the image on the host")
+           ((and orpheus-ssh-split-images (executable-find "ffmpeg"))
+            ", disc tracks fetched by byte range and cut here")
+           (t ", disc images whole"))))
 
 (defun orpheus-ssh--probe (ssh)
   "Probe SSH's remote commands once and then call its waiting callbacks."
@@ -830,8 +893,20 @@ multiplexing; a login or permission failure is reported and not retried."
         (insert (format "%-22s %s\n" "sftp (local)"
                         (if (executable-find orpheus-ssh-sftp-program)
                             "yes" "no")))
+        (insert (format "%-22s %s\n" "ffmpeg (local)"
+                        (if (executable-find "ffmpeg") "yes" "no")))
+        (insert (format "%-22s %s\n" "ffprobe (local)"
+                        (if (executable-find "ffprobe") "yes" "no")))
         (insert (format "\nDownloads use %s.\n"
-                        (if (alist-get 'cat capabilities) "cat" "sftp")))))))
+                        (if (alist-get 'cat capabilities) "cat" "sftp")))
+        (insert
+         (format "Disc tracks: %s.\n"
+                 (cond
+                  ((alist-get 'ffmpeg capabilities)
+                   "cut on the host")
+                  ((and orpheus-ssh-split-images (executable-find "ffmpeg"))
+                   "fetched as a byte range and cut here")
+                  (t "played from a cached whole image"))))))))
 
 (defun orpheus-ssh-diagnose ()
   "Report which commands and shell features SSH's host supports."
@@ -858,21 +933,19 @@ multiplexing; a login or permission failure is reported and not retried."
 
 (defun orpheus-ssh--browse-directories (ssh dir callback)
   "Call CALLBACK with DIR's rows on SSH, or nil when ssh fails.
-A folder holding cue sheets costs one extra round trip, which is what lets a
-disc kept as one file show its tracks."
+A folder holding cue sheets reads each sheet with one cat, so a restricted
+shell with no loops still turns a disc kept as one file into its tracks."
   (orpheus-ssh--run
    ssh (orpheus-ssh--directory-command dir)
    (lambda (output)
      (cond
       ((null output) (funcall callback nil))
       ((orpheus-ssh--cue-names output)
-       (orpheus-ssh--run
-        ssh (orpheus-ssh--cue-command dir (orpheus-ssh--cue-names output))
+       (orpheus-ssh--fetch-cue-sheets
+        ssh dir (orpheus-ssh--cue-names output)
         (lambda (sheets)
           (funcall callback
-                   (orpheus-ssh--directory-items
-                    dir output (orpheus-ssh--cue-sheets sheets))))
-        t))
+                   (orpheus-ssh--directory-items dir output sheets)))))
       (t (funcall callback (orpheus-ssh--directory-items dir output)))))))
 
 ;;; Remote cover art
@@ -1065,23 +1138,496 @@ has no find, the folders are listed instead."
         (ignore-errors (delete-file path))
         (funcall callback nil)))))
 
+;;; Cutting a disc image without ffmpeg on the host
+
+;; A host that offers no ffmpeg, or whose shell has no loops or pipes, can
+;; still send only the minutes a track occupies: `dd' reads a byte range and
+;; ffmpeg here turns that range into the track.  A FLAC file's seek table maps
+;; a sample to the byte offset of the frame that starts there, so the range
+;; begins where the track does.  Without a seek table the position comes from
+;; the image's average bitrate, and the first frame's own timestamp corrects
+;; it once the range is here.
+
+(defconst orpheus-ssh--head-bytes 1048576
+  "Bytes of a remote image read to find its FLAC metadata.")
+
+(defun orpheus-ssh--flac-info (bytes)
+  "Return the FLAC facts in BYTES, or nil when it is not a FLAC header.
+The value is a plist with :rate, :samples, :meta-end, :seeks (each a
+\(SAMPLE . OFFSET) seek point) and :streaminfo."
+  (when (and (>= (length bytes) 42)
+             (equal (substring bytes 0 4) "fLaC"))
+    (let ((position 4)
+          (last nil)
+          (rate nil)
+          (samples nil)
+          (meta-end nil)
+          (streaminfo nil)
+          (seeks nil))
+      (while (and (not last) (<= (+ position 4) (length bytes)))
+        (let* ((header (substring bytes position (+ position 4)))
+               (type (logand (aref header 0) 127))
+               (length (orpheus-local--bytes-uint header 1 3))
+               (body-start (+ position 4))
+               (body-end (+ body-start length)))
+          (when (and (= type 0) (>= (length bytes) (+ body-start 34)))
+            (setq streaminfo (substring bytes body-start (+ body-start 34))
+                  rate (+ (* (aref streaminfo 10) 4096)
+                          (* (aref streaminfo 11) 16)
+                          (/ (aref streaminfo 12) 16))
+                  samples (logior (ash (logand (aref streaminfo 13) 15) 32)
+                                  (orpheus-local--bytes-uint streaminfo 14 4))))
+          (when (= type 3)
+            (let ((point body-start)
+                  (limit (min body-end (length bytes))))
+              (while (<= (+ point 18) limit)
+                (let ((sample (orpheus-local--bytes-uint bytes point 8))
+                      (offset (orpheus-local--bytes-uint bytes (+ point 8) 8)))
+                  ;; A placeholder point is all ones and names no frame.
+                  (unless (= sample (1- (ash 1 64)))
+                    (push (cons sample offset) seeks)))
+                (setq point (+ point 18)))))
+          (setq last (/= 0 (logand (aref header 0) 128))
+                position body-end)
+          (when last (setq meta-end position))))
+      (when (and rate (> rate 0) meta-end (> meta-end 0))
+        (list :rate rate
+              :samples samples
+              :meta-end meta-end
+              :seeks (sort (nreverse seeks) (lambda (a b) (< (car a) (car b))))
+              :streaminfo streaminfo)))))
+
+(defun orpheus-ssh--flac-header (streaminfo)
+  "Return a minimal FLAC header holding only STREAMINFO.
+The picture and seek table of the image point at offsets a cut range no
+longer has, and only STREAMINFO is needed to decode the frames."
+  (when (and (stringp streaminfo) (= (length streaminfo) 34))
+    (concat "fLaC" (unibyte-string 128 0 0 34) streaminfo)))
+
+(defun orpheus-ssh--split-plan (info range)
+  "Return how to fetch the track RANGE holds in the FLAC image INFO.
+The value is a plist of :start (the first byte), :length, :offset (seconds
+from the first frame to the track), :duration, :cue-start, :exact and
+:streaminfo, or nil when the range cannot be planned.  :exact is non-nil when
+the seek table placed the first frame; otherwise :offset is nil and the first
+frame's timestamp is read once the range is here."
+  (let* ((rate (plist-get info :rate))
+         (samples (plist-get info :samples))
+         (size (plist-get info :size))
+         (meta-end (plist-get info :meta-end))
+         (streaminfo (plist-get info :streaminfo))
+         (start (car range)))
+    (when (and (numberp rate) (> rate 0)
+               (numberp samples) (> samples 0)
+               (numberp size) (> size 0)
+               (numberp meta-end) (> meta-end 0)
+               (stringp streaminfo)
+               (numberp start))
+      (let* ((duration (/ (float samples) rate))
+             (end (min duration (or (cdr range) duration)))
+             (seeks (plist-get info :seeks)))
+        (when (< start end)
+          (let ((start-sample (round (* start rate)))
+                (end-sample (round (* end rate))))
+            (if seeks
+                (let ((pre nil))
+                  (dolist (point seeks)
+                    (when (<= (car point) start-sample)
+                      (setq pre point)))
+                  (setq pre (or pre (car seeks)))
+                  (let* ((post (cl-find-if (lambda (point)
+                                             (>= (car point) end-sample))
+                                           seeks))
+                         (first (+ meta-end (cdr pre)))
+                         (last (max first
+                                    (min size
+                                         (if post
+                                             (+ meta-end (cdr post))
+                                           size)))))
+                    (when (> last first)
+                      (list :start first
+                            :length (- last first)
+                            :offset (max 0 (- start
+                                               (/ (car pre) (float rate))))
+                            :duration (- end start)
+                            :cue-start start
+                            :exact t
+                            :streaminfo streaminfo))))
+              ;; No seek table: estimate from the average bitrate, keep a
+              ;; margin on both sides, and read the first frame's timestamp.
+              (let* ((audio (- size meta-end))
+                     (margin (max (* 2 1024 1024)
+                                  (round (* audio 0.03))))
+                     (first (max meta-end
+                                 (- (+ meta-end
+                                       (round (* audio (/ start duration))))
+                                    margin)))
+                     (last (min size
+                                (+ (+ meta-end
+                                      (round (* audio (/ end duration))))
+                                   margin)))
+                     (last (max first last)))
+                (when (> last first)
+                  (list :start first
+                        :length (- last first)
+                        :offset nil
+                        :duration (- end start)
+                        :cue-start start
+                        :exact nil
+                        :streaminfo streaminfo))))))))))
+
+(defun orpheus-ssh--range-command (path start length)
+  "Return the remote command that copies LENGTH bytes of PATH from START."
+  (format "dd if=%s iflag=skip_bytes,count_bytes bs=1M skip=%d count=%d"
+          (orpheus-ssh--shell-quote path) start length))
+
+(defun orpheus-ssh--head-command (path)
+  "Return the remote command that copies the first MiB of PATH."
+  (format "dd if=%s bs=1M count=1" (orpheus-ssh--shell-quote path)))
+
+(defun orpheus-ssh--region-file (path)
+  "Return the file PATH's fetched image range is assembled in."
+  (concat path ".region"))
+
+(defun orpheus-ssh--split-p (ssh uri)
+  "Return non-nil when SSH cuts URI's track here from a range of its image.
+The host must lack ffmpeg, the image must be a FLAC file, and this machine
+must have ffmpeg; `orpheus-ssh-split-images' turns the whole path off."
+  (and orpheus-ssh-split-images
+       (orpheus-track-range uri)
+       (not (orpheus-ssh--cut-p ssh uri))
+       (equal (downcase (or (file-name-extension (orpheus-track-path uri)) ""))
+              "flac")
+       (executable-find "ffmpeg")))
+
+(defun orpheus-ssh--trim-p (ssh uri)
+  "Return non-nil when SSH's copy of URI is the track, not the whole image."
+  (or (orpheus-ssh--cut-p ssh uri)
+      (orpheus-ssh--split-p ssh uri)))
+
+(defun orpheus-ssh--fetch-head (ssh path callback)
+  "Read the first MiB of PATH over SSH, then call CALLBACK with its bytes."
+  (let ((buffer (generate-new-buffer " *orpheus-ssh-head*")))
+    (with-current-buffer buffer (set-buffer-multibyte nil))
+    (condition-case nil
+        (make-process
+         :name "orpheus-ssh-head"
+         :command (append (list (orpheus-ssh--program))
+                          orpheus-ssh-extra-args
+                          (orpheus-ssh--control-args ssh)
+                          (list (orpheus-ssh--host)
+                                (orpheus-ssh--head-command path)))
+         :buffer buffer
+         :stderr (get-buffer-create "*orpheus ssh*")
+         :coding 'binary
+         :noquery t
+         :sentinel
+         (lambda (process _event)
+           (unless (process-live-p process)
+             (let ((ok (and (eq (process-status process) 'exit)
+                            (zerop (process-exit-status process))))
+                   (bytes (and (buffer-live-p buffer)
+                               (with-current-buffer buffer (buffer-string)))))
+               (when (buffer-live-p buffer) (kill-buffer buffer))
+               (funcall callback (and ok bytes))))))
+      (error
+       (when (buffer-live-p buffer) (kill-buffer buffer))
+       (funcall callback nil)))))
+
+(defun orpheus-ssh--image-info (ssh path callback)
+  "Call CALLBACK with the FLAC facts SSH reads about PATH, or nil.
+The size and the first MiB are read once per image and remembered for the
+session; a path that is not a FLAC image is remembered too, so its tracks
+fall back without another round trip."
+  (let* ((images (orpheus-ssh-instance-images ssh))
+         (cached (gethash path images)))
+    (cond
+     ((eq cached 'unsupported) (funcall callback nil))
+     (cached (funcall callback cached))
+     (t
+      (orpheus-ssh--run
+       ssh (orpheus-ssh--size-command path)
+       (lambda (output)
+         (let ((size (orpheus-ssh--parse-size output)))
+           (if (null size)
+               (progn
+                 (puthash path 'unsupported images)
+                 (funcall callback nil))
+             (orpheus-ssh--fetch-head
+              ssh path
+              (lambda (bytes)
+                (let ((info (and bytes (orpheus-ssh--flac-info bytes))))
+                  (when info
+                    (setq info (plist-put info :size size)))
+                  (puthash path (or info 'unsupported) images)
+                  (funcall callback info)))))))
+       t)))))
+
+(defun orpheus-ssh--start-split (ssh transfer)
+  "For SSH, plan TRANSFER's byte range, then fetch and cut it here."
+  (let* ((uri (orpheus-ssh-transfer-uri transfer))
+         (path (orpheus-track-path uri))
+         (range (orpheus-track-range uri)))
+    (setf (orpheus-ssh-transfer-stage transfer) 'planning)
+    (orpheus-ssh--image-info
+     ssh path
+     (lambda (info)
+       (when (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+         (let ((plan (and info (orpheus-ssh--split-plan info range))))
+           (cond
+            ((null plan)
+             (orpheus-ssh--fallback-range ssh transfer))
+            ((and (not (plist-get plan :exact))
+                  (null (executable-find "ffprobe")))
+             (orpheus-ssh--fallback-range ssh transfer))
+            (t
+             (orpheus-ssh--start-range ssh transfer plan)))))))))
+
+(defun orpheus-ssh--start-range (ssh transfer plan)
+  "Fetch the byte range PLAN names for SSH's TRANSFER into its region file."
+  (let* ((uri (orpheus-ssh-transfer-uri transfer))
+         (path (orpheus-ssh-transfer-path transfer))
+         (region (orpheus-ssh--region-file path))
+         (header (orpheus-ssh--flac-header (plist-get plan :streaminfo))))
+    (setf (orpheus-ssh-transfer-range transfer) plan
+          (orpheus-ssh-transfer-total transfer) (plist-get plan :length)
+          (orpheus-ssh-transfer-bytes transfer) 0
+          (orpheus-ssh-transfer-started transfer) (float-time)
+          (orpheus-ssh-transfer-samples transfer) nil
+          (orpheus-ssh-transfer-stage transfer) 'fetching)
+    (let ((coding-system-for-write 'binary))
+      (with-temp-file region
+        (set-buffer-multibyte nil)
+        (insert header)))
+    (condition-case nil
+        (let ((process
+               (make-process
+                :name "orpheus-ssh-range"
+                :command (append
+                          (list (orpheus-ssh--program))
+                          orpheus-ssh-extra-args
+                          (orpheus-ssh--control-args ssh)
+                          (list (orpheus-ssh--host)
+                                (orpheus-ssh--range-command
+                                 (orpheus-track-path uri)
+                                 (plist-get plan :start)
+                                 (plist-get plan :length))))
+                :buffer nil
+                :stderr (get-buffer-create "*orpheus ssh*")
+                :noquery t
+                :coding 'binary
+                :filter (lambda (_process chunk)
+                          (orpheus-ssh--range-filter ssh transfer chunk))
+                :sentinel (lambda (process _event)
+                            (orpheus-ssh--range-sentinel
+                             ssh transfer process)))))
+          (setf (orpheus-ssh-transfer-process transfer) process)
+          (push process (orpheus-ssh-instance-processes ssh)))
+      (error
+       (orpheus-ssh--fallback-range ssh transfer)))))
+
+(defun orpheus-ssh--range-filter (ssh transfer chunk)
+  "Append CHUNK, part of SSH's TRANSFER range, to its region file."
+  (when (and (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+             (not (string-empty-p chunk)))
+    (condition-case err
+        (let ((coding-system-for-write 'binary)
+              (path (orpheus-ssh--region-file
+                     (orpheus-ssh-transfer-path transfer))))
+          (write-region chunk nil path t 'silent)
+          (cl-incf (orpheus-ssh-transfer-bytes transfer) (string-bytes chunk))
+          (orpheus-ssh--note-transfer-sample transfer))
+      (error
+       (let ((process (orpheus-ssh-transfer-process transfer)))
+         (setf (orpheus-ssh-transfer-state transfer) 'failed)
+         (when (process-live-p process) (ignore-errors (delete-process process))))
+       (orpheus-ssh--fail-transfer ssh transfer (error-message-string err))))))
+
+(defun orpheus-ssh--range-sentinel (ssh transfer process)
+  "Finish SSH's TRANSFER range fetch after PROCESS exits, then cut its track."
+  (unless (process-live-p process)
+    (setf (orpheus-ssh-instance-processes ssh)
+          (delq process (orpheus-ssh-instance-processes ssh))
+          (orpheus-ssh-transfer-process transfer) nil)
+    (when (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+      (if (and (eq (process-status process) 'exit)
+               (zerop (process-exit-status process))
+               (> (orpheus-ssh-transfer-bytes transfer) 0))
+          (orpheus-ssh--cut-range ssh transfer)
+        (orpheus-ssh--fallback-range ssh transfer)))))
+
+(defun orpheus-ssh--cut-range (ssh transfer)
+  "Cut SSH's fetched region into the track TRANSFER holds."
+  (let* ((plan (orpheus-ssh-transfer-range transfer))
+         (path (orpheus-ssh-transfer-path transfer))
+         (region (orpheus-ssh--region-file path))
+         (part (orpheus-ssh--part-file path)))
+    (setf (orpheus-ssh-transfer-stage transfer) 'cutting)
+    (if (plist-get plan :exact)
+        (orpheus-ssh--cut-region ssh transfer region part
+                                 (plist-get plan :offset)
+                                 (plist-get plan :duration))
+      (orpheus-ssh--probe-region
+       region
+       (lambda (start-time)
+         (when (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+           (if (and start-time
+                    (<= start-time (plist-get plan :cue-start)))
+               (orpheus-ssh--cut-region
+                ssh transfer region part
+                (- (plist-get plan :cue-start) start-time)
+                (plist-get plan :duration))
+             (orpheus-ssh--fallback-range ssh transfer))))))))
+
+(defun orpheus-ssh--probe-region (region callback)
+  "Call CALLBACK with the time of REGION's first frame, or nil."
+  (let ((buffer (generate-new-buffer " *orpheus-ffprobe*"))
+        (done nil))
+    (cl-labels
+        ((finish (value)
+           (unless done
+             (setq done t)
+             (when (buffer-live-p buffer) (kill-buffer buffer))
+             (funcall callback value))))
+      (condition-case nil
+          (make-process
+           :name "orpheus-ssh-ffprobe"
+           :command (list (executable-find "ffprobe")
+                          "-v" "error" "-select_streams" "a:0"
+                          "-show_entries" "frame=pts_time"
+                          "-of" "csv=p=0"
+                          "-read_intervals" "%+#1" region)
+           :buffer buffer
+           :noquery t
+           :sentinel
+           (lambda (process _event)
+             (unless (process-live-p process)
+               (finish
+                (and (eq (process-status process) 'exit)
+                     (zerop (process-exit-status process))
+                     (with-current-buffer buffer
+                       (when-let* ((line (car (split-string
+                                               (buffer-string) "\n" t))))
+                         (and (string-match-p "\\`[0-9]" line)
+                              (string-to-number line)))))))))
+        (error (finish nil))))))
+
+(defun orpheus-ssh--tag-arguments (track)
+  "Return ffmpeg metadata arguments for TRACK, or nil."
+  (when track
+    (append
+     (when-let* ((title (orpheus-track-title track)))
+               (unless (string-empty-p title)
+                 (list "-metadata" (concat "title=" title))))
+     (when-let* ((artist (orpheus-track-artist track)))
+               (unless (string-empty-p artist)
+                 (list "-metadata" (concat "artist=" artist))))
+     (when-let* ((album (orpheus-track-album track)))
+               (unless (string-empty-p album)
+                 (list "-metadata" (concat "album=" album))))
+     (when-let* ((number (orpheus-track-trackno track)))
+               (when (and (numberp number) (> number 0))
+                 (list "-metadata" (format "track=%d" number)))))))
+
+(defun orpheus-ssh--region-cut-command (region part offset duration track)
+  "Return the ffmpeg command that cuts REGION into PART for TRACK.
+PART is one FLAC track, OFFSET is its start within REGION and DURATION its
+length.  The format is named because PART ends in `.part', which ffmpeg
+cannot use to pick a muxer."
+  (append
+   (list (executable-find "ffmpeg")
+         "-nostdin" "-v" "error" "-y"
+         "-i" region
+         "-ss" (format "%.6f" (max 0 offset))
+         "-t" (format "%.3f" duration)
+         "-map" "0:a:0" "-c:a" "flac")
+   (orpheus-ssh--tag-arguments track)
+   (list "-f" "flac" part)))
+
+(defun orpheus-ssh--cut-region (ssh transfer region part offset duration)
+  "Cut REGION into PART as one FLAC track for SSH, then finish TRANSFER.
+OFFSET is the track's start within REGION and DURATION its length."
+  (let ((command
+         (orpheus-ssh--region-cut-command
+          region part offset duration
+          (orpheus-local--known-track (orpheus-ssh-transfer-uri transfer)))))
+    (condition-case nil
+        (make-process
+         :name "orpheus-ssh-cut"
+         :command command
+         :buffer nil
+         :stderr (get-buffer-create "*orpheus ssh*")
+         :noquery t
+         :sentinel
+         (lambda (process _event)
+           (unless (process-live-p process)
+             (let ((ok (and (eq (process-status process) 'exit)
+                            (zerop (process-exit-status process))))
+                   (size (and (file-readable-p part)
+                              (ignore-errors
+                                (file-attribute-size (file-attributes part))))))
+               (ignore-errors (delete-file region))
+               (if (not (eq (orpheus-ssh-transfer-state transfer) 'downloading))
+                   nil
+                 (if (and ok size (> size 0))
+                     (progn
+                       (setf (orpheus-ssh-transfer-bytes transfer) size
+                             (orpheus-ssh-transfer-stage transfer) nil)
+                       (orpheus-ssh--finish-transfer ssh transfer))
+                   (when (file-readable-p part) (delete-file part))
+                   (orpheus-ssh--fallback-range ssh transfer)))))))
+      (error
+       (orpheus-ssh--fallback-range ssh transfer)))))
+
+(defun orpheus-ssh--fallback-range (ssh transfer)
+  "Give up on SSH's TRANSFER range and copy the whole image instead."
+  (let* ((uri (orpheus-ssh-transfer-uri transfer))
+         (old (orpheus-ssh-transfer-path transfer))
+         (path (orpheus-ssh--cache-file ssh uri t)))
+    (setf (orpheus-ssh-transfer-path transfer) path
+          (orpheus-ssh-transfer-stage transfer) nil
+          (orpheus-ssh-transfer-range transfer) nil
+          (orpheus-ssh-transfer-bytes transfer) 0
+          (orpheus-ssh-transfer-total transfer) nil
+          (orpheus-ssh-transfer-started transfer) (float-time)
+          (orpheus-ssh-transfer-samples transfer) nil
+          (orpheus-ssh-transfer-retried transfer) nil)
+    (dolist (file (list (orpheus-ssh--region-file old)
+                        (orpheus-ssh--part-file old)
+                        (orpheus-ssh--part-file path)))
+      (when (file-exists-p file) (ignore-errors (delete-file file))))
+    (condition-case nil
+        (progn
+          (make-directory (file-name-directory path) t)
+          (if (orpheus-ssh-instance-cat-failed ssh)
+              (orpheus-ssh--start-sftp ssh transfer)
+            (orpheus-ssh--start-cat ssh transfer))
+          (orpheus-ssh--request-size ssh transfer))
+      (error
+       (orpheus-ssh--fail-transfer ssh transfer nil)))))
+
 ;;; Downloads and their queue
 
+(defun orpheus-ssh--cache-root ()
+  "Return the directory SSH keeps downloaded tracks in, without making it."
+  (if orpheus-ssh-cache-directory
+      (expand-file-name orpheus-ssh-cache-directory)
+    (expand-file-name "ssh/" orpheus-cache-directory)))
+
 (defun orpheus-ssh--cache-directory ()
-  "Return the directory SSH keeps downloaded tracks in."
-  (let ((dir (if orpheus-ssh-cache-directory
-                 (expand-file-name orpheus-ssh-cache-directory)
-               (expand-file-name "ssh/" orpheus-cache-directory))))
+  "Return the directory SSH keeps downloaded tracks in, making it."
+  (let ((dir (orpheus-ssh--cache-root)))
     (make-directory dir t)
     dir))
 
-(defun orpheus-ssh--cache-file (ssh uri)
+(defun orpheus-ssh--cache-file (ssh uri &optional whole)
   "Return the cache path SSH keeps URI's copy at.
-A cut track is a file of its own; the whole image a host without ffmpeg sends
-is cached once, under its path, so every track of the disc shares it."
-  (let* ((dir (orpheus-ssh--cache-directory))
+A track cut on the host or here is a file of its own; a whole image is cached
+once, under its path, so every track of the disc shares it.  WHOLE asks for
+that shared copy even when URI names one track of the image."
+  (let* ((dir (orpheus-ssh--cache-root))
          (path (orpheus-track-path uri))
-         (key (if (orpheus-ssh--cut-p ssh uri) uri path))
+         (key (if (and (not whole) (orpheus-ssh--trim-p ssh uri)) uri path))
          (base (or (file-name-nondirectory (directory-file-name path))
                    "track"))
          (safe (replace-regexp-in-string "[^A-Za-z0-9._-]" "_" base)))
@@ -1096,16 +1642,25 @@ is cached once, under its path, so every track of the disc shares it."
 (defun orpheus-ssh--cached-file (ssh uri)
   "Return the local copy of URI SSH already has, or nil.
 The copy may come from an earlier session: the cache lives in
-`orpheus-cache-directory' rather than a temporary directory."
+`orpheus-cache-directory' rather than a temporary directory.  A track may also
+find the whole image cached by an earlier fallback, which it then plays from
+its own range."
   (let ((known (gethash uri (orpheus-ssh-instance-downloads ssh)))
-        (path (orpheus-ssh--cache-file ssh uri)))
+        (trim (orpheus-ssh--cache-file ssh uri))
+        (whole (orpheus-ssh--cache-file ssh uri t)))
     (cond
      ((and known (file-readable-p known)) known)
-     ((and (file-readable-p path)
+     ((and (file-readable-p trim)
            (> (or (ignore-errors
-                    (file-attribute-size (file-attributes path))) 0) 0))
-      (puthash uri path (orpheus-ssh-instance-downloads ssh))
-      path))))
+                    (file-attribute-size (file-attributes trim))) 0) 0))
+      (puthash uri trim (orpheus-ssh-instance-downloads ssh))
+      trim)
+     ((and (not (equal trim whole))
+           (file-readable-p whole)
+           (> (or (ignore-errors
+                    (file-attribute-size (file-attributes whole))) 0) 0))
+      (puthash uri whole (orpheus-ssh-instance-downloads ssh))
+      whole))))
 
 (defun orpheus-ssh--touch-file (path)
   "Make PATH the most recently used file in the cache."
@@ -1224,18 +1779,22 @@ since `started' before there are two samples to compare."
   (pcase (orpheus-ssh-transfer-state transfer)
          ('queued "queued")
          ('downloading
-          (let ((percent (orpheus-ssh--transfer-percent transfer))
-                (speed (orpheus-ssh--transfer-speed transfer))
-                (eta (orpheus-ssh--transfer-eta transfer)))
-            (format "downloading %s %s %s ETA %s"
-                    (if percent (format "%d%%" percent) "--%")
-                    (if speed
-                        (format "%s/s"
-                                (file-size-human-readable (round speed) 'iec))
-                      "0B/s")
-                    (file-size-human-readable
-                     (orpheus-ssh-transfer-bytes transfer) 'iec)
-                    (if eta (orpheus-format-time eta) "--:--"))))
+          (if (eq (orpheus-ssh-transfer-stage transfer) 'cutting)
+              (format "cutting %s locally"
+                      (file-size-human-readable
+                       (orpheus-ssh-transfer-bytes transfer) 'iec))
+            (let ((percent (orpheus-ssh--transfer-percent transfer))
+                  (speed (orpheus-ssh--transfer-speed transfer))
+                  (eta (orpheus-ssh--transfer-eta transfer)))
+              (format "downloading %s %s %s ETA %s"
+                      (if percent (format "%d%%" percent) "--%")
+                      (if speed
+                          (format "%s/s"
+                                  (file-size-human-readable (round speed) 'iec))
+                        "0B/s")
+                      (file-size-human-readable
+                       (orpheus-ssh-transfer-bytes transfer) 'iec)
+                      (if eta (orpheus-format-time eta) "--:--")))))
          ('done (format "ready %s"
                         (file-size-human-readable
                          (orpheus-ssh-transfer-bytes transfer))))
@@ -1283,21 +1842,30 @@ since `started' before there are two samples to compare."
              (setq slots (1- slots)))))
 
 (defun orpheus-ssh--clear-transfer-work (transfer)
-  "Delete TRANSFER's sftp batch file and stop its size poll."
+  "Delete TRANSFER's sftp batch and fetched range, and stop its size poll."
   (let ((timer (orpheus-ssh-transfer-timer transfer))
-        (batch (orpheus-ssh-transfer-batch transfer)))
+        (batch (orpheus-ssh-transfer-batch transfer))
+        (path (orpheus-ssh-transfer-path transfer)))
     (when (timerp timer) (cancel-timer timer))
     (when (and batch (file-exists-p batch))
       (ignore-errors (delete-file batch)))
+    (when path
+      (let ((region (orpheus-ssh--region-file path)))
+        (when (file-exists-p region) (ignore-errors (delete-file region)))))
     (setf (orpheus-ssh-transfer-timer transfer) nil
           (orpheus-ssh-transfer-batch transfer) nil)))
 
 (defun orpheus-ssh--start-transfer (ssh transfer)
-  "Start fetching TRANSFER for SSH."
+  "Start fetching TRANSFER for SSH.
+A track of a disc is a byte range cut here when the host has no ffmpeg, or
+cut on the host when it has one; a whole file is copied with cat, or sftp
+when the shell cannot run it."
   (let* ((uri (orpheus-ssh-transfer-uri transfer))
          (path (orpheus-ssh--cache-file ssh uri)))
     (setf (orpheus-ssh-transfer-path transfer) path
           (orpheus-ssh-transfer-state transfer) 'downloading
+          (orpheus-ssh-transfer-stage transfer) nil
+          (orpheus-ssh-transfer-range transfer) nil
           (orpheus-ssh-transfer-bytes transfer) 0
           (orpheus-ssh-transfer-total transfer) nil
           (orpheus-ssh-transfer-started transfer) (float-time)
@@ -1306,13 +1874,18 @@ since `started' before there are two samples to compare."
     (condition-case err
         (progn
           (make-directory (file-name-directory path) t)
-          (if (orpheus-ssh-instance-cat-failed ssh)
-              (orpheus-ssh--start-sftp ssh transfer)
-            (orpheus-ssh--start-cat ssh transfer))
-          ;; A track cut out on the host has no size to ask for.
-          (when (and (eq (orpheus-ssh-transfer-state transfer) 'downloading)
-                     (not (orpheus-ssh--cut-p ssh uri)))
-            (orpheus-ssh--request-size ssh transfer)))
+          (cond
+           ((orpheus-ssh--split-p ssh uri)
+            (orpheus-ssh--start-split ssh transfer))
+           ((orpheus-ssh-instance-cat-failed ssh)
+            (orpheus-ssh--start-sftp ssh transfer)
+            (orpheus-ssh--request-size ssh transfer))
+           (t
+            (orpheus-ssh--start-cat ssh transfer)
+            ;; A track cut on the host has no size to ask for.
+            (when (and (eq (orpheus-ssh-transfer-state transfer) 'downloading)
+                       (not (orpheus-ssh--cut-p ssh uri)))
+              (orpheus-ssh--request-size ssh transfer)))))
       (error
        (orpheus-ssh--clear-transfer-work transfer)
        (orpheus-ssh--fail-transfer
@@ -1368,7 +1941,7 @@ since `started' before there are two samples to compare."
           (setf (orpheus-ssh-transfer-batch transfer) batch)
           (with-temp-file path)
           (with-temp-file batch
-            (insert (orpheus-ssh--sftp-batch uri path)))
+            (insert (orpheus-ssh--sftp-batch (orpheus-track-path uri) path)))
           (let ((process
                  (make-process
                   :name "orpheus-ssh-sftp"
@@ -1486,7 +2059,9 @@ since `started' before there are two samples to compare."
         (callbacks (orpheus-ssh-transfer-callbacks transfer)))
     (setf (orpheus-ssh-transfer-state transfer) 'failed
           (orpheus-ssh-transfer-callbacks transfer) nil)
-    (dolist (file (list path (and path (orpheus-ssh--part-file path))))
+    (dolist (file (list path
+                        (and path (orpheus-ssh--part-file path))
+                        (and path (orpheus-ssh--region-file path))))
       (when (and file (file-readable-p file))
         (ignore-errors (delete-file file))))
     (dolist (callback callbacks)
@@ -1572,7 +2147,9 @@ user's request and never becomes the current playing file."
           (ignore-errors (funcall callback nil))))
       (setf (orpheus-ssh-instance-transfers ssh)
             (delq transfer (orpheus-ssh-instance-transfers ssh))))
-    (dolist (file (list path (and path (orpheus-ssh--part-file path))))
+    (dolist (file (list path
+                        (and path (orpheus-ssh--part-file path))
+                        (and path (orpheus-ssh--region-file path))))
       (when (and file (file-readable-p file))
         (ignore-errors (delete-file file))))
     (remhash uri (orpheus-ssh-instance-downloads ssh))
@@ -1616,14 +2193,19 @@ fetched again."
 
 (defun orpheus-ssh--played-path (ssh uri path)
   "Return what mpv should load for URI, a copy of it at PATH on SSH.
-A track cut out on the host is already only its own minutes.  A whole image,
-which a host without ffmpeg sends, is played from the range URI carries."
-  (if (orpheus-ssh--cut-p ssh uri)
-      path
+A track cut on the host, or cut here from a byte range, is already only its
+own minutes.  A whole image, which a fallback sends, is played from the range
+URI carries."
+  (cond
+   ((orpheus-ssh--cut-p ssh uri) path)
+   ((and (orpheus-ssh--split-p ssh uri)
+         (equal path (orpheus-ssh--cache-file ssh uri)))
+    path)
+   (t
     (let ((range (orpheus-track-range uri)))
       (if range
           (orpheus-track-range-uri path (car range) (cdr range))
-        path))))
+        path)))))
 
 (cl-defmethod orpheus-local--resolve-uri ((ssh orpheus-ssh) uri callback)
   "Download URI from SSH to a local copy, then call CALLBACK with its path."
@@ -1686,11 +2268,15 @@ which a host without ffmpeg sends, is played from the range URI carries."
   (orpheus-ssh--cancel ssh uri))
 
 (cl-defmethod orpheus-backend-album-art ((ssh orpheus-ssh) track callback)
-  "Find cover art for TRACK in SSH's copy or remote folder, then call CALLBACK."
+  "Find cover art for TRACK in SSH's copy or remote folder, then call CALLBACK.
+A cut track lives in the cache, whose folder holds every other album's cover,
+so only a whole image is asked for the art inside it; a cut one is looked up
+in its remote folder instead."
   (let* ((uri (orpheus-track-uri track))
          (file (and uri (gethash uri (orpheus-ssh-instance-downloads ssh))))
          (dir (and uri (file-name-directory (orpheus-track-path uri)))))
-    (if (and file (file-readable-p file))
+    (if (and (not (orpheus-ssh--trim-p ssh uri))
+             file (file-readable-p file))
         (orpheus-local--album-art-file
          file
          (lambda (art)

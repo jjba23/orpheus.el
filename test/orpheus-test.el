@@ -152,6 +152,31 @@ TRACKS is a list of (SAMPLE-OFFSET . NUMBER), lead-out track included."
             (unibyte-string 133) (orpheus-test--u24-bytes (length cuesheet))
             cuesheet)))
 
+(defun orpheus-test--flac-info-bytes (rate samples seeks)
+  "Return a FLAC header of RATE and SAMPLES with SEEKS as (SAMPLE . OFFSET).
+The header ends with an empty last metadata block, as a real file does."
+  (let* ((stream (concat
+                  (make-string 10 0)
+                  (let ((bits (logior (ash rate 44) (ash 1 41) (ash 15 36)
+                                      samples)))
+                    (apply #'unibyte-string
+                           (cl-loop for shift from 56 downto 0 by 8
+                                    collect (logand (ash bits (- shift)) 255))))
+                  (make-string 16 0)))
+         (table (mapconcat
+                 (lambda (seek)
+                   (concat (orpheus-test--u64-bytes (car seek))
+                           (orpheus-test--u64-bytes (cdr seek))
+                           (unibyte-string 16 0)))
+                 seeks "")))
+    (concat "fLaC"
+            (unibyte-string 0) (orpheus-test--u24-bytes (length stream)) stream
+            (if seeks
+                (concat (unibyte-string 3)
+                        (orpheus-test--u24-bytes (length table)) table)
+              "")
+            (unibyte-string 132 0 0 0))))
+
 (defun orpheus-test--wait (predicate &optional timeout)
   "Wait until PREDICATE returns non-nil, or TIMEOUT seconds pass.
 Return PREDICATE's last value, so a test can assert on it."
@@ -925,6 +950,98 @@ and the password with it."
   (should (equal (orpheus-local--range-options '(12.5 . 214.25))
                  "start=12.500,end=214.250"))
   (should (equal (orpheus-local--range-options '(30.0)) "start=30.000")))
+
+(ert-deftest orpheus-test/local-cue-title-survives-the-image ()
+  "A track of a disc keeps the cue title when mpv reports the album's tags."
+  (let ((local (make-orpheus-local :name 'local)))
+    (setf (orpheus-local-instance-track local)
+          (orpheus-track-create :uri "/m/disc.flac#start=10.000&end=20.000"
+                                :title "Song" :artist "Band"))
+    (orpheus-local--set-metadata
+     local nil '((title . "Album") (artist . "Various")
+                 (album . "Record")))
+    (let ((track (orpheus-local-instance-track local)))
+      (should (equal (orpheus-track-title track) "Song"))
+      (should (equal (orpheus-track-artist track) "Band"))
+      (should (equal (orpheus-track-album track) "Record")))
+    (should (orpheus-local-instance-tags-loaded local))))
+
+(ert-deftest orpheus-test/local-queue-names-a-cue-track ()
+  "A queued track of a disc is named by its cue sheet, not the image."
+  (let* ((local (make-orpheus-local :name 'local))
+         (uri "/m/disc.flac#start=10.000&end=20.000"))
+    (orpheus-local--remember-track
+     (orpheus-track-create :uri uri :title "Song" :artist "Band"))
+    (setf (orpheus-local-instance-queue local) (list uri))
+    (let ((item (car (orpheus-local--queue-items local))))
+      (should (equal (orpheus-local--uri-name uri) "Song"))
+      (should (string-match-p "Song" (orpheus-item-label item))))))
+
+(ert-deftest orpheus-test/local-search-finds-a-cue-track-title ()
+  "A cue sheet's song title finds the track, not only the image path."
+  (let* ((dir (make-temp-file "orpheus-cue-search" t))
+         (image (expand-file-name "disc.flac" dir))
+         (cue (expand-file-name "disc.cue" dir)))
+    (unwind-protect
+        (progn
+          (write-region "" nil image nil 'silent)
+          (write-region
+           (concat "PERFORMER \"Band\"\nTITLE \"Record\"\n"
+                   "TRACK 01 AUDIO\n  TITLE \"First\"\n  INDEX 01 00:00:00\n"
+                   "TRACK 02 AUDIO\n  TITLE \"Second\"\n  INDEX 01 00:10:00\n")
+           nil cue nil 'silent)
+          (let ((items (orpheus-local--search-items
+                        dir "Second" (concat image "\n" cue "\n"))))
+            (should (equal (mapcar #'orpheus-item-label items)
+                           '("02  Second")))
+            (should (equal (alist-get 'uri (orpheus-item-data (car items)))
+                           (concat image "#start=10.000")))
+            (should (equal (orpheus-track-album
+                            (alist-get 'track (orpheus-item-data (car items))))
+                           "Record")))
+          ;; The image name still finds the whole disc.
+          (should (= 2 (length (orpheus-local--search-items
+                                dir "disc.flac"
+                                (concat image "\n" cue "\n"))))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-search-walks-the-tree-without-find ()
+  "A host without GNU find is searched by walking the tree in Emacs."
+  (let* ((dir (make-temp-file "orpheus-search" t))
+         (file (expand-file-name "Song.mp3" dir))
+         (orpheus-local-directory dir)
+         (items 'waiting))
+    (unwind-protect
+        (progn
+          (write-region "" nil file nil 'silent)
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (_program) nil)))
+            (orpheus-local--search "Song" (lambda (rows) (setq items rows))))
+          (should (equal (mapcar #'orpheus-item-label items) '("Song.mp3"))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-extensions-cover-audio-and-video ()
+  "The files pane accepts the common audio and video containers."
+  (dolist (extension '("flac" "m4a" "ape" "wv" "dsf"
+                       "mp4" "mkv" "webm" "avi" "m2ts"))
+    (should (member extension orpheus-local-extensions))))
+
+(ert-deftest orpheus-test/local-poll-reads-tags-once ()
+  "A tick asks for the position and the modes, not the tags again."
+  (let ((local (make-orpheus-local :name 'local))
+        (commands nil))
+    (setf (orpheus-local-instance-tags-loaded local) t
+          (orpheus-local-instance-duration-loaded local) t
+          (orpheus-status-state (orpheus-local-instance-status local)) 'play)
+    (cl-letf (((symbol-function 'orpheus-local--send)
+               (lambda (_local command &optional _callback)
+                 (push (cadr command) commands))))
+      (orpheus-local--poll local))
+    (should (member "time-pos" commands))
+    (should (member "pause" commands))
+    (should (member "volume" commands))
+    (should-not (member "metadata" commands))
+    (should-not (member "duration" commands))))
 
 (ert-deftest orpheus-test/equalizer-filter ()
   "The filter string names each non-zero band and nothing else."
@@ -2595,8 +2712,22 @@ Otherwise the list below it moves up and down every time a cover arrives."
 
 ;;; The mode line
 
+(ert-deftest orpheus-test/search-matches-a-cue-title ()
+  "A row's track title is searchable even when the label only shows a number."
+  (let ((item (orpheus-item-create
+               :label "02  Second"
+               :data (list (cons 'uri "/m/disc.flac#start=10.000")
+                           (cons 'track (orpheus-track-create
+                                         :title "Second" :artist "Band"
+                                         :album "Record"))))))
+    (should (orpheus-item-search-match-p item "second"))
+    (should (orpheus-item-search-match-p item "band"))
+    (should (orpheus-item-search-match-p item "record"))
+    (should-not (orpheus-item-search-match-p item "third"))))
+
 (ert-deftest orpheus-test/mode-line-controls ()
   "The track in the mode line answers clicks and survives silence."
+  (should (lookup-key orpheus-mode-line-menu [detach]))
   (should (eq (lookup-key orpheus-mode-line-map [mode-line mouse-1]) 'orpheus))
   (should (eq (lookup-key orpheus-mode-line-map [mode-line mouse-2])
               'orpheus-play-pause))
@@ -2606,17 +2737,54 @@ Otherwise the list below it moves up and down every time a cover arrives."
         (orpheus-track-current
          (orpheus-track-create :title "Song" :artist "Band"))
         (orpheus-ui-plain-ascii t))
-    (let ((string (orpheus-mode-line-string)))
-      (should (string-match-p "Band – Song" string))
-      (should (eq (get-text-property 0 'local-map string)
+    (let* ((string (orpheus-mode-line-string))
+           (label (string-match "Band – Song" string)))
+      (should label)
+      (should (eq (get-text-property label 'local-map string)
                   orpheus-mode-line-map))
-      (should (get-text-property 0 'help-echo string))))
+      (should (get-text-property label 'help-echo string))
+      (should (eq (lookup-key (get-text-property 1 'local-map string)
+                              [mode-line mouse-1])
+                  'orpheus-previous))))
   ;; With nothing playing there is still something to click.
   (let ((orpheus-status-current nil)
         (orpheus-track-current nil)
         (orpheus-ui-plain-ascii t))
     (should (stringp (orpheus-mode-line-string)))))
 
+
+(ert-deftest orpheus-test/ui-detach-button-is-clickable ()
+  "The tab row offers a detach button."
+  (should (eq (lookup-key orpheus-ui-detach-map [mouse-1]) 'orpheus-detach))
+  (let ((orpheus-ui-plain-ascii t))
+    (should (string-match-p "detach" (orpheus-ui--tab-string)))))
+
+(ert-deftest orpheus-test/detach-opens-a-new-frame ()
+  "Detaching selects a new frame and shows the player buffer there."
+  (let* ((name (generate-new-buffer-name "*orpheus-detach-test*"))
+         (orpheus-ui-buffer-name name)
+         (frame nil)
+         (selected nil)
+         (buffer (get-buffer-create name)))
+    (unwind-protect
+        (progn
+          (set-window-buffer (selected-window) buffer)
+          (cl-letf (((symbol-function 'display-graphic-p)
+                     (lambda (&optional _frame) t))
+                    ((symbol-function 'orpheus--ensure-backend) #'ignore)
+                    ((symbol-function 'orpheus-start) #'ignore)
+                    ((symbol-function 'orpheus-connect) #'ignore)
+                    ((symbol-function 'orpheus-ui-open) #'ignore)
+                    ((symbol-function 'make-frame)
+                     (lambda (&optional _parameters)
+                       (setq frame 'new-frame) 'new-frame))
+                    ((symbol-function 'select-frame)
+                     (lambda (new &optional _force) (setq selected new))))
+            (orpheus-detach))
+          (should (eq frame 'new-frame))
+          (should (eq selected 'new-frame))
+          (should (eq (window-buffer (selected-window)) buffer)))
+      (when (get-buffer name) (kill-buffer name)))))
 
 ;;; The visualizer redraws a frame once
 
@@ -3012,15 +3180,20 @@ directory, so a test never writes to the user's own cache."
           ;; The copy is the track already, so nothing is left to seek.
           (should (equal (orpheus-ssh--played-path ssh uri "/cache/track.mka")
                          "/cache/track.mka"))
-          ;; Without ffmpeg the whole image is played from the range.
+          ;; Without ffmpeg on the host the image is played from the range,
+          ;; unless a track can be cut here, which is then the whole file.
           (setf (orpheus-ssh-instance-capabilities ssh) nil)
-          (should (equal (orpheus-ssh--played-path ssh uri "/cache/disc.flac")
-                         "/cache/disc.flac#start=10.000&end=20.000")))
+          (let ((orpheus-ssh-split-images nil))
+            (should (equal (orpheus-ssh--played-path
+                            ssh uri "/cache/disc.flac")
+                           "/cache/disc.flac#start=10.000&end=20.000"))))
       (orpheus-backend-disconnect ssh))))
 
 (ert-deftest orpheus-test/ssh-whole-image-is-cached-once ()
-  "Every track of a disc reuses the one copy taken without ffmpeg."
+  "Every track of a disc reuses the one copy taken without ffmpeg.
+A track cut on the host or here is cached separately, because it is the track."
   (let ((orpheus-cache-directory (make-temp-file "orpheus-cache" t))
+        (orpheus-ssh-split-images nil)
         (ssh (orpheus-make-backend 'ssh))
         (first "d/disc.flac#start=0.000&end=10.000")
         (second "d/disc.flac#start=10.000&end=20.000"))
@@ -3035,22 +3208,79 @@ directory, so a test never writes to the user's own cache."
       (delete-directory orpheus-cache-directory t))))
 
 (ert-deftest orpheus-test/ssh-cue-sheets-turn-a-disc-into-rows ()
-  "One batched cat gives a folder's discs each of their tracks."
-  (let* ((output (concat "@@FILE@@Music/Disc/disc.cue\n"
-                         "TRACK 01 AUDIO\n  TITLE \"First\"\n"
-                         "  INDEX 01 00:00:00\n"
-                         "TRACK 02 AUDIO\n  TITLE \"Second\"\n"
-                         "  INDEX 01 00:10:00\n"))
+  "A folder's cue sheet gives its disc one row per track."
+  (let* ((sheets (list (cons "Music/Disc/disc.cue"
+                             (concat "TRACK 01 AUDIO\n  TITLE \"First\"\n"
+                                     "  INDEX 01 00:00:00\n"
+                                     "TRACK 02 AUDIO\n  TITLE \"Second\"\n"
+                                     "  INDEX 01 00:10:00\n"))))
          (listing "disc.cue\ndisc.flac\nnotes.txt\n")
-         (sheets (orpheus-ssh--cue-sheets output))
          (items (orpheus-ssh--directory-items "Music/Disc" listing sheets)))
     (should (equal (orpheus-ssh--cue-names listing) '("disc.cue")))
-    (should (= 1 (length sheets)))
     (should (= 2 (length items)))
     (should (equal (orpheus-item-label (nth 1 items)) "02  Second"))
     (should (equal (alist-get 'uri (orpheus-item-data (nth 1 items)))
                    "Music/Disc/disc.flac#start=10.000"))
-    (should (equal (orpheus-item-detail (nth 0 items)) "0:10"))))
+    (should (equal (orpheus-item-detail (nth 0 items)) "0:10"))
+    (should (orpheus-local--known-track
+             (alist-get 'uri (orpheus-item-data (nth 1 items)))))))
+
+(ert-deftest orpheus-test/ssh-reads-each-cue-sheet-with-one-cat ()
+  "A shell without loops still lists a disc's tracks, one cat per sheet."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (items 'waiting))
+       (unwind-protect
+           (progn
+             (orpheus-backend-browse ssh 'directories '("Music/Album")
+                                     (lambda (result) (setq items result)))
+             (should (orpheus-test--wait
+                      (lambda () (not (eq items 'waiting))) 20))
+             (should (equal (mapcar #'orpheus-item-label items)
+                            '("01  First" "02  Second")))
+             (should (orpheus-local--known-track
+                      (alist-get 'uri (orpheus-item-data (car items))))))
+         (orpheus-backend-disconnect ssh))))
+   "cue"))
+
+(ert-deftest orpheus-test/ssh-search-finds-a-cue-track-title ()
+  "A song title in a cue sheet is found without downloading the image."
+  (orpheus-test--with-fake-ssh
+   (lambda ()
+     (let ((ssh (orpheus-make-backend 'ssh))
+           (items 'waiting))
+       (unwind-protect
+           (progn
+             (orpheus-ssh--search ssh "Second"
+                                  (lambda (rows) (setq items rows)))
+             (should (orpheus-test--wait
+                      (lambda () (not (eq items 'waiting))) 20))
+             (should (equal (mapcar #'orpheus-item-label items)
+                            '("02  Second")))
+             (should (equal (alist-get 'uri (orpheus-item-data (car items)))
+                            "Music/Disc/disc.flac#start=10.000")))
+         (orpheus-backend-disconnect ssh))))
+   "cue-search"))
+
+(ert-deftest orpheus-test/ssh-split-track-is-played-as-cut ()
+  "A track cut here from a range is played as the file it now is."
+  (skip-unless (executable-find "ffmpeg"))
+  (let ((orpheus-cache-directory (make-temp-file "orpheus-cache" t))
+        (ssh (orpheus-make-backend 'ssh))
+        (uri "Music/Disc/disc.flac#start=10.000&end=20.000"))
+    (unwind-protect
+        (progn
+          (should (orpheus-ssh--split-p ssh uri))
+          (should (equal (orpheus-ssh--played-path
+                          ssh uri (orpheus-ssh--cache-file ssh uri))
+                         (orpheus-ssh--cache-file ssh uri)))
+          (should (equal (orpheus-ssh--played-path
+                          ssh uri (orpheus-ssh--cache-file ssh uri t))
+                         (concat (orpheus-ssh--cache-file ssh uri t)
+                                 "#start=10.000&end=20.000"))))
+      (orpheus-backend-disconnect ssh)
+      (delete-directory orpheus-cache-directory t))))
 
 (ert-deftest orpheus-test/ssh-size-probe-reads-ls ()
   "The optional size probe is a simple ls, and its size field is read."
@@ -3087,6 +3317,78 @@ directory, so a test never writes to the user's own cache."
       (orpheus-ssh--request-size ssh transfer))
     (should (= calls 1))
     (should (orpheus-ssh-instance-size-failed ssh))))
+
+(ert-deftest orpheus-test/ssh-flac-info-reads-the-seek-table ()
+  "A FLAC header's rate, length and seek points are read without ffmpeg."
+  (let* ((bytes (orpheus-test--flac-info-bytes
+                 44100 4410000 '((0 . 0) (44100 . 5000) (88200 . 9000))))
+         (info (orpheus-ssh--flac-info bytes)))
+    (should (= 44100 (plist-get info :rate)))
+    (should (= 4410000 (plist-get info :samples)))
+    (should (> (plist-get info :meta-end) 0))
+    (should (equal (plist-get info :seeks)
+                   '((0 . 0) (44100 . 5000) (88200 . 9000))))
+    (should (= 42 (length (orpheus-ssh--flac-header
+                           (plist-get info :streaminfo)))))
+    (should-not (orpheus-ssh--flac-info "not a flac"))))
+
+(ert-deftest orpheus-test/ssh-split-plan-uses-the-nearest-seek-point ()
+  "A track's range starts at the seek point before it and ends after it."
+  (let* ((info (plist-put
+                (orpheus-ssh--flac-info
+                 (orpheus-test--flac-info-bytes
+                  44100 4410000 '((0 . 0) (44100 . 5000) (88200 . 9000))))
+                :size 100000))
+         (plan (orpheus-ssh--split-plan info '(1.5 . 2.0))))
+    (should plan)
+    (should (plist-get plan :exact))
+    (should (= (plist-get plan :start) (+ (plist-get info :meta-end) 5000)))
+    (should (= (plist-get plan :length) 4000))
+    (should (< (abs (- (plist-get plan :offset) 0.5)) 0.001))
+    (should (= (plist-get plan :duration) 0.5))
+    (should (equal (plist-get plan :streaminfo)
+                   (plist-get info :streaminfo)))))
+
+(ert-deftest orpheus-test/ssh-split-plan-estimates-without-a-seek-table ()
+  "Without a seek table the range keeps a margin and is corrected later."
+  (let* ((info (list :rate 44100 :samples 4410000 :meta-end 1000
+                     :seeks nil :size 1000000
+                     :streaminfo (make-string 34 0)))
+         (plan (orpheus-ssh--split-plan info '(10.0 . 20.0))))
+    (should plan)
+    (should-not (plist-get plan :exact))
+    (should-not (plist-get plan :offset))
+    (should (> (plist-get plan :length) 44000))
+    (should (= (plist-get plan :duration) 10.0))))
+
+(ert-deftest orpheus-test/ssh-split-plan-runs-to-the-end ()
+  "A last track with no end runs to the end of the image."
+  (let* ((info (plist-put
+                (orpheus-ssh--flac-info
+                 (orpheus-test--flac-info-bytes
+                  44100 4410000 '((0 . 0) (44100 . 5000) (88200 . 9000))))
+                :size 100000))
+         (plan (orpheus-ssh--split-plan info '(90.0))))
+    (should plan)
+    (should (= (plist-get plan :duration) 10.0))
+    (should (= (plist-get plan :cue-start) 90.0))))
+
+(ert-deftest orpheus-test/ssh-range-command-reads-only-the-track ()
+  "The remote dd skips to the byte and stops at the length."
+  (should (equal (orpheus-ssh--range-command "Music/Disc/disc.flac" 100 200)
+                 (concat "dd if='Music/Disc/disc.flac' "
+                         "iflag=skip_bytes,count_bytes bs=1M "
+                         "skip=100 count=200"))))
+
+(ert-deftest orpheus-test/ssh-cut-command-names-the-format ()
+  "ffmpeg needs the format because the part file has no .flac suffix."
+  (let ((command (orpheus-ssh--region-cut-command
+                  "region.flac" "track.flac.part" 4.054422 477.5
+                  (orpheus-track-create :title "Song" :artist "Band"
+                                        :album "Record" :trackno 3))))
+    (should (equal (last command 3) '("-f" "flac" "track.flac.part")))
+    (should (member "title=Song" command))
+    (should (member "track=3" command))))
 
 (ert-deftest orpheus-test/ssh-download-rows-show-their-state ()
   "A transfer becomes a row with its state, size and URI."

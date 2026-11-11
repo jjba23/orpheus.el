@@ -546,6 +546,52 @@ This needs a backend that plays paths, which is `local'."
   "Columns the track is given in the mode line."
   :type 'integer :group 'orpheus)
 
+(defcustom orpheus-mode-line-controls t
+  "Whether the mode line shows transport buttons beside the track.
+The buttons are previous, play or pause, next and stop, and each runs its
+command on a click.  Turn it off to show only the status glyph and the track."
+  :type 'boolean :group 'orpheus)
+
+(defvar orpheus-mode-line--control-maps nil
+  "Keymaps for the mode-line transport buttons, one per command.")
+
+(defun orpheus-mode-line--control-map (command)
+  "Return the mouse map for a mode-line button that runs COMMAND."
+  (or (cdr (assq command orpheus-mode-line--control-maps))
+      (let ((map (make-sparse-keymap)))
+        (define-key map [mode-line mouse-1] command)
+        (push (cons command map) orpheus-mode-line--control-maps)
+        map)))
+
+(defun orpheus-mode-line--control (glyph command help)
+  "Return GLYPH as a mode-line button that runs COMMAND, with HELP as tooltip."
+  (propertize glyph
+              'face 'orpheus-title-face
+              'help-echo help
+              'local-map (orpheus-mode-line--control-map command)
+              'mouse-face 'mode-line-highlight))
+
+(defun orpheus-mode-line--controls ()
+  "Return the previous, play or pause, next and stop buttons."
+  (let ((plain orpheus-ui-plain-ascii)
+        (playing (eq (and orpheus-status-current
+                          (orpheus-status-state orpheus-status-current))
+                     'play)))
+    (concat
+     (orpheus-mode-line--control
+      (if plain "<<" "⏮") #'orpheus-previous "mouse-1: previous track")
+     " "
+     (orpheus-mode-line--control
+      (if plain (if playing "||" ">")
+        (orpheus-status-glyph orpheus-status-current))
+      #'orpheus-play-pause "mouse-1: play or pause")
+     " "
+     (orpheus-mode-line--control
+      (if plain ">>" "⏭") #'orpheus-next "mouse-1: next track")
+     " "
+     (orpheus-mode-line--control
+      (if plain "[]" "■") #'orpheus-stop "mouse-1: stop"))))
+
 (defvar orpheus-mode-line-menu
   (let ((map (make-sparse-keymap "Orpheus")))
     (define-key-after map [play-pause]
@@ -554,13 +600,31 @@ This needs a backend that plays paths, which is `local'."
     (define-key-after map [previous]
       '(menu-item "Previous track" orpheus-previous))
     (define-key-after map [stop] '(menu-item "Stop" orpheus-stop))
+    (define-key-after map [seek-backward]
+      '(menu-item "Seek backward" orpheus-seek-backward))
+    (define-key-after map [seek-forward]
+      '(menu-item "Seek forward" orpheus-seek-forward))
+    (define-key-after map [repeat]
+      '(menu-item "Repeat mode" orpheus-cycle-repeat))
+    (define-key-after map [random]
+      '(menu-item "Shuffle" orpheus-toggle-random))
+    (define-key-after map [single]
+      '(menu-item "Single track" orpheus-toggle-single))
+    (define-key-after map [consume]
+      '(menu-item "Consume" orpheus-toggle-consume))
     (define-key-after map [volume-up]
       '(menu-item "Volume up" orpheus-volume-up))
     (define-key-after map [volume-down]
       '(menu-item "Volume down" orpheus-volume-down))
     (define-key-after map [open] '(menu-item "Open the player" orpheus))
+    (define-key-after map [detach]
+      '(menu-item "Detach to a new frame" orpheus-detach))
+    (define-key-after map [equalizer]
+      '(menu-item "Equalizer" orpheus-equalizer-menu))
+    (define-key-after map [lyrics] '(menu-item "Lyrics" orpheus-lyrics-open))
     (define-key-after map [visualizer]
       '(menu-item "Visualizer" orpheus-visualizer))
+    (define-key-after map [quit] '(menu-item "Quit orpheus" orpheus-quit))
     map)
   "Menu opened by a right click on the mode-line track.")
 
@@ -578,23 +642,29 @@ This needs a backend that plays paths, which is `local'."
   (popup-menu orpheus-mode-line-menu (event-start event)))
 
 (defun orpheus-mode-line-string ()
-  "Return the current track for the mode line, or nil.
-The string answers the mouse, so the track that is shown can be played,
-paused and opened without leaving the buffer it is shown in."
-  (let ((label (if (and orpheus-track-current
-                        (not (string-empty-p
-                              (orpheus-track-label orpheus-track-current))))
-                   (orpheus-ui--elide
-                    (orpheus-track-label orpheus-track-current)
-                    orpheus-mode-line-width)
-                 "orpheus")))
-    (propertize
-     (concat " " (orpheus-status-glyph orpheus-status-current) " " label)
-     'face 'orpheus-title-face
-     'help-echo
-     "mouse-1: open orpheus, mouse-2: play or pause, mouse-3: more"
-     'local-map orpheus-mode-line-map
-     'mouse-face 'mode-line-highlight)))
+  "Return the current track and controls for the mode line, or nil.
+The track answers the mouse, so it can be played, paused and opened without
+leaving the buffer it is shown in; the transport buttons do the same, one
+click each."
+  (let* ((label (if (and orpheus-track-current
+                         (not (string-empty-p
+                               (orpheus-track-label orpheus-track-current))))
+                    (orpheus-ui--elide
+                     (orpheus-track-label orpheus-track-current)
+                     orpheus-mode-line-width)
+                  "orpheus"))
+         (label (propertize
+                 label
+                 'face 'orpheus-title-face
+                 'help-echo
+                 "mouse-1: open orpheus, mouse-2: play or pause, mouse-3: more"
+                 'local-map orpheus-mode-line-map
+                 'mouse-face 'mode-line-highlight)))
+    (concat " "
+            (if orpheus-mode-line-controls
+                (concat (orpheus-mode-line--controls) " ")
+              (concat (orpheus-status-glyph orpheus-status-current) " "))
+            label)))
 
 (defconst orpheus-mode-line-entry '(:eval (orpheus-mode-line-string))
   "Entry `orpheus-mode-line-mode' keeps in `global-mode-string'.")
@@ -602,7 +672,8 @@ paused and opened without leaving the buffer it is shown in."
 (define-minor-mode orpheus-mode-line-mode
   "Show what orpheus is playing in the mode line.
 Clicking the track opens the player, plays or pauses, or opens a menu of the
-transport commands, so the mode line is a control and not only a label."
+transport commands, so the mode line is a control and not only a label.  The
+buttons beside the track do the same on a click."
   :global t
   :group 'orpheus
   (if orpheus-mode-line-mode
@@ -610,6 +681,25 @@ transport commands, so the mode line is a control and not only a label."
     (setq global-mode-string
           (delete orpheus-mode-line-entry global-mode-string)))
   (force-mode-line-update t))
+
+(defun orpheus-detach ()
+  "Show the player in a new graphical frame and leave the old window.
+The frame is an ordinary Emacs frame: the window manager moves and closes it
+like any other.  A terminal has no new frame to give, so the command says so
+rather than silently splitting the window."
+  (interactive)
+  (unless (display-graphic-p)
+    (user-error "Detaching needs a graphical frame"))
+  (orpheus--ensure-backend)
+  (orpheus-start)
+  (orpheus-connect)
+  (let* ((buffer (get-buffer-create orpheus-ui-buffer-name))
+         (old (get-buffer-window buffer)))
+    (orpheus-ui-open)
+    (select-frame (make-frame '((name . "orpheus"))))
+    (set-window-buffer (selected-window) buffer)
+    (when (and old (window-live-p old) (not (eq old (selected-window))))
+      (delete-window old))))
 
 ;;; Entry point
 

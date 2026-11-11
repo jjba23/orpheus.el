@@ -36,6 +36,8 @@
     (if (equal mode "broken")
         (kill-emacs 1)
       (princ "Music:\nSong.mp3\nAlbum/\n\nMusic/Album:\nOther.mp3\nnotes.txt\n")))
+   ((and (equal mode "cue") command (string-prefix-p "ls " command))
+    (princ "disc.cue\ndisc.flac\n"))
    ((and command (string-prefix-p "ls " command))
     (if (string-match-p "Album" command)
         (princ "Cover.JPG\nSong.mp3\nnotes.txt\n")
@@ -48,6 +50,13 @@
     (if (equal mode "minimal")
         (kill-emacs 1)
       (princ "ok")))
+   ((and (member mode '("cue" "cue-search")) command
+         (string-prefix-p "cat " command)
+         (string-match-p "disc\\.cue" command))
+    (princ (concat "TRACK 01 AUDIO\n  TITLE \"First\"\n"
+                   "  INDEX 01 00:00:00\n"
+                   "TRACK 02 AUDIO\n  TITLE \"Second\"\n"
+                   "  INDEX 01 00:10:00\n")))
    ((and command (string-prefix-p "cat " command))
     (if (member mode '("nocat" "minimal"))
         (kill-emacs 127)
@@ -55,6 +64,8 @@
    ((and command (string-prefix-p "find " command))
     (cond
      ((equal mode "empty") nil)
+     ((equal mode "cue-search")
+      (princ "Music/Disc/disc.cue\nMusic/Disc/disc.flac\n"))
      ((member mode '("missing" "broken" "minimal")) (kill-emacs 127))
      (t (princ "Music/Song.mp3\nMusic/Album/Other.mp3\nMusic/notes.txt\n"))))
    (t (kill-emacs 2))))

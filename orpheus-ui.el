@@ -35,6 +35,7 @@
 (require 'button)
 
 (declare-function orpheus "orpheus" ())
+(declare-function orpheus-detach "orpheus" ())
 
 ;; The image primitives live in C, so a build that does not preload image.el
 ;; still knows them at run time and the byte-compiler does not.
@@ -840,17 +841,33 @@ backend."
       '(menu-item "New playlist…" orpheus-ui-new-playlist))
     (define-key-after map [menu] '(menu-item "Orpheus menu" orpheus-menu))
     map)
-  "Menu opened by a right click on a player row.")
-
-(defvar orpheus-ui-tab-menu
+  "Menu opened by a right click on a player row.")(defvar orpheus-ui-tab-menu
   (let ((map (make-sparse-keymap "Tabs")))
     (define-key-after map [previous]
       '(menu-item "Previous tab" orpheus-ui-previous-tab))
-    (define-key-after map [next] '(menu-item "Next tab" orpheus-ui-next-tab))
+    (define-key-after map [next]
+      '(menu-item "Next tab" orpheus-ui-next-tab))
     (define-key-after map [refresh] '(menu-item "Refresh" orpheus-ui-refresh))
+    (define-key-after map [detach]
+      '(menu-item "Detach to a new frame" orpheus-detach))
     (define-key-after map [menu] '(menu-item "Orpheus menu" orpheus-menu))
     map)
   "Menu opened by a right click on a tab.")
+
+(defvar orpheus-ui-detach-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'orpheus-detach)
+    (define-key map [follow-link] 'mouse-face)
+    map)
+  "Keymap put on the detach button after the tabs.")
+
+(defun orpheus-ui--detach-string ()
+  "Return the clickable detach button shown after the tabs."
+  (propertize (if orpheus-ui-plain-ascii "detach" "⧉ detach")
+              'face 'orpheus-tab-face
+              'help-echo "mouse-1: open the player in a new frame"
+              'local-map orpheus-ui-detach-map
+              'mouse-face 'highlight))
 
 (defun orpheus-ui--logo-image ()
   "Return the project logo at player size, or nil.
@@ -898,7 +915,8 @@ image would be a box of escape codes there rather than a logo."
                         'mouse-face 'highlight)
             parts)
       (setq index (1+ index)))
-    (concat " " (string-join (nreverse parts) "    "))))
+    (concat " " (string-join (nreverse parts) "    ")
+            "    " (orpheus-ui--detach-string))))
 
 (defun orpheus-ui--path-string ()
   "Return the path inside the current tab, for the header."

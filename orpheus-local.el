@@ -83,9 +83,16 @@ The local and SSH backends share this list."
   :type '(repeat string) :group 'orpheus)
 
 (defcustom orpheus-local-extensions
-  '("mp3" "flac" "ogg" "oga" "opus" "m4a" "m4b" "aac" "wav" "aiff" "aif"
-    "wma" "mp4" "m4v" "mkv" "webm" "avi" "mov" "mpg" "mpeg" "m3u" "m3u8")
-  "File extensions the files pane shows."
+  '("mp3" "mp2" "flac" "ogg" "oga" "opus" "m4a" "m4b" "aac" "wav" "wave"
+    "aiff" "aif" "wma" "alac" "ape" "wv" "tta" "dsf" "dff" "mid" "midi"
+    "amr" "ac3" "dts" "mka" "caf" "au" "snd"
+    "mp4" "m4v" "mkv" "webm" "avi" "mov" "mpg" "mpeg" "ogv" "ts" "m2ts"
+    "mts" "flv" "wmv" "vob" "3gp" "3g2" "rm" "rmvb" "divx" "asf"
+    "m3u" "m3u8")
+  "File extensions the files pane shows.
+This is the set of audio and video containers mpv can open.  Video files are
+played for their sound only: mpv starts with `--no-video' and never opens a
+video window.  MPD uses the formats its own daemon supports."
   :type '(repeat string) :group 'orpheus)
 
 ;;; The backend
@@ -113,7 +120,25 @@ The local and SSH backends share this list."
   (load-token 0)
   (connecting nil)
   (waiting nil)
+  (tags-loaded nil)
+  (duration-loaded nil)
   (attempts 0))
+
+(defvar orpheus-local--track-registry (make-hash-table :test #'equal)
+  "Tracks a cue sheet named, keyed by their ranged URI.
+The queue keeps only URIs, so this is what lets a row for a track of a disc
+show its own title instead of the image's file name.")
+
+(defun orpheus-local--remember-track (track)
+  "Remember the cue sheet's TRACK under its URI, and return it."
+  (let ((uri (orpheus-track-uri track)))
+    (when uri
+      (puthash uri (copy-orpheus-track track) orpheus-local--track-registry))
+    track))
+
+(defun orpheus-local--known-track (uri)
+  "Return the cue sheet's track for URI, or nil when none was remembered."
+  (and uri (gethash uri orpheus-local--track-registry)))
 
 (defun orpheus-local--make ()
   "Return a new mpv backend."
@@ -160,10 +185,14 @@ SINGLE plays INDEX again; REPEAT wraps around; RANDOM picks another entry."
     (t (1+ index))))
 
 (defun orpheus-local--uri-name (uri)
-  "Return a readable name for URI: the file it names, without its range."
-  (if (string-match-p "\\`[a-z]+://" uri)
-      uri
-    (file-name-nondirectory (orpheus-track-path uri))))
+  "Return a readable name for URI: its song title, or the file it names."
+  (or (let ((track (orpheus-local--known-track uri)))
+        (and track (orpheus-track-title track)
+             (not (string-empty-p (orpheus-track-title track)))
+             (orpheus-track-title track)))
+      (if (string-match-p "\\`[a-z]+://" uri)
+          uri
+        (file-name-nondirectory (orpheus-track-path uri)))))
 
 (defun orpheus-local--queue-items (local)
   "Return LOCAL's queue as rows."
@@ -223,9 +252,13 @@ range of a track cut out of a CD image, and may be that track alone."
          (uri (nth index queue)))
     (when uri
       (setf (orpheus-local-instance-index local) index)
+      (setf (orpheus-local-instance-tags-loaded local) nil
+            (orpheus-local-instance-duration-loaded local) nil)
       (setf (orpheus-local-instance-track local)
-            (orpheus-track-create :uri uri
-                                  :title (orpheus-local--uri-name uri)))
+            (or (let ((known (orpheus-local--known-track uri)))
+                  (and known (copy-orpheus-track known)))
+                (orpheus-track-create :uri uri
+                                      :title (orpheus-local--uri-name uri))))
       (let ((status (orpheus-local-instance-status local))
             (token (1+ (orpheus-local-instance-load-token local))))
         (setf (orpheus-local-instance-load-token local) token)
@@ -340,6 +373,7 @@ start of the range is subtracted from both."
               (setf (orpheus-status-elapsed status)
                     (max 0 (- (or data 0) (if range (car range) 0)))))
              ('total
+              (setf (orpheus-local-instance-duration-loaded local) t)
               (setf (orpheus-status-total status)
                     (if range
                         (let* ((start (car range))
@@ -360,23 +394,30 @@ start of the range is subtracted from both."
                          (orpheus-local--set-field local field error data))))
 
 (defun orpheus-local--set-metadata (local error metadata)
-  "Store METADATA, a tag alist, into LOCAL's track after ERROR."
+  "Store METADATA, a tag alist, into LOCAL's track after ERROR.
+A track of a disc keeps the title and artist its cue sheet gave it: mpv reads
+the tags of the whole image, which name the album rather than the song."
   (unless error
-    (let ((track (orpheus-local-instance-track local)))
+    (let* ((track (orpheus-local-instance-track local))
+           (ranged (and track (orpheus-track-range
+                               (orpheus-track-uri track)))))
       (when track
-        (when-let* ((title (alist-get 'title metadata)))
-                   (setf (orpheus-track-title track) title))
-        (when-let* ((artist (alist-get 'artist metadata)))
-                   (setf (orpheus-track-artist track) artist))
+        (unless ranged
+          (when-let* ((title (alist-get 'title metadata)))
+                     (setf (orpheus-track-title track) title))
+          (when-let* ((artist (alist-get 'artist metadata)))
+                     (setf (orpheus-track-artist track) artist))
+          (when-let* ((trackno (alist-get 'track metadata)))
+                     (setf (orpheus-track-trackno track)
+                           (string-to-number
+                            (if (listp trackno) (car trackno) trackno)))))
         (when-let* ((album (alist-get 'album metadata)))
                    (setf (orpheus-track-album track) album))
         (when-let* ((genre (alist-get 'genre metadata)))
                    (setf (orpheus-track-genre track) genre))
         (when-let* ((year (alist-get 'date metadata)))
-                   (setf (orpheus-track-year track) year))
-        (when-let* ((trackno (alist-get 'track metadata)))
-                   (setf (orpheus-track-trackno track)
-                         (string-to-number (if (listp trackno) (car trackno) trackno))))))))
+                   (setf (orpheus-track-year track) year)))
+      (setf (orpheus-local-instance-tags-loaded local) t))))
 
 (defun orpheus-local--poll-metadata (local)
   "Refresh LOCAL's track tags and duration."
@@ -386,19 +427,24 @@ start of the range is subtracted from both."
   (orpheus-local--poll-field local "duration" 'total))
 
 (defun orpheus-local--poll (local)
-  "Refresh LOCAL's status from mpv."
-  (orpheus-local--poll-field local "time-pos" 'elapsed)
-  (orpheus-local--poll-field local "duration" 'total)
-  (orpheus-local--poll-field local "pause" 'pause)
-  (orpheus-local--poll-field local "volume" 'volume)
-  (orpheus-local--poll-metadata local)
-  ;; Nothing loaded means nothing playing, however long mpv stays idle.
-  (orpheus-local--send local (list "get_property" "idle-active")
-                       (lambda (_error data)
-                         (when data
-                           (setf (orpheus-status-state
-                                  (orpheus-local-instance-status local))
-                                 'stop)))))
+  "Refresh LOCAL's status from mpv.
+Tags and the length are read once per track, when mpv reports it loaded, and
+the position only while something is loaded: a paused player still moves it
+with a seek, and a stopped one has nothing to report."
+  (let ((status (orpheus-local-instance-status local)))
+    (unless (eq (orpheus-status-state status) 'stop)
+      (orpheus-local--poll-field local "time-pos" 'elapsed))
+    (unless (orpheus-local-instance-duration-loaded local)
+      (orpheus-local--poll-field local "duration" 'total))
+    (orpheus-local--poll-field local "pause" 'pause)
+    (orpheus-local--poll-field local "volume" 'volume)
+    (unless (orpheus-local-instance-tags-loaded local)
+      (orpheus-local--poll-metadata local))
+    ;; Nothing loaded means nothing playing, however long mpv stays idle.
+    (orpheus-local--send local (list "get_property" "idle-active")
+                         (lambda (_error data)
+                           (when data
+                             (setf (orpheus-status-state status) 'stop))))))
 
 ;;; Starting mpv
 
@@ -759,6 +805,7 @@ Each track is a plist of :number, :title, :artist, :start and :end, with the
 times in seconds.  The last track has no :end, because it runs to the end of
 the file.  A sheet with no INDEX line names no track and gives back nil."
   (let ((album-artist nil)
+        (album-title nil)
         (current nil)
         (tracks nil))
     (dolist (line (split-string (or text "") "\n"))
@@ -774,8 +821,10 @@ the file.  A sheet with no INDEX line names no track and gives back nil."
                   (setf (plist-get current :artist) value))
               (setq album-artist value)))
            ((equal keyword "TITLE")
-            (when (and current (null (plist-get current :title)))
-              (setf (plist-get current :title) value)))
+            (if current
+                (unless (plist-get current :title)
+                  (setf (plist-get current :title) value))
+              (setq album-title value)))
            ((equal keyword "TRACK")
             (when current (push current tracks))
             (setq current (list :number
@@ -800,6 +849,8 @@ the file.  A sheet with no INDEX line names no track and gives back nil."
              collect (let ((copy (copy-sequence track)))
                        (unless (plist-get copy :artist)
                          (setq copy (plist-put copy :artist album-artist)))
+                       (when album-title
+                         (setq copy (plist-put copy :album album-title)))
                        (plist-put copy :end (plist-get (cadr tail) :start))))))
 
 (defun orpheus-local--file-bytes (file start end)
@@ -912,20 +963,22 @@ The cue sheet beside FILE is read first, then the one inside a FLAC file."
   "Return the row for TRACK, one track of the CD image at PATH."
   (let* ((start (plist-get track :start))
          (end (plist-get track :end))
-         (uri (orpheus-track-range-uri path start end)))
+         (uri (orpheus-track-range-uri path start end))
+         (item-track (orpheus-local--remember-track
+                      (orpheus-track-create
+                       :uri uri
+                       :title (plist-get track :title)
+                       :artist (plist-get track :artist)
+                       :album (plist-get track :album)
+                       :trackno (plist-get track :number)
+                       :duration (and end (- end start))))))
     (orpheus-item-create
      :label (format "%02d  %s" (or (plist-get track :number) 0)
                     (or (plist-get track :title)
                         (file-name-nondirectory path)))
      :detail (orpheus-format-time (and end (- end start)))
      :kind 'track
-     :data (list (cons 'uri uri)
-                 (cons 'track (orpheus-track-create
-                               :uri uri
-                               :title (plist-get track :title)
-                               :artist (plist-get track :artist)
-                               :trackno (plist-get track :number)
-                               :duration (and end (- end start))))))))
+     :data (list (cons 'uri uri) (cons 'track item-track)))))
 
 (defun orpheus-local--file-items (path)
   "Return the rows the playable file PATH contributes.
@@ -951,50 +1004,78 @@ tracks you can pick instead of a single file."
                orpheus-local-extensions)))
 
 (defun orpheus-local--search-items (dir query output)
-  "Return tracks below DIR from find OUTPUT that match QUERY."
-  (let ((needle (downcase query))
-        (root (file-name-as-directory (expand-file-name dir))))
+  "Return tracks below DIR from find OUTPUT that match QUERY.
+A cue sheet's track titles are searched too: a matching song yields that
+track of the image, and a matching image name yields every track of it."
+  (let* ((root (file-name-as-directory (expand-file-name dir)))
+         (paths (split-string (or output "") "\n" t))
+         (cues (cl-loop for path in paths
+                        when (string-match-p "\\.cue\\'" path)
+                        collect (downcase (file-name-base path)))))
     (delq nil
-          (mapcar
+          (mapcan
            (lambda (path)
-             (when (and (orpheus-local--media-file-p path)
-                        (string-match-p (regexp-quote needle)
-                                        (downcase path)))
-               (orpheus-item-create
-                :label (if (string-prefix-p root path)
-                           (substring path (length root))
-                         path)
-                :kind 'track
-                :detail (upcase (or (file-name-extension path) "file"))
-                :data (list (cons 'uri path)))))
-           (split-string output "\n" t)))))
+             (when (orpheus-local--media-file-p path)
+               (let ((items
+                      (if (member (downcase (file-name-base path)) cues)
+                          (orpheus-local--file-items path)
+                        (list
+                         (orpheus-item-create
+                          :label (if (string-prefix-p root path)
+                                     (substring path (length root))
+                                   path)
+                          :kind 'track
+                          :detail (upcase (or (file-name-extension path)
+                                              "file"))
+                          :data (list (cons 'uri path)))))))
+                 (orpheus-search-filter items query path))))
+           paths))))
+
+(defun orpheus-local--search-files (dir)
+  "Return DIR's files as newline-separated paths, without find."
+  (mapconcat #'identity
+             (condition-case nil
+                 (directory-files-recursively dir "")
+               (error nil))
+             "\n"))
 
 (defun orpheus-local--search (query callback)
-  "Find local files matching QUERY, then call CALLBACK with the rows."
+  "Find local files matching QUERY, then call CALLBACK with the rows.
+GNU find runs as a process, so a large library does not block Emacs.  Windows
+ships a different find, so its tree is walked here instead."
   (let* ((dir (expand-file-name (or orpheus-local-directory "~")))
-         (buffer (generate-new-buffer " *orpheus-find*"))
-         (program (or (executable-find "find") "find")))
-    (condition-case err
-        (make-process
-         :name "orpheus-find"
-         :command (list program dir "-type" "f" "-print")
-         :buffer buffer
-         :stderr (get-buffer-create "*orpheus find*")
-         :noquery t
-         :sentinel
-         (lambda (process _event)
-           (unless (process-live-p process)
-             (let ((output (and (eq (process-status process) 'exit)
-                                (zerop (process-exit-status process))
-                                (with-current-buffer buffer (buffer-string)))))
-               (when (buffer-live-p buffer) (kill-buffer buffer))
-               (funcall callback
-                        (and output
-                             (orpheus-local--search-items dir query output)))))))
-      (error
-       (when (buffer-live-p buffer) (kill-buffer buffer))
-       (message "orpheus: cannot search %s: %s" dir (error-message-string err))
-       (funcall callback nil)))))
+         (program (and (not (eq system-type 'windows-nt))
+                       (executable-find "find"))))
+    (if (null program)
+        ;; shortcut: the Windows fallback is synchronous, revisit if a large
+        ;; library starts to block; find has no portable replacement there.
+        (funcall callback
+                 (orpheus-local--search-items
+                  dir query (orpheus-local--search-files dir)))
+      (let ((buffer (generate-new-buffer " *orpheus-find*")))
+        (condition-case err
+            (make-process
+             :name "orpheus-find"
+             :command (list program dir "-type" "f" "-print")
+             :buffer buffer
+             :stderr (get-buffer-create "*orpheus find*")
+             :noquery t
+             :sentinel
+             (lambda (process _event)
+               (unless (process-live-p process)
+                 (let ((output (and (eq (process-status process) 'exit)
+                                    (zerop (process-exit-status process))
+                                    (with-current-buffer buffer (buffer-string)))))
+                   (when (buffer-live-p buffer) (kill-buffer buffer))
+                   (funcall callback
+                            (and output
+                                 (orpheus-local--search-items
+                                  dir query output)))))))
+          (error
+           (when (buffer-live-p buffer) (kill-buffer buffer))
+           (message "orpheus: cannot search %s: %s"
+                    dir (error-message-string err))
+           (funcall callback nil)))))))
 
 (defun orpheus-local--directory-items (dir)
   "Return the rows of DIR, one per directory and playable file.

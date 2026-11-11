@@ -31,6 +31,7 @@
 (declare-function orpheus-tutorial "orpheus-ui" ())
 (declare-function orpheus-cycle-theme "orpheus-ui" ())
 (declare-function orpheus-switch-backend "orpheus" (&optional backend))
+(declare-function orpheus-detach "orpheus" ())
 (declare-function orpheus-ui-cycle-layout "orpheus-ui" ())
 (declare-function orpheus-vis-cycle-theme "orpheus-vis" ())
 
@@ -78,6 +79,7 @@
     ("E" "Equalizer presets" orpheus-equalizer-menu)
     ("M-E" "Edit the equalizer bands" orpheus-equalizer-editor)
     ("L" "Lyrics" orpheus-lyrics-open)
+    ("F" "Detach to a new frame" orpheus-detach)
     ("B" "Switch to another backend" orpheus-switch-backend)
     ("H" "Help, tutorial and every key" orpheus-help)
     ("t" "Tutorial" orpheus-tutorial)

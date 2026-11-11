@@ -71,6 +71,38 @@ cons of the browse kind and its argument; a row that can be queued carries
 `uri'."
   label detail kind data)
 
+(defun orpheus-item-search-match-p (item query)
+  "Return non-nil when ITEM's label, URI or track tags match QUERY."
+  (let* ((needle (downcase (or query "")))
+         (data (orpheus-item-data item))
+         (track (alist-get 'track data)))
+    (and (not (string-empty-p needle))
+         (cl-some
+          (lambda (text)
+            (and (stringp text)
+                 (not (string-empty-p text))
+                 (string-match-p (regexp-quote needle) (downcase text))))
+          (list (orpheus-item-label item)
+                (alist-get 'uri data)
+                (and track (orpheus-track-title track))
+                (and track (orpheus-track-artist track))
+                (and track (orpheus-track-album track)))))))
+
+(defun orpheus-search-filter (items query path)
+  "Return the rows in ITEMS that QUERY matches.
+ITEMS are all rows one file contributes; a cue sheet gives several tracks.
+Matching a track keeps only those tracks.  When no track matches but PATH
+does, the whole file, and so every track of a disc, is kept."
+  (let ((matches (cl-remove-if-not
+                  (lambda (item) (orpheus-item-search-match-p item query))
+                  items)))
+    (cond (matches matches)
+          ((and path (not (string-empty-p (or query "")))
+                (string-match-p (regexp-quote (downcase query))
+                                (downcase path)))
+           items)
+          (t nil))))
+
 ;;; Formatting
 
 (defcustom orpheus-progress-filled-char ?━
