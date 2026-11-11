@@ -1783,33 +1783,45 @@ and the password with it."
                 file)))
      (should-error (orpheus-playlist-file "")))))
 
-(ert-deftest orpheus-test/windows-relative-paths-ignore-case ()
-  "Windows paths compare without case, so ownership checks still match."
+(ert-deftest orpheus-test/path-case-follows-the-local-filesystem ()
+  "Local paths follow the filesystem; remote paths stay case-sensitive."
   (let* ((root (make-temp-file "orpheus-case" t))
          (directory (file-name-as-directory root))
-         (uri (concat (upcase root) "/Album/a.mp3"))
+         (upper (upcase directory))
+         (uri (concat upper "Album/a.mp3"))
          (local (make-orpheus-local :name 'local)))
     (unwind-protect
         (progn
-          (let ((system-type 'windows-nt))
+          (cl-letf (((symbol-function 'orpheus-backend--filesystem-case-insensitive-p)
+                     (lambda (_path) t)))
             (should (equal (orpheus-backend--relative-uri uri root)
                            "Album/a.mp3"))
             (should (orpheus-playlist--inside-p
-                     (expand-file-name "Mix.m3u8" (upcase directory))
+                     (expand-file-name "Mix.m3u8" upper)
                      directory))
             (should (= 2 (orpheus-local--art-rank
                           directory
-                          (concat (upcase directory) "Disc/cover.jpg"))))
+                          (concat upper "Disc/cover.jpg")
+                          t)))
             (setf (orpheus-local-instance-watches local)
-                  (list (cons (upcase directory) 'watch)))
+                  (list (cons upper 'watch)))
             (cl-letf (((symbol-function 'file-notify-rm-watch) #'ignore))
               (orpheus-local--watch-remove-tree local directory))
             (should-not (orpheus-local-instance-watches local)))
-          (let ((system-type 'gnu/linux))
+          (cl-letf (((symbol-function 'orpheus-backend--filesystem-case-insensitive-p)
+                     (lambda (_path) nil)))
             (should-not (orpheus-backend--relative-uri uri root))
             (should-not (orpheus-playlist--inside-p
-                         (expand-file-name "Mix.m3u8" (upcase directory))
-                         directory))))
+                         (expand-file-name "Mix.m3u8" upper)
+                         directory))
+            (should-not (orpheus-local--art-rank
+                         directory (concat upper "Disc/cover.jpg") nil)))
+          ;; A Windows client must not fold paths that are remote and POSIX.
+          (should (equal (orpheus-local--art-best
+                          "/Music/Album/" '("/Music/Album/Disc/cover.jpg") nil)
+                         "/Music/Album/Disc/cover.jpg"))
+          (should-not (orpheus-local--art-best
+                       "/Music/Album/" '("/music/album/Disc/cover.jpg") nil)))
       (delete-directory root t))))
 
 (ert-deftest orpheus-test/playlist-items ()
@@ -4467,31 +4479,32 @@ A track cut on the host or here is cached separately, because it is the track."
   (let ((dir "/music/Album/Disc 1"))
     (should (equal (orpheus-local--art-best
                     dir '("/music/Album/cover.jpg"
-                          "/music/Album/Disc 1/front.jpg"))
+                          "/music/Album/Disc 1/front.jpg") nil)
                    "/music/Album/Disc 1/front.jpg"))
     (should (equal (orpheus-local--art-best
-                    dir '("/music/Album/cover.jpg"))
+                    dir '("/music/Album/cover.jpg") nil)
                    "/music/Album/cover.jpg"))
     (should (equal (orpheus-local--art-best
-                    dir '("/music/Album/Disc 1/Scans/front.jpg"))
+                    dir '("/music/Album/Disc 1/Scans/front.jpg") nil)
                    "/music/Album/Disc 1/Scans/front.jpg"))
     ;; A sibling album's cover is not this album's cover.
-    (should-not (orpheus-local--art-best dir '("/music/Other/cover.jpg")))
+    (should-not (orpheus-local--art-best
+                 dir '("/music/Other/cover.jpg") nil))
     ;; The order of `orpheus-local-cover-names' decides within a folder.
     (should (equal (orpheus-local--art-best
                     "/music/Album"
-                    '("/music/Album/folder.jpg" "/music/Album/cover.jpg"))
+                    '("/music/Album/folder.jpg" "/music/Album/cover.jpg") nil)
                    "/music/Album/cover.jpg"))
     ;; Any image is a cover, but a named one still wins over it.
     (should (equal (orpheus-local--art-best
-                    "/music/Album" '("/music/Album/scan.jpg"))
+                    "/music/Album" '("/music/Album/scan.jpg") nil)
                    "/music/Album/scan.jpg"))
     (should (equal (orpheus-local--art-best
                     "/music/Album"
-                    '("/music/Album/scan.jpg" "/music/Album/cover.jpg"))
+                    '("/music/Album/scan.jpg" "/music/Album/cover.jpg") nil)
                    "/music/Album/cover.jpg"))
     (should-not (orpheus-local--art-best
-                 "/music/Album" '("/music/Album/notes.txt")))))
+                 "/music/Album" '("/music/Album/notes.txt") nil))))
 
 (ert-deftest orpheus-test/local-art-scan-finds-parent-and-child-covers ()
   "The asynchronous scan looks in the album root and in child folders."
@@ -4640,6 +4653,7 @@ A track cut on the host or here is cached separately, because it is the track."
 
 (ert-deftest orpheus-test/ssh-control-args-share-one-connection ()
   "Control commands share a master connection; downloads do not use it."
+  (skip-unless (not (memq system-type '(windows-nt ms-dos))))
   (let ((orpheus-ssh-host "fake.invalid")
         (orpheus-ssh-multiplex t)
         (orpheus-ssh--control-directory nil)
@@ -4718,8 +4732,19 @@ A track cut on the host or here is cached separately, because it is the track."
   (should (orpheus-ssh--control-error-p "ControlPath too long"))
   (should (orpheus-ssh--control-error-p
            "unix_listener: path too long for Unix domain socket"))
+  (should (orpheus-ssh--control-error-p
+           "getsockname failed: Not a socket"))
   (should-not (orpheus-ssh--control-error-p
                "Permission denied (publickey).")))
+
+(ert-deftest orpheus-test/ssh-windows-disables-multiplexing ()
+  "Native Windows OpenSSH has no ControlMaster, so it is not asked for one."
+  (let ((orpheus-ssh-host "fake.invalid")
+        (orpheus-ssh-multiplex t)
+        (orpheus-ssh--control-directory nil)
+        (system-type 'windows-nt))
+    (should-not (orpheus-ssh--control-args))
+    (should-not orpheus-ssh--control-directory)))
 
 (ert-deftest orpheus-test/ssh-control-failure-retries-without-multiplexing ()
   "A host that rejects the control socket still answers the command."

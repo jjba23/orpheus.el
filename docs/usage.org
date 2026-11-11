@@ -185,8 +185,9 @@ host has ~ffmpeg~, a CD kept as one file is listed by the tracks its ~.cue~
 names and the track you pick is cut out there and remuxed, so only its minutes
 are transferred.  Without ~ffmpeg~, orpheus plans the track's byte range from
 the FLAC seek table (or estimates it from the average bitrate), fetches that
-range with ~dd~, and cuts it here with this machine's ~ffmpeg~; ~ffprobe~
-corrects an estimate.  The last track, which has no end, works the same way.
+range with GNU ~dd~, and cuts it here with this machine's ~ffmpeg~; ~ffprobe~
+corrects an estimate.  A host with only BSD ~dd~ copies the whole image once
+instead.  The last track, which has no end, works the same way.
 The whole image is copied once only when no range can be planned, and
 ~orpheus-ssh-split-images~ nil turns the range path off.  The start
 directory is relative to the login home or absolute; a leading =~= is not

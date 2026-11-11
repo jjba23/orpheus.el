@@ -144,7 +144,7 @@ file is listed and played for its sound only: mpv starts with ~--no-video~ and
 | ~orpheus-ssh-command-timeout~   | ~20~    | seconds a listing, search or cover may stay silent |
 | ~orpheus-ssh-cache-directory~   | ~nil~   | where downloads are kept; nil is =~/.cache/orpheus/ssh= |
 | ~orpheus-ssh-cache-count~       | ~nil~   | completed tracks kept, or nil for only the size limit |
-| ~orpheus-ssh-multiplex~         | ~t~     | share one connection for listings, search and covers |
+| ~orpheus-ssh-multiplex~         | ~t~     | share one connection; ignored on native Windows |
 | ~orpheus-ssh-control-directory~ | ~nil~   | where shared control sockets live; nil picks a short private directory |
 | ~orpheus-ssh-control-persist~   | ~600~   | seconds a shared connection stays alive after its last command |
 
@@ -160,8 +160,9 @@ limit.  orpheus puts ssh's ~%C~ token in a private directory under
 has room it turns multiplexing off and says so.  Set
 ~orpheus-ssh-control-directory~ to a short private path to choose the
 directory, and ~orpheus-ssh-control-persist~ to change how long the shared
-connection outlives its last command.  If ssh still rejects the socket, the
-command is retried once without multiplexing.
+connection outlives its last command.  Native Windows OpenSSH has no
+~ControlMaster~, so multiplexing is off there.  If ssh still rejects the
+socket, the command is retried once without multiplexing.
 
 ** Playlists
 :PROPERTIES:

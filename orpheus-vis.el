@@ -45,7 +45,8 @@
 (defcustom orpheus-vis-input nil
   "Capture method for cava, or nil to choose one for this system.
 The value is a cava input method such as `pipewire', `pulse', `portaudio'
-or `fifo'.  Windows cava captures the default output itself and rejects a
+or `fifo'.  GNU/Linux defaults to `pipewire'; a PulseAudio-only machine sets
+`pulse'.  Windows cava captures the default output itself and rejects a
 configured method, so leave this nil there."
   :type '(choice (const :tag "Choose for this system" nil) symbol)
   :group 'orpheus)
@@ -124,8 +125,9 @@ back to nil."
 
 (defun orpheus-vis--input ()
   "Return the cava input method to use, or nil when cava chooses.
-Upstream cava rejects a configured input method on Windows; its Windows build
-captures the default output without one."
+GNU/Linux defaults to PipeWire; a PulseAudio-only machine sets
+`orpheus-vis-input' to `pulse'.  Upstream cava rejects a configured input
+method on Windows; its Windows build captures the default output without one."
   (or orpheus-vis-input
       (pcase system-type
              ('gnu/linux 'pipewire)

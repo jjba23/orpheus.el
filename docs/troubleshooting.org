@@ -59,23 +59,26 @@ A new host also needs its key in =~/.ssh/known_hosts= first; use
 as a permanent setting.
 
 The remote side must offer a POSIX shell.  The commands are ~ls~, ~find~,
-~cat~ and ~dd~; a Windows OpenSSH server running ~cmd.exe~ or PowerShell is
-not a supported remote.
+~cat~ and GNU ~dd~ for byte ranges; a Windows OpenSSH server running
+~cmd.exe~ or PowerShell is not a supported remote.  Without GNU ~dd~, the
+whole image is copied once instead.
 
 The table lists ~ffmpeg~ last on the host's side.  With it, a track of a CD
 image is cut out on the host and only its minutes are copied.  Without it,
 orpheus fetches a byte range planned from the FLAC seek table (or estimated
-from the average bitrate) with ~dd~ and cuts the track here with this
-machine's ~ffmpeg~; ~ffprobe~ corrects an estimate.  If ~dd~, local ~ffmpeg~
-or a usable seek table is missing, the whole image is copied once, cached, and
+from the average bitrate) with GNU ~dd~ and cuts the track here with this
+machine's ~ffmpeg~; ~ffprobe~ corrects an estimate.  If GNU ~dd~, local
+~ffmpeg~ or a usable seek table is missing, the whole image is copied once,
+cached, and
 the tracks play from that copy; ~orpheus-ssh-split-images~ nil asks for that
 copy explicitly.  Either way the track is listed, because the ~.cue~ beside
 the image is what names it.
 
-If ssh reports ~ControlPath too long~ or ~too long for Unix domain socket~,
-orpheus retries the command without multiplexing, so the listing still works.
-Set ~orpheus-ssh-control-directory~ to a short private directory when the
-default under ~$XDG_RUNTIME_DIR~ or =/tmp= is unsuitable, or set
+Native Windows OpenSSH has no multiplexing, so orpheus leaves it off there.
+Elsewhere, if ssh reports ~ControlPath too long~ or ~too long for Unix domain
+socket~, orpheus retries the command without multiplexing, so the listing
+still works.  Set ~orpheus-ssh-control-directory~ to a short private directory
+when the default under ~$XDG_RUNTIME_DIR~ or =/tmp= is unsuitable, or set
 ~orpheus-ssh-multiplex~ nil to stop sharing connections entirely.  To rule out
 the whole backend without restarting Emacs, press ~B~ in the player (or run
 ~M-x orpheus-switch-backend~).
@@ -191,8 +194,9 @@ meter.  It listens to the system output, so it shows whatever the machine is
 playing.
 
 - Check that ~cava~ is installed and that ~orpheus-vis-program~ names it.
-- On GNU/Linux, cava captures the default PipeWire or PulseAudio monitor.  If
-  the sink is not the one playing, select the right input with ~orpheus-vis-input~.
+- On GNU/Linux, cava defaults to PipeWire.  On a PulseAudio-only machine set
+  ~orpheus-vis-input~ to ~pulse~.  If the sink is not the one playing, select
+  the right input with ~orpheus-vis-input~.
 - On macOS, the default ~portaudio~ input records an input device.  Hearing
   system output needs a loopback device such as BlackHole; without one, playback
   works and the visualizer is silent.

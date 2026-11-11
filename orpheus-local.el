@@ -627,23 +627,23 @@ Names in `orpheus-local-cover-names' come first, in that list's order, so
                    :test #'equal))
      ((orpheus-local--art-extension-p name) 1000))))
 
-(defun orpheus-local--art-rank (dir path)
-  "Return PATH's place in DIR's artwork search.
+(defun orpheus-local--art-rank (dir path case-fold)
+  "Return PATH's place in DIR's artwork search under CASE-FOLD.
 0 is DIR itself, 1 its parent and 2 a child folder of DIR.  Nil means PATH is
 elsewhere, such as the cover of a sibling album, and must not be shown."
   (let* ((dir (file-name-as-directory dir))
          (parent (or (file-name-directory (directory-file-name dir)) dir))
          (folder (file-name-directory path)))
     (cond
-     ((equal folder dir) 0)
-     ((equal folder parent) 1)
-     ((and (not (equal parent dir))
-           (orpheus-backend--path-prefix-p dir path))
+     ((orpheus-backend--path-equal-p folder dir case-fold) 0)
+     ((orpheus-backend--path-equal-p folder parent case-fold) 1)
+     ((and (not (orpheus-backend--path-equal-p parent dir case-fold))
+           (orpheus-backend--path-prefix-p dir path case-fold))
       2)
      (t nil))))
 
-(defun orpheus-local--art-best (dir paths)
-  "Return the best cover for DIR among PATHS, or nil.
+(defun orpheus-local--art-best (dir paths case-fold)
+  "Return the best cover for DIR among PATHS under CASE-FOLD, or nil.
 DIR itself wins over its parent, which wins over a child folder.  Within a
 folder, a name from `orpheus-local-cover-names' wins over any other image, and
 that list's order decides among the names."
@@ -652,7 +652,8 @@ that list's order decides among the names."
                (mapcar
                 (lambda (path)
                   (when-let* ((index (orpheus-local--art-name-index path))
-                              (rank (orpheus-local--art-rank dir path)))
+                              (rank (orpheus-local--art-rank
+                                     dir path case-fold)))
                     (list rank index path)))
                 paths))))
     (nth 2 (car (sort candidates
@@ -670,7 +671,8 @@ list's order decides among the names."
   (when (and dir (file-directory-p dir))
     (orpheus-local--art-best
      dir (cl-remove-if-not #'file-regular-p
-                           (directory-files dir t "\\`[^.]")))))
+                           (directory-files dir t "\\`[^.]"))
+     (orpheus-backend--filesystem-case-insensitive-p dir))))
 
 (defun orpheus-local--cover-near (dir)
   "Return a cover for DIR from itself, its parent or a child folder.
@@ -720,6 +722,7 @@ album root or a Scans folder is found from a disc folder.  Nothing is read on
 the main thread; when find is missing, or this is Windows, the fallback reads
 the same folders."
   (let ((program (orpheus-local--find-program))
+        (case-fold (orpheus-backend--filesystem-case-insensitive-p dir))
         (buffer (generate-new-buffer " *orpheus-art*")))
     (if (null program)
         (progn
@@ -746,7 +749,8 @@ the same folders."
                  (when (buffer-live-p buffer) (kill-buffer buffer))
                  (funcall callback
                           (or (orpheus-local--art-best
-                               dir (split-string (or output "") "\n" t))
+                               dir (split-string (or output "") "\n" t)
+                               case-fold)
                               (orpheus-local--cover-near dir)))))))
         (error
          (when (buffer-live-p buffer) (kill-buffer buffer))
@@ -1386,6 +1390,7 @@ A cue sheet's track titles are searched too: a matching song yields that
 track of the image, and a matching image name yields every track of it.  A
 FLAC with no sidecar uses the embedded cue index when that index is ready."
   (let* ((root (file-name-as-directory (expand-file-name dir)))
+         (case-fold (orpheus-backend--filesystem-case-insensitive-p root))
          (paths (split-string (or output "") "\n" t))
          (cues (make-hash-table :test #'equal)))
     (dolist (path paths)
@@ -1414,7 +1419,7 @@ FLAC with no sidecar uses the embedded cue index when that index is ready."
                          (list
                           (orpheus-item-create
                            :label (if (orpheus-backend--path-prefix-p
-                                      root path)
+                                      root path case-fold)
                                       (substring path (length root))
                                     path)
                            :kind 'track
@@ -1540,12 +1545,13 @@ backend, so a parent row here would show the way up twice."
 
 (defun orpheus-local--watch-remove-tree (local directory)
   "Stop watching DIRECTORY and every directory below it for LOCAL."
-  (let ((prefix (file-name-as-directory (expand-file-name directory))))
+  (let* ((prefix (file-name-as-directory (expand-file-name directory)))
+         (case-fold (orpheus-backend--filesystem-case-insensitive-p prefix)))
     (setf (orpheus-local-instance-watches local)
           (cl-loop
            for pair in (orpheus-local-instance-watches local)
            if (orpheus-backend--path-prefix-p
-               prefix (file-name-as-directory (car pair)))
+               prefix (file-name-as-directory (car pair)) case-fold)
            do (ignore-errors (file-notify-rm-watch (cdr pair)))
            else collect pair))))
 

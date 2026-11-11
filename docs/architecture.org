@@ -123,9 +123,9 @@ name the song instead of the image file.
 Over SSH the chosen track is cut on the host with ~ffmpeg~ when it is there,
 remuxed rather than re-encoded, so only its minutes cross the link.  Without
 it, the FLAC seek table (or an estimate from the average bitrate) names the
-byte range, ~dd~ fetches only those bytes, and this machine's ~ffmpeg~ cuts the
-track; ~ffprobe~ corrects an estimate.  The last track has no end and works
-the same way.  Only an image with no usable range is copied whole once, and
+byte range, GNU ~dd~ on the host fetches only those bytes, and this machine's
+~ffmpeg~ cuts the track; ~ffprobe~ corrects an estimate.  The last track has
+no end and works the same way.  Only an image with no usable range is copied whole once, and
 every track of that disc plays from that copy; ~orpheus-ssh-split-images~ nil
 asks for that copy explicitly.
 
@@ -319,20 +319,22 @@ gate verifies.
 |---------+-----------+-------+---------|
 | Playback | mpv with PipeWire, PulseAudio or ALSA | mpv with CoreAudio | mpv with WASAPI over a per-Emacs named pipe; compiled but unproven |
 | MPD | TCP or a Unix socket | TCP or a Unix socket | TCP; use ~orpheus-mpd-host~ and ~orpheus-mpd-port~ |
-| SSH | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH client; multiplexing is left to it; the remote host must offer a POSIX shell |
+| SSH | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH client; multiplexing off on native Windows; the remote host must offer a POSIX shell |
 | Search | asynchronous GNU ~find~ | asynchronous BSD ~find~ | Windows ~find.exe~ searches text, so Emacs walks the tree synchronously |
 | Library watch | one watch per directory; on-access fallback | one watch per directory; on-access fallback | one watch per directory when the Emacs build has ~w32notify~; on-access fallback |
-| Visualizer | cava with PipeWire | cava with PortAudio; a loopback device is needed for system output | cava captures the default output with no input method; availability varies |
+| Visualizer | cava with PipeWire by default; use ~pulse~ on PulseAudio-only systems | cava with PortAudio; a loopback device is needed for system output | cava captures the default output with no input method; availability varies |
 | Cover art | images in a graphical frame | images in a graphical frame | images in a graphical frame; the scan runs in Emacs |
 | Detach | a new graphical frame | a new graphical frame | a new graphical frame; a terminal says it needs a display |
 | Terminal | text, Unicode and ASCII fallbacks | same | same |
 
 Windows behavior is covered by unit tests that bind ~system-type~: the named
 pipe carries the Emacs pid, art and search refuse Windows ~find.exe~, cava's
-input section is omitted, and local path comparisons fold case.  No Windows
-machine runs in this gate, so mpv over the named pipe and the cava binary
-remain unproven rather than called supported.  On macOS, BSD ~find~ accepts
-the ~-maxdepth~ and ~-iname~ flags the art scan uses.  The watcher uses
+input section is omitted, and SSH multiplexing is disabled.  Local path
+comparisons follow the filesystem's case rule, while remote paths stay
+case-sensitive.  No Windows machine runs in this gate, so mpv over the named
+pipe and the cava binary remain unproven rather than called supported.  On
+macOS, BSD ~find~ accepts the ~-maxdepth~ and ~-iname~ flags the art scan
+uses.  The watcher uses
 whatever directory notifications the Emacs build provides; when it provides
 none, the on-access checks take over.  Everything else in the table is the
 same code on every platform, with the external program doing the

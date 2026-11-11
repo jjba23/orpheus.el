@@ -97,8 +97,10 @@ without a second transfer."
   "Whether SSH reuses one connection for browsing, searching and covers.
 A full key exchange on a saturated link can take seconds; a master connection
 answers a listing at once.  Downloads open connections of their own, so their
-bytes never queue in front of a directory listing.  When the connection fails
-before it can be shared, orpheus retries the command without multiplexing."
+bytes never queue in front of a directory listing.  Native Windows OpenSSH
+has no `ControlMaster', so orpheus leaves multiplexing off there.  When the
+connection fails before it can be shared, orpheus retries the command
+without multiplexing."
   :type 'boolean :group 'orpheus)
 
 (defcustom orpheus-ssh-control-directory nil
@@ -293,9 +295,11 @@ The pattern contains `%C', which ssh expands to a 40-character hash."
 (defun orpheus-ssh--control-args (&optional ssh)
   "Return the ssh arguments that share one connection, or nil.
 Only the commands that answer a small question use them, so a listing never
-waits behind a download's bytes.  SSH is left out after its control socket
-failed, so a broken multiplexing setup does not fail every command twice."
+waits behind a download's bytes.  Native Windows OpenSSH has no
+`ControlMaster', so it is left out there.  SSH is also left out after its
+control socket failed, so a broken setup does not fail every command twice."
   (when (and orpheus-ssh-multiplex
+             (not (eq system-type 'windows-nt))
              (orpheus-ssh--host)
              (not (and ssh
                        (orpheus-ssh-instance-control-failed ssh))))
@@ -439,7 +443,8 @@ A name from `orpheus-local-cover-names' wins over another image."
   (when dir
     (orpheus-local--art-best
      dir (mapcar (lambda (name) (orpheus-ssh--join dir name))
-                 (split-string (or output "") "\n" t)))))
+                 (split-string (or output "") "\n" t))
+     nil)))
 
 (defun orpheus-ssh--media-file-p (name)
   "Return non-nil when NAME looks like something mpv can play."
@@ -685,7 +690,8 @@ track of a disc image."
                   "\\|too long for Unix domain socket"
                   "\\|unix_listener:.*too long"
                   "\\|control socket.*too long"
-                  "\\|ControlMaster.*not supported")
+                  "\\|ControlMaster.*not supported"
+                  "\\|getsockname failed")
           output))))
 
 (defun orpheus-ssh--run (ssh command callback &optional quiet retried)
@@ -998,7 +1004,7 @@ has no find, the folders are listed instead."
      (lambda (output)
        (let ((remote (and output
                           (orpheus-local--art-best
-                           dir (split-string output "\n" t)))))
+                           dir (split-string output "\n" t) nil))))
          (if remote
              (orpheus-ssh--fetch-cover ssh remote callback)
            (orpheus-ssh--folder-art-listing ssh dir callback))))

@@ -396,12 +396,33 @@ The default keeps URI as written; a backend with a library root overrides it."
        (or (orpheus-backend--url-p uri)
            (file-name-absolute-p uri))))
 
-(defun orpheus-backend--path-prefix-p (prefix path)
+(defun orpheus-backend--filesystem-case-insensitive-p (path)
+  "Return non-nil when PATH's filesystem ignores case.
+If PATH does not exist, use its nearest existing parent.  This answers for a
+local path only; remote paths must pass an explicit case setting instead."
+  (let ((probe (expand-file-name path)))
+    (catch 'answer
+      (while t
+        (if (file-exists-p probe)
+            (throw 'answer (file-name-case-insensitive-p probe))
+          (let ((parent (file-name-directory (directory-file-name probe))))
+            (if (or (null parent) (equal parent probe))
+                (throw 'answer nil)
+              (setq probe parent))))))))
+
+(defun orpheus-backend--path-prefix-p (prefix path case-fold)
   "Return non-nil when PATH is below PREFIX.
-Case is folded on Windows, where the filesystem does not distinguish it.
-PREFIX ends in a directory separator.  Remote relative paths are not passed
-here, because their case is significant on the remote host."
-  (string-prefix-p prefix path (eq system-type 'windows-nt)))
+CASE-FOLD non-nil folds case; nil is case-sensitive.  PREFIX ends in a
+directory separator.  Local callers use the filesystem's answer, while remote
+callers pass nil because the remote host decides what its names mean."
+  (string-prefix-p prefix path case-fold))
+
+(defun orpheus-backend--path-equal-p (a b case-fold)
+  "Return non-nil when A and B name the same path under CASE-FOLD.
+CASE-FOLD non-nil folds case; nil is case-sensitive."
+  (if case-fold
+      (string-equal-ignore-case a b)
+    (string-equal a b)))
 
 (defun orpheus-backend--relative-uri (uri root)
   "Return URI below ROOT as a relative path, or nil.
@@ -413,9 +434,13 @@ never rewritten."
              (not (orpheus-backend--url-p uri)))
     (let ((directory (file-name-as-directory root)))
       (if (file-name-absolute-p directory)
-          (let ((path (expand-file-name uri directory)))
-            (when (and (not (equal directory path))
-                       (orpheus-backend--path-prefix-p directory path))
+          (let ((path (expand-file-name uri directory))
+                (case-fold (orpheus-backend--filesystem-case-insensitive-p
+                            directory)))
+            (when (and (not (orpheus-backend--path-equal-p
+                             directory path case-fold))
+                       (orpheus-backend--path-prefix-p
+                        directory path case-fold))
               (substring path (length directory))))
         (when (string-prefix-p directory uri)
           (substring uri (length directory)))))))

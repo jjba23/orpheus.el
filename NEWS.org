@@ -9,6 +9,26 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Fixed
+
+- Local path comparisons follow the filesystem's case rule instead of
+treating every non-Windows system as case-sensitive.  Default macOS volumes
+and Windows fold case; Linux and case-sensitive APFS do not.  SSH cover
+ranking keeps remote POSIX paths case-sensitive.
+- Native Windows OpenSSH no longer receives ~ControlMaster~ options.  The
+SSH backend also retries without multiplexing when Windows reports a
+~getsockname failed~ control-socket error.
+
+*** Changed
+
+- The cross-platform guide records cava's PipeWire default and the
+~orpheus-vis-input~ PulseAudio override, the GNU ~dd~ requirement for SSH
+byte-range fetches, the platform file opener, and the Linux socket-path
+limit.  It also states that the Windows named-pipe transport still needs
+proof on real hardware.
+
 * 1.0.1 (2026-11-11)
 
 *** Added

@@ -58,8 +58,13 @@ With DIRECTORY, only that directory counts."
                                 (expand-file-name directory)))
                        (orpheus-playlist-directories))))
     (cl-some (lambda (directory)
-               (and (not (equal directory file))
-                    (orpheus-backend--path-prefix-p directory file)))
+               (let ((case-fold
+                      (orpheus-backend--filesystem-case-insensitive-p
+                       directory)))
+                 (and (not (orpheus-backend--path-equal-p
+                            directory file case-fold))
+                      (orpheus-backend--path-prefix-p
+                       directory file case-fold))))
              directories)))
 
 (defun orpheus-playlist--base-name (name)

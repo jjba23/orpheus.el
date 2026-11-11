@@ -24,17 +24,17 @@ opening.
 |------+-----------+-------+---------|
 | Playback | mpv with PipeWire, PulseAudio or ALSA | mpv with CoreAudio | mpv with WASAPI over a per-Emacs named pipe; the real path is unproven |
 | MPD | Unix socket or TCP | Unix socket or TCP | TCP; set ~orpheus-mpd-host~ and ~orpheus-mpd-port~ |
-| SSH client | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH; multiplexing is left to it |
+| SSH client | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH; no multiplexing on native Windows |
 | SSH remote | a POSIX shell | a POSIX shell | a POSIX shell only; ~cmd.exe~ and PowerShell remotes are not supported |
 | Search | asynchronous GNU ~find~ | asynchronous BSD ~find~ | Emacs walks the tree synchronously |
 | Cover art | asynchronous ~find~ around the album | asynchronous ~find~ around the album | Emacs reads the album, parent and child folders synchronously |
 | Library watch | one inotify watch per directory | one watch per directory when the Emacs notification library supports it | one watch per directory when the Emacs build has ~w32notify~ |
-| Visualizer | cava with PipeWire | cava with PortAudio; a loopback device is needed for system output | cava captures the default output; no input method is configured |
+| Visualizer | cava with PipeWire by default; use ~pulse~ on PulseAudio-only systems | cava with PortAudio; a loopback device is needed for system output | cava captures the default output; no input method is configured |
 | Notifications | Emacs notification support, when built in | same | same; a build without it is silent |
 | Detach | a new graphical frame | a new graphical frame | a new graphical frame; a terminal says a display is needed |
 | Cache | ~orpheus-cache-directory~; XDG-style by default | same | same; override it for a native Windows path |
 | Playlist files | ~orpheus-playlist-directory~; XDG-style by default | same | same; override it if you prefer |
-| Local path case | significant | significant | folded for local ownership and watch cleanup |
+| Local path case | filesystem-defined | filesystem-defined | filesystem-defined |
 
 The table describes code paths, not a promise that every external binary is
 installed.  A missing program removes its feature; it does not stop local
@@ -57,10 +57,11 @@ branches are covered by unit tests that bind ~system-type~:
 - the mpv audio output and cava input defaults;
 - the per-Emacs Windows named pipe and a user-supplied pipe path;
 - the Windows art scan refusing ~find.exe~;
-- the Windows cava configuration leaving out ~[input]~;
-- case-folded local path comparisons.
+- the Windows cava configuration leaving out ~[input]~.
 
-Those tests catch a branch that drifts.  They do not prove that a real mpv
+The local path case rule has its own tests, with both case-folded and
+case-sensitive filesystems simulated.  Those tests catch a branch that
+drifts.  They do not prove that a real mpv
 opens a Windows named pipe, that WASAPI produces sound, that ~w32notify~
 delivers events, or that cava finds the Windows output device.  The same
 limit applies to CoreAudio, PortAudio, kqueue and the macOS notification
@@ -122,6 +123,8 @@ working at disk speed.
 | ~mpd~ | this computer or another machine | the MPD backend | the daemon owns its library and output |
 | ~cava~ | this computer | the visualizer | optional; playback does not depend on it |
 | ~yt-dlp~ | this computer | video links opened by mpv | optional |
+| ~dd~ | the SSH host | the byte-range fallback | GNU ~dd~; macOS/BSD ~dd~ falls back to a whole-image copy |
+| ~xdg-open~ | this computer | opening a file externally | Linux and other Unix; macOS uses ~open~, Windows uses ~explorer.exe~ |
 
 Every program is found with ~executable-find~.  If a program is installed but
 Emacs does not see it, check ~M-: (executable-find "mpv")~.  The answer is
@@ -132,9 +135,10 @@ the new environment is inherited.
 
 The SSH backend is different: ~ssh~ and ~sftp~ run here, but ~find~, ~cat~,
 ~dd~ and optionally ~ffmpeg~ run on the remote host.  That host must offer a
-POSIX shell.  A Windows OpenSSH server whose default shell is ~cmd.exe~ or
-PowerShell is not a supported remote, even though a Windows machine can be a
-perfectly good client.
+POSIX shell.  The byte-range path uses GNU ~dd~ flags; a macOS/BSD host
+without GNU ~dd~ copies the whole image once instead.  A Windows OpenSSH
+server whose default shell is ~cmd.exe~ or PowerShell is not a supported
+remote, even though a Windows machine can be a perfectly good client.
 
 * Audio and the visualizer
 :PROPERTIES:
@@ -144,12 +148,14 @@ perfectly good client.
 Playback and visualization are separate.  mpv plays the track through the
 platform's audio output; cava listens to the system and draws whatever is
 playing, including another player.  That is why the visualizer still works
-when orpheus is paused and why it can be silent while playback is fine.
+when orpheus is paused and why it can be silent while playback is fine.  On
+GNU/Linux the default is PipeWire; cava does not fall back by itself, so a
+PulseAudio-only machine sets ~orpheus-vis-input~ to ~pulse~.
 
 | Piece | GNU/Linux | macOS | Windows |
 |-------+-----------+-------+---------|
 | mpv output | ~--ao=pipewire,pulse,alsa~ | ~--ao=coreaudio~ | ~--ao=wasapi~ |
-| cava input | ~pipewire~, the default sink monitor | ~portaudio~, an input device | automatic; orpheus writes no method |
+| cava input | ~pipewire~ by default; use ~pulse~ on PulseAudio-only systems | ~portaudio~, an input device | automatic; orpheus writes no method |
 | System output | the default monitor | needs a loopback device such as BlackHole | the default output device |
 | ~orpheus-vis-input~ | nil chooses ~pipewire~ | nil chooses ~portaudio~ | must stay nil for upstream cava |
 
@@ -179,10 +185,10 @@ section there.  A fork that accepts a method can still be selected with
 
 Local paths go through Emacs's file-name functions.  A path below
 ~orpheus-local-directory~ becomes relative in a portable playlist, so moving
-the library does not require rewriting the playlist.  On Windows those
-comparisons fold case: ~C:/Music~ and ~c:/music~ are the same place.  Remote
-paths are POSIX paths and stay case-sensitive even when the client is
-Windows.
+the library does not require rewriting the playlist.  Local comparisons follow
+the filesystem that holds the path: default macOS and Windows volumes ignore
+case, while Linux and case-sensitive APFS do not.  Remote paths are POSIX
+paths and stay case-sensitive even when the client is Windows.
 
 Search and cover art share one rule: use a file-listing ~find~ when the
 platform has one, and never use Windows ~find.exe~, which searches text inside
@@ -197,7 +203,9 @@ The cache and playlist locations keep their XDG defaults on every platform:
 ~orpheus-cache-directory~ is ~$XDG_CACHE_HOME/orpheus/~ or
 ~/.cache/orpheus/~, and ~orpheus-playlist-directory~ is
 ~$XDG_DATA_HOME/orpheus/playlists~ or ~/.local/share/orpheus/playlists~.
-They work on Windows, but a native location is easy to choose:
+The equalizer's preset and state files also default under
+~$XDG_DATA_HOME/orpheus/~.  They work on Windows, but a native location is
+easy to choose:
 
 #+begin_src emacs-lisp
 ;; macOS
@@ -271,10 +279,12 @@ Windows uses TCP.  Leave ~orpheus-mpd-socket~ nil and set
 ~orpheus-mpd-host~ and ~orpheus-mpd-port~ for a daemon reached over the
 network.
 
-SSH multiplexing is left to OpenSSH.  orpheus gives it a short private control
-directory and retries without multiplexing when OpenSSH rejects the socket or
-its path.  That covers a Windows OpenSSH client that does not implement
-~ControlMaster~; it does not turn a ~cmd.exe~ server into a POSIX host.
+SSH multiplexing is left to OpenSSH on Linux and macOS.  Native Windows
+OpenSSH does not implement ~ControlMaster~, so orpheus disables multiplexing
+there rather than relying on an error message.  Elsewhere it gives ssh a short
+private control directory and retries without multiplexing when OpenSSH
+rejects the socket or path.  None of this turns a ~cmd.exe~ server into a
+POSIX host.
 
 * Platform checklists
 :PROPERTIES:
@@ -291,8 +301,11 @@ its path.  That covers a Windows OpenSSH client that does not implement
 - The local backend asks mpv for PipeWire first, then PulseAudio, then ALSA.
   Override ~orpheus-local-audio-driver~ only when the machine needs a
   specific device.
-- cava captures the default PipeWire or PulseAudio monitor.  If the sink is
-  not the one playing, choose the source with ~orpheus-vis-input~.
+- cava defaults to PipeWire.  On a PulseAudio-only machine set
+  ~orpheus-vis-input~ to ~pulse~.  If the sink is not the one playing, choose
+  the source with ~orpheus-vis-input~.
+- A temporary Unix socket can exceed the platform's path limit on an unusual
+  ~TMPDIR~.  Set ~orpheus-local-socket~ to a short path if mpv cannot open it.
 - If the library watch misses changes, check the inotify limit with
   ~cat /proc/sys/fs/inotify/max_user_watches~.  Raise it if the library is
   larger than the limit; unwatched directories still fall back to on-access
@@ -313,6 +326,8 @@ its path.  That covers a Windows OpenSSH client that does not implement
 - BSD ~find~ supports the ~-maxdepth~ and ~-iname~ flags used by the search
   and cover scan.  There is no macOS runner in the gate, so this is a
   documented platform branch rather than a continuously tested one.
+- The SSH byte-range path expects GNU ~dd~ on the remote.  A macOS remote
+  without it copies the whole image once; playback is unaffected.
 - A temporary Unix socket can exceed the platform's path limit on an unusual
   ~TMPDIR~.  Set ~orpheus-local-socket~ to a short path if mpv cannot open it.
 - If the library watch is unavailable, the on-access checks and ~M-u~/~M-U~
@@ -329,7 +344,8 @@ its path.  That covers a Windows OpenSSH client that does not implement
 - The local backend asks mpv for WASAPI and talks to it over a named pipe
   whose name carries the Emacs PID.  This path is written and compiled, but
   no Windows machine runs in this gate; treat it as unproven until a real
-  smoke test says otherwise.
+  smoke test says otherwise.  The pipe is opened through Emacs's local-socket
+  API, so that transport itself needs proof on Windows.
 - Windows ~find.exe~ searches text, not file names.  Search and cover art
   therefore read the tree in Emacs; both are synchronous, which is fine for
   ordinary libraries and noticeable for very large ones.
@@ -340,12 +356,14 @@ its path.  That covers a Windows OpenSSH client that does not implement
 - The library watch works only when the Emacs build provides ~w32notify~.
   Network drives may not report changes; ~M-u~ and ~M-U~ remain available.
 - MPD is reached over TCP.  A Unix socket setting is for Linux and macOS.
-- An SSH client on Windows can use a POSIX remote, but the remote must offer
-  ~sh~, ~find~, ~cat~ and ~dd~.  A Windows OpenSSH server running ~cmd.exe~
-  or PowerShell is not supported.
-- The local comparisons that decide ownership, cover ranking and watch
-  cleanup fold case.  Remote POSIX paths do not, because the remote
-  filesystem decides what its names mean.
+- Native Windows OpenSSH has no multiplexing, so orpheus leaves
+  ~ControlMaster~ off there.  An SSH client on Windows can still use a POSIX
+  remote, but the remote must offer ~sh~, ~find~, ~cat~ and GNU ~dd~.  A
+  Windows OpenSSH server running ~cmd.exe~ or PowerShell is not supported.
+- Local comparisons follow the filesystem's case rule; default Windows and
+  macOS volumes ignore case, while Linux and case-sensitive APFS do not.
+  Remote POSIX paths stay case-sensitive, because the remote filesystem
+  decides what its names mean.
 - The cache and playlist defaults are XDG-style.  They work, but the native
   ~LOCALAPPDATA~ location above is available if you prefer it.
 
@@ -374,6 +392,8 @@ only needs a POSIX remote plus mpv here.
   implementation, and a watch limit can leave some directories unwatched.
 - The cache and playlist defaults are not native macOS or Windows locations.
   They are valid paths; set the options when a native location matters.
+- SSH byte-range transfers are not promised where only BSD ~dd~ is installed;
+  the whole image is copied instead.
 - The diagrams and platform tables describe the code in this repository.  A
   downstream package that changes mpv, cava or Emacs can change the result.
 
