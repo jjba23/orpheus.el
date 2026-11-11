@@ -1,0 +1,388 @@
+#+title: Cross-platform guide
+#+subtitle: what works where, what falls back, and what is still unproven
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:architecture.org][How it works]] · [[file:backends.org][Backends]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]]
+
+orpheus is one Emacs Lisp package, but it drives programs that are not the
+same on every machine.  This page is the map: what runs where, which parts
+fall back, what the test gate actually covers, and what still needs a real
+machine.  The short rule is that Emacs owns the interface and the queue; mpv,
+MPD, SSH and cava do the platform-specific work.  When a platform cannot do
+something, the feature drops away instead of preventing the player from
+opening.
+
+* Support at a glance
+:PROPERTIES:
+:CUSTOM_ID: support-at-a-glance
+:END:
+
+| Area | GNU/Linux | macOS | Windows |
+|------+-----------+-------+---------|
+| Playback | mpv with PipeWire, PulseAudio or ALSA | mpv with CoreAudio | mpv with WASAPI over a per-Emacs named pipe; the real path is unproven |
+| MPD | Unix socket or TCP | Unix socket or TCP | TCP; set ~orpheus-mpd-host~ and ~orpheus-mpd-port~ |
+| SSH client | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH; multiplexing is left to it |
+| SSH remote | a POSIX shell | a POSIX shell | a POSIX shell only; ~cmd.exe~ and PowerShell remotes are not supported |
+| Search | asynchronous GNU ~find~ | asynchronous BSD ~find~ | Emacs walks the tree synchronously |
+| Cover art | asynchronous ~find~ around the album | asynchronous ~find~ around the album | Emacs reads the album, parent and child folders synchronously |
+| Library watch | one inotify watch per directory | one watch per directory when the Emacs notification library supports it | one watch per directory when the Emacs build has ~w32notify~ |
+| Visualizer | cava with PipeWire | cava with PortAudio; a loopback device is needed for system output | cava captures the default output; no input method is configured |
+| Notifications | Emacs notification support, when built in | same | same; a build without it is silent |
+| Detach | a new graphical frame | a new graphical frame | a new graphical frame; a terminal says a display is needed |
+| Cache | ~orpheus-cache-directory~; XDG-style by default | same | same; override it for a native Windows path |
+| Playlist files | ~orpheus-playlist-directory~; XDG-style by default | same | same; override it if you prefer |
+| Local path case | significant | significant | folded for local ownership and watch cleanup |
+
+The table describes code paths, not a promise that every external binary is
+installed.  A missing program removes its feature; it does not stop local
+playback or browsing.  [[file:troubleshooting.org][Troubleshooting]] starts
+with the program check for each feature.
+
+* What is actually verified
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+
+The quality gate runs on GNU/Linux.  ~maak check~ compiles every file with
+warnings as errors, runs checkdoc and runs the unit suite.  ~maak integration~
+starts a real MPD and a real mpv and plays through them.  The release task
+runs both again before it tags a version.
+
+There is no macOS or Windows runner in this repository.  Their platform
+branches are covered by unit tests that bind ~system-type~:
+
+- the mpv audio output and cava input defaults;
+- the per-Emacs Windows named pipe and a user-supplied pipe path;
+- the Windows art scan refusing ~find.exe~;
+- the Windows cava configuration leaving out ~[input]~;
+- case-folded local path comparisons.
+
+Those tests catch a branch that drifts.  They do not prove that a real mpv
+opens a Windows named pipe, that WASAPI produces sound, that ~w32notify~
+delivers events, or that cava finds the Windows output device.  The same
+limit applies to CoreAudio, PortAudio, kqueue and the macOS notification
+library.  The honest status is therefore *unit-tested branch*, not *verified
+platform*.
+
+#+begin_src mermaid
+flowchart TB
+  Code["same Emacs Lisp"] --> Linux["GNU/Linux gate"]
+  Code --> Mac["macOS platform branches"]
+  Code --> Win["Windows platform branches"]
+  Linux --> L1["real MPD and mpv integration"]
+  Linux --> L2["full unit suite"]
+  Mac --> M1["unit tests with system-type"]
+  Mac --> M2["CoreAudio, kqueue and cava not run here"]
+  Win --> W1["unit tests with system-type"]
+  Win --> W2["WASAPI, named pipe, w32notify and cava not run here"]
+#+end_src
+
+* Choosing a backend
+:PROPERTIES:
+:CUSTOM_ID: choosing-a-backend
+:END:
+
+The backend follows where the music lives, not the operating system.  All
+three backends are available from every client platform; the difference is
+what the other end must provide.
+
+#+begin_src mermaid
+flowchart TD
+  Music{"where is the music?"}
+  Music -->|on this computer| Local["local backend<br/>mpv here"]
+  Music -->|already in a daemon| MPD["MPD backend<br/>Unix socket or TCP"]
+  Music -->|on another POSIX machine| SSHB["SSH backend<br/>ssh here, mpv here"]
+  Local --> Client["works on Linux, macOS and Windows"]
+  MPD --> Client
+  SSHB --> Client
+  SSHB --> Remote["remote needs a POSIX shell,<br/>find, cat and dd"]
+#+end_src
+
+MPD owns its queue and its audio output.  The local and SSH backends keep the
+queue in Emacs, and SSH copies a track here before mpv plays it.  That is why
+a slow link affects SSH browsing and playback while the local backend keeps
+working at disk speed.
+
+* Programs and where they run
+:PROPERTIES:
+:CUSTOM_ID: programs
+:END:
+
+| Program | Runs on | Needed for | Notes |
+|---------+---------+------------+-------|
+| ~emacs~ | this computer | everything | 29.1 or newer |
+| ~mpv~ | this computer | local and SSH playback | must be on ~exec-path~ |
+| ~ffmpeg~ | this computer | extracted covers, lyrics tags, cutting a fetched range | optional for basic playback |
+| ~ffprobe~ | this computer | range correction and some tags | normally ships with ~ffmpeg~ |
+| ~ssh~ | this computer | the SSH backend | OpenSSH client |
+| ~sftp~ | this computer | SSH fallback when the remote shell rejects ~cat~ | optional |
+| ~mpd~ | this computer or another machine | the MPD backend | the daemon owns its library and output |
+| ~cava~ | this computer | the visualizer | optional; playback does not depend on it |
+| ~yt-dlp~ | this computer | video links opened by mpv | optional |
+
+Every program is found with ~executable-find~.  If a program is installed but
+Emacs does not see it, check ~M-: (executable-find "mpv")~.  The answer is
+~nil~ when the directory is not on ~exec-path~; setting
+~orpheus-local-mpv-program~ or ~orpheus-vis-program~ to an absolute path is
+the escape hatch.  On Windows, restart Emacs after changing a system PATH so
+the new environment is inherited.
+
+The SSH backend is different: ~ssh~ and ~sftp~ run here, but ~find~, ~cat~,
+~dd~ and optionally ~ffmpeg~ run on the remote host.  That host must offer a
+POSIX shell.  A Windows OpenSSH server whose default shell is ~cmd.exe~ or
+PowerShell is not a supported remote, even though a Windows machine can be a
+perfectly good client.
+
+* Audio and the visualizer
+:PROPERTIES:
+:CUSTOM_ID: audio-and-visualizer
+:END:
+
+Playback and visualization are separate.  mpv plays the track through the
+platform's audio output; cava listens to the system and draws whatever is
+playing, including another player.  That is why the visualizer still works
+when orpheus is paused and why it can be silent while playback is fine.
+
+| Piece | GNU/Linux | macOS | Windows |
+|-------+-----------+-------+---------|
+| mpv output | ~--ao=pipewire,pulse,alsa~ | ~--ao=coreaudio~ | ~--ao=wasapi~ |
+| cava input | ~pipewire~, the default sink monitor | ~portaudio~, an input device | automatic; orpheus writes no method |
+| System output | the default monitor | needs a loopback device such as BlackHole | the default output device |
+| ~orpheus-vis-input~ | nil chooses ~pipewire~ | nil chooses ~portaudio~ | must stay nil for upstream cava |
+
+#+begin_src mermaid
+flowchart LR
+  Track["track"] --> MPV["mpv"]
+  MPV --> Linux["Linux<br/>PipeWire, then PulseAudio, then ALSA"]
+  MPV --> Mac["macOS<br/>CoreAudio"]
+  MPV --> Win["Windows<br/>WASAPI"]
+  Track -.-> Cava["cava, independent"]
+  Cava --> LinuxC["Linux<br/>PipeWire monitor"]
+  Cava --> MacC["macOS<br/>PortAudio input<br/>loopback needed for output"]
+  Cava --> WinC["Windows<br/>default output<br/>no input method"]
+#+end_src
+
+The generated cava configuration uses ~raw_target = /dev/stdout~.  That is
+cava's stdout sentinel on every platform, not a Unix-only filesystem path, so
+the same configuration works on Windows.  Upstream cava on Windows rejects
+*any* configured input method, which is why orpheus omits the whole ~[input]~
+section there.  A fork that accepts a method can still be selected with
+~orpheus-vis-input~, but the default must stay nil.
+
+* Local files, search and cover art
+:PROPERTIES:
+:CUSTOM_ID: files-search-and-art
+:END:
+
+Local paths go through Emacs's file-name functions.  A path below
+~orpheus-local-directory~ becomes relative in a portable playlist, so moving
+the library does not require rewriting the playlist.  On Windows those
+comparisons fold case: ~C:/Music~ and ~c:/music~ are the same place.  Remote
+paths are POSIX paths and stay case-sensitive even when the client is
+Windows.
+
+Search and cover art share one rule: use a file-listing ~find~ when the
+platform has one, and never use Windows ~find.exe~, which searches text inside
+files.  ~orpheus-local--find-program~ is the single guard.  Linux and macOS
+run ~find~ as a process, so a large tree does not block Emacs.  On Windows, or
+on a host without a usable ~find~, search walks with
+~directory-files-recursively~ and cover art reads the album, its parent and one
+level of child folders in Emacs.  Both fallbacks are synchronous, so a very
+large library can pause for a moment.
+
+The cache and playlist locations keep their XDG defaults on every platform:
+~orpheus-cache-directory~ is ~$XDG_CACHE_HOME/orpheus/~ or
+~/.cache/orpheus/~, and ~orpheus-playlist-directory~ is
+~$XDG_DATA_HOME/orpheus/playlists~ or ~/.local/share/orpheus/playlists~.
+They work on Windows, but a native location is easy to choose:
+
+#+begin_src emacs-lisp
+;; macOS
+(setq orpheus-cache-directory "~/Library/Caches/orpheus/")
+#+end_src
+
+#+begin_src emacs-lisp
+;; Windows, when LOCALAPPDATA is set
+(setq orpheus-cache-directory
+      (expand-file-name "orpheus/cache/"
+                        (or (getenv "LOCALAPPDATA") "~")))
+#+end_src
+
+#+begin_src mermaid
+flowchart TD
+  Root["local library"] --> Search["search"]
+  Root --> Art["cover art"]
+  Root --> Watch["library watch"]
+  Search --> Find{"file-listing find?"}
+  Art --> Find
+  Find -->|Linux, macOS| Async["find process<br/>off the main thread"]
+  Find -->|Windows or no find| Sync["Emacs reads the tree<br/>synchronous"]
+  Watch --> Notify{"directory notifications?"}
+  Notify -->|yes| Debounce["events coalesced for 0.5 s<br/>prune cache and run hook"]
+  Notify -->|no| OnAccess["on-access checks<br/>M-u and M-U"]
+#+end_src
+
+* Watching the library
+:PROPERTIES:
+:CUSTOM_ID: watching
+:END:
+
+The local backend walks the library once and keeps one watch per directory,
+because file notifications are not recursive.  Hidden and symlinked
+directories are skipped, so a link back up the tree cannot make the walk
+endless.  A created directory gets watches below it; a deleted or renamed one
+loses them, and a renamed directory gets a new set at its new path.  Events
+are coalesced for half a second, then the cue cache is pruned, saved when it
+changed, and ~orpheus-backend-library-changed-hook~ tells the player to drop
+cached tabs and covers.
+
+The platform differences are in the notification library, not in this logic:
+
+- GNU/Linux uses inotify when the Emacs build has it.  A directory that
+  cannot be watched because the user's watch limit is reached is skipped; the
+  rest keep working.
+- macOS uses whatever directory notifications the Emacs build provides.  When
+  a directory cannot be watched, the on-access checks still catch a changed
+  file.
+- Windows uses ~w32notify~ when the Emacs build has it.  A network drive may
+  not report directory changes at all.
+- A refused watch is never fatal.  ~M-u~ prunes changed or missing cue
+  entries, and ~M-U~ clears the local cue cache; both remain the manual repair.
+
+* Paths, sockets and the Windows named pipe
+:PROPERTIES:
+:CUSTOM_ID: paths-and-sockets
+:END:
+
+A local IPC socket is a Unix socket on Linux and macOS and a named pipe on
+Windows.  ~orpheus-local--socket-path~ chooses the spelling:
+
+- Linux and macOS use a temporary socket named after the Emacs process.
+- Windows uses ~\\.\pipe\orpheus-emacs-PID~, so two Emacs sessions do not
+  fight over one pipe.
+- A user-supplied ~orpheus-local-socket~ wins.  A Windows pipe path is kept as
+  written instead of being passed through ~expand-file-name~ like a file.
+
+MPD is the other way round: a Unix socket is normal on Linux and macOS, while
+Windows uses TCP.  Leave ~orpheus-mpd-socket~ nil and set
+~orpheus-mpd-host~ and ~orpheus-mpd-port~ for a daemon reached over the
+network.
+
+SSH multiplexing is left to OpenSSH.  orpheus gives it a short private control
+directory and retries without multiplexing when OpenSSH rejects the socket or
+its path.  That covers a Windows OpenSSH client that does not implement
+~ControlMaster~; it does not turn a ~cmd.exe~ server into a POSIX host.
+
+* Platform checklists
+:PROPERTIES:
+:CUSTOM_ID: checklists
+:END:
+
+** GNU/Linux
+:PROPERTIES:
+:CUSTOM_ID: gnu-linux
+:END:
+
+- Install Emacs 29.1 or newer and ~mpv~.  Add ~ffmpeg~ for extracted covers
+  and tags, ~cava~ for the visualizer, and ~ssh~ for remote libraries.
+- The local backend asks mpv for PipeWire first, then PulseAudio, then ALSA.
+  Override ~orpheus-local-audio-driver~ only when the machine needs a
+  specific device.
+- cava captures the default PipeWire or PulseAudio monitor.  If the sink is
+  not the one playing, choose the source with ~orpheus-vis-input~.
+- If the library watch misses changes, check the inotify limit with
+  ~cat /proc/sys/fs/inotify/max_user_watches~.  Raise it if the library is
+  larger than the limit; unwatched directories still fall back to on-access
+  checks.
+- Run ~maak check~ and ~maak integration~ after changing the package.
+
+** macOS
+:PROPERTIES:
+:CUSTOM_ID: macos
+:END:
+
+- Install Emacs 29.1 or newer and ~mpv~, for example with
+  ~brew install mpv ffmpeg cava yt-dlp~.  Add ~ssh~ for remote libraries;
+  the system OpenSSH is normally enough.
+- mpv uses CoreAudio.  cava defaults to ~portaudio~, which records an input
+  device; hearing system output needs a loopback device such as BlackHole.
+  Without one, playback still works and the visualizer is silent.
+- BSD ~find~ supports the ~-maxdepth~ and ~-iname~ flags used by the search
+  and cover scan.  There is no macOS runner in the gate, so this is a
+  documented platform branch rather than a continuously tested one.
+- A temporary Unix socket can exceed the platform's path limit on an unusual
+  ~TMPDIR~.  Set ~orpheus-local-socket~ to a short path if mpv cannot open it.
+- If the library watch is unavailable, the on-access checks and ~M-u~/~M-U~
+  still work.
+
+** Windows
+:PROPERTIES:
+:CUSTOM_ID: windows
+:END:
+
+- Install Emacs 29.1 or newer and put ~mpv.exe~ on ~PATH~.  Add ~ffmpeg.exe~
+  for covers and tags, ~cava.exe~ for the visualizer, and the OpenSSH client
+  for remote libraries.  Restart Emacs after changing PATH.
+- The local backend asks mpv for WASAPI and talks to it over a named pipe
+  whose name carries the Emacs PID.  This path is written and compiled, but
+  no Windows machine runs in this gate; treat it as unproven until a real
+  smoke test says otherwise.
+- Windows ~find.exe~ searches text, not file names.  Search and cover art
+  therefore read the tree in Emacs; both are synchronous, which is fine for
+  ordinary libraries and noticeable for very large ones.
+- Leave ~orpheus-vis-input~ nil.  Upstream cava on Windows rejects a
+  configured input method; orpheus leaves the ~[input]~ section out so cava
+  can choose the default output.  cava itself may not be installed, and
+  playback does not depend on it.
+- The library watch works only when the Emacs build provides ~w32notify~.
+  Network drives may not report changes; ~M-u~ and ~M-U~ remain available.
+- MPD is reached over TCP.  A Unix socket setting is for Linux and macOS.
+- An SSH client on Windows can use a POSIX remote, but the remote must offer
+  ~sh~, ~find~, ~cat~ and ~dd~.  A Windows OpenSSH server running ~cmd.exe~
+  or PowerShell is not supported.
+- The local comparisons that decide ownership, cover ranking and watch
+  cleanup fold case.  Remote POSIX paths do not, because the remote
+  filesystem decides what its names mean.
+- The cache and playlist defaults are XDG-style.  They work, but the native
+  ~LOCALAPPDATA~ location above is available if you prefer it.
+
+** Everything else
+:PROPERTIES:
+:CUSTOM_ID: everything-else
+:END:
+
+The local backend's audio choice falls back to ~pulse,alsa~ on an unknown
+system, and cava's input falls back to ~pulse~.  That is a best effort, not a
+claim that every Unix variant has been tested.  MPD and SSH are the portable
+choices when the platform is unusual: MPD can live on another machine, and SSH
+only needs a POSIX remote plus mpv here.
+
+* What is not promised
+:PROPERTIES:
+:CUSTOM_ID: not-promised
+:END:
+
+- Windows playback is not called supported until a real Windows run proves
+  mpv's named-pipe IPC and WASAPI output.
+- The visualizer is not verified on Windows or macOS.  Playback never depends
+  on it.
+- A Windows SSH server with a non-POSIX shell is out of scope.
+- The watcher is not recursive by itself; one watch per directory is the
+  implementation, and a watch limit can leave some directories unwatched.
+- The cache and playlist defaults are not native macOS or Windows locations.
+  They are valid paths; set the options when a native location matters.
+- The diagrams and platform tables describe the code in this repository.  A
+  downstream package that changes mpv, cava or Emacs can change the result.
+
+* Where to go next
+
+- [[file:architecture.org][How it works]] has the backend seam and the
+  lifecycle, watcher and queue-to-sound diagrams.
+- [[file:backends.org][Backends]] explains what each backend needs and how
+  to add another.
+- [[file:configuration.org][Configuration]] has every option and its default.
+- [[file:troubleshooting.org][Troubleshooting]] starts with the connection and
+  works outward.

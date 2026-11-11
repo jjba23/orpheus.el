@@ -9,6 +9,15 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- A dedicated [[file:docs/platforms.org][cross-platform guide]] covers the support matrix,
+  program placement, audio and visualizer paths, search and watch fallbacks,
+  SSH requirements, per-platform checklists and the boundary between tested
+  and merely compiled behavior.  It includes four Mermaid diagrams.
+
 * 1.0.0 (2026-11-11)
 
 *** Added

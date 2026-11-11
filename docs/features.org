@@ -5,7 +5,7 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:troubleshooting.org][Troubleshooting]]
+[[file:../README.org][Back to README]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:platforms.org][Cross-platform]] · [[file:troubleshooting.org][Troubleshooting]]
 
 This is the long version of the feature list.  The [[file:../README.org][README]] keeps the short
 one; this page says what each part is for and how it behaves at the edges.

@@ -5,14 +5,15 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:glossary.org][Words and ideas]]
+[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:backends.org][Backends]] · [[file:platforms.org][Cross-platform]] · [[file:glossary.org][Words and ideas]]
 
 A player that goes quiet is usually one check away from working again.  None
 of the checks below change your music, and none of them need a restart
 first.  Start with the player's own diagnostics: ~H~ opens the help buffer,
 ~?~ opens the command menu, and ~M-x orpheus-tutorial~ walks the happy path
 again.  The sections are ordered from the connection outward, so you can
-stop as soon as the sound comes back.
+stop as soon as the sound comes back.  The [[file:platforms.org][cross-platform guide]]
+has the setup checklist and the known limit for each operating system.
 
 * The player says “not connected”
 

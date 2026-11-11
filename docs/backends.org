@@ -5,7 +5,7 @@
 #+language: en
 #+options: toc:t num:nil
 
-[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]] · [[file:glossary.org][Words and ideas]]
+[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:usage.org][Using orpheus]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]] · [[file:platforms.org][Cross-platform]] · [[file:glossary.org][Words and ideas]]
 
 A backend is how orpheus reaches your music.  The player itself gives you the
 window, the keys and the queue; the backend is the small part that knows how
@@ -198,6 +198,10 @@ metadata work where the extractor provides them.
 :PROPERTIES:
 :CUSTOM_ID: platforms
 :END:
+
+The [[file:platforms.org][cross-platform guide]] is the longer version of this
+section: the support matrix, setup checklists and what the test gate does not
+prove.
 
 ** GNU/Linux and PipeWire
 :PROPERTIES:
