@@ -198,6 +198,39 @@ or a session cannot prune another cache later."
     (concat (make-string filled orpheus-progress-filled-char)
             (make-string (- width filled) orpheus-progress-empty-char))))
 
+;;; Tracks that play part of a file
+
+;; A CD ripped as one file has no track boundary inside it: the boundaries
+;; live in a cue sheet beside it, or in the CUESHEET block of a FLAC file.
+;; Such a track is the part of the file it occupies, written as
+;; `disc.flac#start=12.533&end=214.316'.  The backend that plays it seeks; the
+;; backend that copies it first sends only those minutes.
+
+(defconst orpheus-track-range-regexp
+  "\\`\\(.+\\)#start=\\([0-9.]+\\)\\(?:&end=\\([0-9.]+\\)\\)?\\'"
+  "Matches a URI that plays only part of the file it names.")
+
+(defun orpheus-track-range (uri)
+  "Return the seconds URI plays as a cons of START and END, or nil.
+END is nil when URI plays to the end of the file, as the last track of a disc
+is cut; a URI that names a whole file has no range at all."
+  (when (and (stringp uri)
+             (string-match orpheus-track-range-regexp uri))
+    (cons (string-to-number (match-string 2 uri))
+          (when (match-string 3 uri)
+            (string-to-number (match-string 3 uri))))))
+
+(defun orpheus-track-path (uri)
+  "Return URI without the range that limits it to one track."
+  (if (and (stringp uri) (string-match orpheus-track-range-regexp uri))
+      (match-string 1 uri)
+    uri))
+
+(defun orpheus-track-range-uri (path start &optional end)
+  "Return PATH limited to the seconds between START and END."
+  (format "%s#start=%.3f%s" path start
+          (if end (format "&end=%.3f" end) "")))
+
 (defun orpheus-track-label (track)
   "Return TRACK as \"artist – title\", falling back to whatever exists."
   (cond ((null track) "")
@@ -206,7 +239,8 @@ or a session cannot prune another cache later."
                  (orpheus-track-title track)))
         ((orpheus-track-title track) (orpheus-track-title track))
         ((orpheus-track-uri track)
-         (file-name-nondirectory (orpheus-track-uri track)))
+         (file-name-nondirectory (orpheus-track-path
+                                  (orpheus-track-uri track))))
         (t "")))
 
 (defun orpheus-item-playable (item)

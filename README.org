@@ -95,10 +95,25 @@ matches what you are doing; every page links back here and to its neighbours.
   (orpheus-mode-line-mode 1))
 #+end_src
 
-The programs to install alongside it are the ones each backend uses: ~mpd~ for
-the MPD backend, ~mpv~ (and ~ffmpeg~ for cover art extraction, ~yt-dlp~ for
-video links) for the local one, ~ssh~ (and ~sftp~ when the remote shell cannot
-run ~cat~) for the remote one, and ~cava~ for the visualizer.
+The package itself is Emacs Lisp.  Each backend calls a program, and which
+machine that program lives on is the part worth checking:
+
+| Program   | Where                          | Needed for                                              |
+|-----------+--------------------------------+---------------------------------------------------------|
+| ~emacs~     | this computer                  | Emacs 29.1 or newer                                     |
+| ~mpd~       | the machine running the daemon | the MPD backend                                         |
+| ~mpv~       | this computer                  | the local and SSH backends play through it              |
+| ~ffmpeg~    | this computer                  | covers extracted from a file, and lyrics tags inside it  |
+| ~ffmpeg~    | the SSH host                   | sending one track of a CD image instead of the whole image |
+| ~ssh~       | this computer                  | the SSH backend                                         |
+| ~sftp~      | this computer                  | the SSH backend when the host's shell cannot run ~cat~   |
+| ~cava~      | this computer                  | the visualizer                                          |
+| ~yt-dlp~    | this computer                  | video links played by the local backend                 |
+
+Cue sheets need no program: a ~.cue~ beside an image, or a ~CUESHEET~ block
+inside a FLAC file, is read in Emacs.  A missing ~ffmpeg~ on the SSH host is
+not fatal, only slower: the whole image is copied once and its tracks play
+from that copy.
 
 * Quick start
 

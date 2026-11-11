@@ -107,6 +107,51 @@ or nil to stay silent."
          (when (string-prefix-p "orpheus" (process-name process))
            (ignore-errors (delete-process process)))))))
 
+(defun orpheus-test--u64-bytes (value)
+  "Return VALUE as eight big-endian bytes."
+  (apply #'unibyte-string
+         (cl-loop for shift from 56 downto 0 by 8
+                  collect (logand (ash value (- shift)) 255))))
+
+(defun orpheus-test--u24-bytes (value)
+  "Return VALUE as three big-endian bytes."
+  (apply #'unibyte-string
+         (cl-loop for shift from 16 downto 0 by 8
+                  collect (logand (ash value (- shift)) 255))))
+
+(defun orpheus-test--flac-image (rate total tracks)
+  "Return a FLAC file holding a stream of RATE and TOTAL and TRACKS.
+TRACKS is a list of (SAMPLE-OFFSET . NUMBER), lead-out track included."
+  (let* ((stream (concat
+                  (make-string 10 0)
+                  (let ((bits (logior (ash rate 44) (ash 1 41) (ash 15 36)
+                                      total)))
+                    (apply #'unibyte-string
+                           (cl-loop for shift from 56 downto 0 by 8
+                                    collect (logand (ash bits (- shift)) 255))))
+                  (make-string 16 0)))
+         (cuesheet (concat
+                    (make-string 128 0)
+                    (orpheus-test--u64-bytes 88200)
+                    (unibyte-string 128)
+                    (make-string 258 0)
+                    (unibyte-string (length tracks))
+                    (mapconcat
+                     (lambda (track)
+                       (concat (orpheus-test--u64-bytes (car track))
+                               (unibyte-string (cdr track))
+                               (make-string 12 0)
+                               (unibyte-string 0)
+                               (make-string 13 0)
+                               (unibyte-string 1)
+                               (orpheus-test--u64-bytes (car track))
+                               (unibyte-string 1 0 0 0)))
+                     tracks ""))))
+    (concat "fLaC"
+            (unibyte-string 0) (orpheus-test--u24-bytes (length stream)) stream
+            (unibyte-string 133) (orpheus-test--u24-bytes (length cuesheet))
+            cuesheet)))
+
 (defun orpheus-test--wait (predicate &optional timeout)
   "Wait until PREDICATE returns non-nil, or TIMEOUT seconds pass.
 Return PREDICATE's last value, so a test can assert on it."
@@ -775,6 +820,111 @@ and the password with it."
 
 
 ;;; The equalizer
+
+(ert-deftest orpheus-test/track-range-roundtrip ()
+  "A track of a disc names its file and the seconds it plays."
+  (let ((uri (orpheus-track-range-uri "/m/disc.flac" 12.5 214.25)))
+    (should (equal (orpheus-track-path uri) "/m/disc.flac"))
+    (should (equal (orpheus-track-range uri) '(12.5 . 214.25)))
+    (should (equal (orpheus-track-range-uri "/m/disc.flac" 30.0)
+                   "/m/disc.flac#start=30.000"))
+    (should (equal (orpheus-track-range "/m/disc.flac#start=30.000")
+                   '(30.0))))
+  ;; A whole file has no range, and is still its own path.
+  (should-not (orpheus-track-range "https://example.org/a.mp3"))
+  (should (equal (orpheus-track-path "https://example.org/a.mp3")
+                 "https://example.org/a.mp3")))
+
+(ert-deftest orpheus-test/cue-sheet-names-tracks ()
+  "A cue sheet's INDEX lines become tracks with their titles and ends."
+  (let* ((text (concat "PERFORMER \"The Band\"\n"
+                       "TITLE \"Album\"\n"
+                       "FILE \"disc.flac\" WAVE\n"
+                       "  TRACK 01 AUDIO\n"
+                       "    TITLE \"First\"\n"
+                       "    INDEX 01 00:00:00\n"
+                       "  TRACK 02 AUDIO\n"
+                       "    INDEX 00 04:30:00\n"
+                       "    INDEX 01 04:33:12\n"
+                       "  TRACK 03 AUDIO\n"
+                       "    TITLE \"Third\"\n"
+                       "    PERFORMER \"Guest\"\n"
+                       "    INDEX 01 10:00:00\n"))
+         (tracks (orpheus-local--cue-tracks text)))
+    (should (= 3 (length tracks)))
+    (should (equal (plist-get (nth 0 tracks) :title) "First"))
+    (should (equal (plist-get (nth 0 tracks) :artist) "The Band"))
+    (should (equal (plist-get (nth 1 tracks) :title) nil))
+    (should (equal (plist-get (nth 2 tracks) :artist) "Guest"))
+    (should (= (plist-get (nth 0 tracks) :start) 0))
+    (should (< (abs (- (plist-get (nth 1 tracks) :start) 273.16)) 0.01))
+    (should (= (plist-get (nth 0 tracks) :end) (plist-get (nth 1 tracks) :start)))
+    (should-not (plist-get (nth 2 tracks) :end))))
+
+(ert-deftest orpheus-test/local-cd-folder-lists-tracks ()
+  "A folder holding a disc and its cue sheet lists the disc's tracks."
+  (let* ((dir (make-temp-file "orpheus-cd" t))
+         (audio (expand-file-name "disc.flac" dir))
+         (cue (expand-file-name "Disc.CUE" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file audio (insert "not real audio"))
+          (with-temp-file cue
+            (insert "TRACK 01 AUDIO\n  TITLE \"First\"\n  INDEX 01 00:00:00\n"
+                    "TRACK 02 AUDIO\n  TITLE \"Second\"\n"
+                    "  INDEX 01 00:10:00\n"))
+          (let* ((items (orpheus-local--directory-items dir))
+                 (data (orpheus-item-data (nth 0 items))))
+            (should (= 2 (length items)))
+            (should (equal (orpheus-item-label (nth 0 items)) "01  First"))
+            (should (equal (alist-get 'uri data)
+                           (concat audio "#start=0.000&end=10.000")))
+            (should (= (orpheus-track-duration (alist-get 'track data)) 10))
+            (should (equal (orpheus-item-label (nth 1 items)) "02  Second"))
+            (should (equal (orpheus-item-detail (nth 0 items)) "0:10"))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/flac-cuesheet-names-tracks ()
+  "The CUESHEET block inside a FLAC file becomes its tracks."
+  (let* ((dir (make-temp-file "orpheus-disc" t))
+         (file (expand-file-name "disc.flac" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (set-buffer-multibyte nil)
+            (let ((coding-system-for-write 'binary))
+              (insert (orpheus-test--flac-image
+                       44100 1323000
+                       '((0 . 1) (441000 . 2) (882000 . 3)
+                         (1323000 . 170))))))
+          (let ((tracks (orpheus-local--cd-tracks file)))
+            (should (= 3 (length tracks)))
+            (should (= (plist-get (nth 1 tracks) :start) 10))
+            (should (= (plist-get (nth 1 tracks) :end) 20))
+            (should (= (plist-get (nth 2 tracks) :number) 3))
+            (should (= (plist-get (nth 2 tracks) :end) 30))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-status-measures-a-track-range ()
+  "A track of a disc reports its own position and length, not the disc's."
+  (let ((local (make-orpheus-local :name 'local)))
+    (setf (orpheus-local-instance-range local) '(600.0 . 900.0))
+    (orpheus-local--set-field local 'elapsed nil 640.0)
+    (orpheus-local--set-field local 'total nil 3600.0)
+    (let ((status (orpheus-local-instance-status local)))
+      (should (= 40.0 (orpheus-status-elapsed status)))
+      (should (= 300.0 (orpheus-status-total status))))
+    ;; The last track of a disc runs to the end of the image.
+    (setf (orpheus-local-instance-range local) '(3000.0))
+    (orpheus-local--set-field local 'total nil 3600.0)
+    (should (= 600.0 (orpheus-status-total
+                      (orpheus-local-instance-status local))))))
+
+(ert-deftest orpheus-test/local-loadfile-carries-the-track-range ()
+  "mpv is told where the part a track plays starts and ends."
+  (should (equal (orpheus-local--range-options '(12.5 . 214.25))
+                 "start=12.500,end=214.250"))
+  (should (equal (orpheus-local--range-options '(30.0)) "start=30.000")))
 
 (ert-deftest orpheus-test/equalizer-filter ()
   "The filter string names each non-zero band and nothing else."
@@ -2839,10 +2989,68 @@ directory, so a test never writes to the user's own cache."
    "broken"))
 
 (ert-deftest orpheus-test/ssh-download-command-is-plain-cat ()
-  "The download is a simple cat, so a minimal remote shell can run it."
-  (let ((command (orpheus-ssh--download-command "Music/It's.mp3")))
+  "A whole file is one simple cat, so a minimal remote shell can run it."
+  (let ((command (orpheus-ssh--download-command
+                  (orpheus-make-backend 'ssh) "Music/It's.mp3")))
     (should (equal command "cat -- 'Music/It'\\''s.mp3'"))
     (should-not (string-match-p "stat\\|ORPHEUS-SIZE" command))))
+
+(ert-deftest orpheus-test/ssh-cuts-a-disc-track-with-ffmpeg ()
+  "With ffmpeg on the host, only the track's minutes are sent."
+  (let ((ssh (orpheus-make-backend 'ssh))
+        (uri "Music/Disc/disc.flac#start=10.000&end=20.000"))
+    (unwind-protect
+        (progn
+          (should (equal (orpheus-ssh--download-command ssh uri)
+                         "cat -- 'Music/Disc/disc.flac'"))
+          (setf (orpheus-ssh-instance-capabilities ssh) '((ffmpeg . t)))
+          (let ((command (orpheus-ssh--download-command ssh uri)))
+            (should (string-prefix-p "ffmpeg " command))
+            (should (string-match-p
+                     "-ss 10.000 -t 10.000 -i 'Music/Disc/disc.flac'" command))
+            (should (string-suffix-p "-f matroska -" command)))
+          ;; The copy is the track already, so nothing is left to seek.
+          (should (equal (orpheus-ssh--played-path ssh uri "/cache/track.mka")
+                         "/cache/track.mka"))
+          ;; Without ffmpeg the whole image is played from the range.
+          (setf (orpheus-ssh-instance-capabilities ssh) nil)
+          (should (equal (orpheus-ssh--played-path ssh uri "/cache/disc.flac")
+                         "/cache/disc.flac#start=10.000&end=20.000")))
+      (orpheus-backend-disconnect ssh))))
+
+(ert-deftest orpheus-test/ssh-whole-image-is-cached-once ()
+  "Every track of a disc reuses the one copy taken without ffmpeg."
+  (let ((orpheus-cache-directory (make-temp-file "orpheus-cache" t))
+        (ssh (orpheus-make-backend 'ssh))
+        (first "d/disc.flac#start=0.000&end=10.000")
+        (second "d/disc.flac#start=10.000&end=20.000"))
+    (unwind-protect
+        (progn
+          (should (equal (orpheus-ssh--cache-file ssh first)
+                         (orpheus-ssh--cache-file ssh second)))
+          (setf (orpheus-ssh-instance-capabilities ssh) '((ffmpeg . t)))
+          (should-not (equal (orpheus-ssh--cache-file ssh first)
+                             (orpheus-ssh--cache-file ssh second))))
+      (orpheus-backend-disconnect ssh)
+      (delete-directory orpheus-cache-directory t))))
+
+(ert-deftest orpheus-test/ssh-cue-sheets-turn-a-disc-into-rows ()
+  "One batched cat gives a folder's discs each of their tracks."
+  (let* ((output (concat "@@FILE@@Music/Disc/disc.cue\n"
+                         "TRACK 01 AUDIO\n  TITLE \"First\"\n"
+                         "  INDEX 01 00:00:00\n"
+                         "TRACK 02 AUDIO\n  TITLE \"Second\"\n"
+                         "  INDEX 01 00:10:00\n"))
+         (listing "disc.cue\ndisc.flac\nnotes.txt\n")
+         (sheets (orpheus-ssh--cue-sheets output))
+         (items (orpheus-ssh--directory-items "Music/Disc" listing sheets)))
+    (should (equal (orpheus-ssh--cue-names listing) '("disc.cue")))
+    (should (= 1 (length sheets)))
+    (should (= 2 (length items)))
+    (should (equal (orpheus-item-label (nth 1 items)) "02  Second"))
+    (should (equal (alist-get 'uri (orpheus-item-data (nth 1 items)))
+                   "Music/Disc/disc.flac#start=10.000"))
+    (should (equal (orpheus-item-detail (nth 0 items)) "0:10"))))
 
 (ert-deftest orpheus-test/ssh-size-probe-reads-ls ()
   "The optional size probe is a simple ls, and its size field is read."

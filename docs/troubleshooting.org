@@ -43,7 +43,9 @@ mpv --version
 
 The local backend needs ~mpv~ on ~exec-path~.  If ~orpheus-local-directory~ is
 wrong, the player opens but the files tab is empty; it does not prevent the
-connection.
+connection.  ~ffmpeg~ is optional here: it pulls a cover out of the file and
+reads lyrics tags, and without it a cover file beside the track is still used
+and a track is still played.
 
 ** SSH
 
@@ -54,6 +56,11 @@ to prompt from inside Emacs, so start ~ssh music.example.org~ once in a shell.
 A new host also needs its key in =~/.ssh/known_hosts= first; use
 ~orpheus-ssh-extra-args~ with ~StrictHostKeyChecking=accept-new~ only once, not
 as a permanent setting.
+
+The table lists ~ffmpeg~ last on the host's side.  With it, a track of a CD
+image is cut out on the host and only its minutes are copied; without it the
+whole image is copied once, cached, and the tracks play from that copy.  Either
+way the track is listed, because the ~.cue~ beside the image is what names it.
 
 If ssh reports ~ControlPath too long~ or ~too long for Unix domain socket~,
 orpheus retries the command without multiplexing, so the listing still works.

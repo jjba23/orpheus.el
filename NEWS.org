@@ -9,6 +9,20 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- The local and SSH backends list a CD kept as one file as the tracks its cue
+  sheet names: a ~.cue~ beside the image, or the ~CUESHEET~ block inside a FLAC
+  file, becomes one row per track with its number, title and length.  Playing
+  one seeks to its minutes, and the position shown is the track's, not the
+  whole disc's.
+- Over SSH the chosen track is cut out on the host with ~ffmpeg~, remuxed
+  rather than re-encoded, so a three minute song no longer costs a 45 minute
+  transfer.  The capability check reports whether the host has ~ffmpeg~;
+  without it the image is copied once and the tracks play from that copy.
+
 * 0.18.2 (2026-11-10)
 
 *** Changed

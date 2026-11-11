@@ -19,6 +19,10 @@
 ;;; A shortcut worth naming: because Emacs drives the queue, the gap between
 ;;; two tracks is the time it takes Emacs to load the next file.  Gapless
 ;;; playback would mean handing the queue to mpv and reading it back.
+;;;
+;;; A CD kept as one file is listed as the tracks its cue sheet names, and each
+;;; is played from its own minutes of that file; see
+;;; `orpheus-local--cd-tracks'.
 
 ;;; Code:
 
@@ -98,6 +102,7 @@ The local and SSH backends share this list."
   (index 0)
   (status (orpheus-status-create))
   track
+  range
   (repeat nil)
   (random nil)
   (single nil)
@@ -154,24 +159,38 @@ SINGLE plays INDEX again; REPEAT wraps around; RANDOM picks another entry."
               (if (= candidate index) (mod (1+ index) count) candidate)))
     (t (1+ index))))
 
+(defun orpheus-local--uri-name (uri)
+  "Return a readable name for URI: the file it names, without its range."
+  (if (string-match-p "\\`[a-z]+://" uri)
+      uri
+    (file-name-nondirectory (orpheus-track-path uri))))
+
 (defun orpheus-local--queue-items (local)
   "Return LOCAL's queue as rows."
   (let ((index 0))
     (mapcar
      (lambda (uri)
        (prog1
-         (orpheus-item-create
-          :label (format "%2d  %s" (1+ index)
-                         (if (string-match-p "\\`[a-z]+://" uri)
-                           uri
-                           (file-name-nondirectory uri)))
-          :detail (if (string-match-p "\\`[a-z]+://" uri)
-                    "stream"
-                    (file-name-nondirectory
-                     (directory-file-name (file-name-directory uri))))
-          :kind 'track
-          :data (list (cons 'uri uri) (cons 'pos index)
-                      (cons 'id (1+ index))))
+         (let ((range (orpheus-track-range uri)))
+           (orpheus-item-create
+            :label (format "%2d  %s%s" (1+ index)
+                           (orpheus-local--uri-name uri)
+                           (if range
+                               (format " [%s]"
+                                       (orpheus-format-time (car range)))
+                             ""))
+            :detail (cond
+                     (range
+                      (orpheus-format-time
+                       (and (cdr range) (- (cdr range) (car range)))))
+                     ((string-match-p "\\`[a-z]+://" uri) "stream")
+                     (t (file-name-nondirectory
+                         (directory-file-name
+                          (file-name-directory
+                           (orpheus-track-path uri))))))
+            :kind 'track
+            :data (list (cons 'uri uri) (cons 'pos index)
+                        (cons 'id (1+ index)))))
          (setq index (1+ index))))
      (orpheus-local-instance-queue local))))
 
@@ -190,19 +209,23 @@ SINGLE plays INDEX again; REPEAT wraps around; RANDOM picks another entry."
   "A local queue needs no prefetching."
   nil)
 
+(defun orpheus-local--range-options (range)
+  "Return the mpv loadfile options that play RANGE, a cons of START and END."
+  (format "start=%.3f%s" (car range)
+          (if (cdr range) (format ",end=%.3f" (cdr range)) "")))
+
 (defun orpheus-local--play-index (local index)
   "Play the queue entry at INDEX on LOCAL.
 A backend that keeps its files elsewhere can make the entry playable first;
-see `orpheus-local--resolve-uri'."
+see `orpheus-local--resolve-uri'.  What it resolves to may still need the
+range of a track cut out of a CD image, and may be that track alone."
   (let* ((queue (orpheus-local-instance-queue local))
          (uri (nth index queue)))
     (when uri
       (setf (orpheus-local-instance-index local) index)
       (setf (orpheus-local-instance-track local)
             (orpheus-track-create :uri uri
-                                  :title (if (string-match-p "\\`[a-z]+://" uri)
-                                           uri
-                                           (file-name-nondirectory uri))))
+                                  :title (orpheus-local--uri-name uri)))
       (let ((status (orpheus-local-instance-status local))
             (token (1+ (orpheus-local-instance-load-token local))))
         (setf (orpheus-local-instance-load-token local) token)
@@ -215,13 +238,21 @@ see `orpheus-local--resolve-uri'."
          (lambda (path)
            (when (= token (orpheus-local-instance-load-token local))
              (if path
-                 (let ((paused (eq (orpheus-status-state status) 'pause)))
+                 (let ((paused (eq (orpheus-status-state status) 'pause))
+                       (range (orpheus-track-range path)))
+                   (setf (orpheus-local-instance-range local) range)
                    (setf (orpheus-status-state status) (if paused 'pause 'play))
-                   (orpheus-local--send local (list "loadfile" path "replace"))
+                   (orpheus-local--send
+                    local
+                    (append (list "loadfile" (orpheus-track-path path)
+                                  "replace")
+                            (when range
+                              (list 0 (orpheus-local--range-options range)))))
                    (orpheus-local--send
                     local (list "set_property" "pause"
                                 (if paused :true :false)))
                    (orpheus-local--prefetch local))
+               (setf (orpheus-local-instance-range local) nil)
                (setf (orpheus-status-state status) 'stop)
                (message "orpheus: cannot play %s" uri)))))))))
 
@@ -298,12 +329,26 @@ CALLBACK is called with the error string, or nil, and the data."
 ;;; Reading mpv's properties
 
 (defun orpheus-local--set-field (local field error data)
-  "Store DATA, one mpv property of FIELD, into LOCAL after ERROR."
+  "Store DATA, one mpv property of FIELD, into LOCAL after ERROR.
+A track cut out of a CD image reports its own position and length, so the
+start of the range is subtracted from both."
   (unless error
-    (let ((status (orpheus-local-instance-status local)))
+    (let ((status (orpheus-local-instance-status local))
+          (range (orpheus-local-instance-range local)))
       (pcase field
-             ('elapsed (setf (orpheus-status-elapsed status) (or data 0.0)))
-             ('total (setf (orpheus-status-total status) (or data 0.0)))
+             ('elapsed
+              (setf (orpheus-status-elapsed status)
+                    (max 0 (- (or data 0) (if range (car range) 0)))))
+             ('total
+              (setf (orpheus-status-total status)
+                    (if range
+                        (let* ((start (car range))
+                               (end (cdr range))
+                               (stop (if end
+                                         (if data (min end data) end)
+                                       (or data start))))
+                          (max 0 (- stop start)))
+                      (or data 0.0))))
              ('pause (setf (orpheus-status-state status) (if data 'pause 'play)))
              ('volume (setf (orpheus-status-volume status)
                             (round (or data 0))))))))
@@ -660,11 +705,14 @@ Embedded art is extracted when no cover file is found anywhere near it."
 
 (cl-defmethod orpheus-backend-album-art ((_local orpheus-local) track callback)
   "Find cover art for TRACK next to the file or inside it, then call CALLBACK."
-  (orpheus-local--album-art-file (orpheus-track-uri track) callback))
+  (orpheus-local--album-art-file (orpheus-track-path (orpheus-track-uri track))
+                                 callback))
 
 (cl-defmethod orpheus-backend-lyrics ((_local orpheus-local) track callback)
   "Read TRACK's sidecar or embedded lyrics, then call CALLBACK with them."
-  (funcall callback (orpheus-lyrics--from-file (orpheus-track-uri track))))
+  (funcall callback
+           (orpheus-lyrics--from-file (orpheus-track-path
+                                       (orpheus-track-uri track)))))
 
 (cl-defmethod orpheus-backend-folder-art ((_local orpheus-local) folder callback)
   "Find cover art for FOLDER, then call CALLBACK with a path or nil."
@@ -674,8 +722,225 @@ Embedded art is extracted when no cover file is found anywhere near it."
 
 (cl-defmethod orpheus-backend-local-file ((_local orpheus-local) track)
   "Return TRACK's own file, which mpv can play as it is."
-  (let ((uri (orpheus-track-uri track)))
+  (let ((uri (orpheus-track-path (orpheus-track-uri track))))
     (and uri (file-regular-p uri) uri)))
+
+;;; CD images and their tracks
+
+;; A disc ripped as one file carries its track boundaries outside the audio:
+;; in a cue sheet beside it, or in the CUESHEET block of a FLAC file.  A track
+;; of such a disc is the part of the file it occupies, written by
+;; `orpheus-track-range-uri', so browsing lists tracks and the SSH backend can
+;; fetch one without the rest.
+
+(defun orpheus-local--cue-seconds (value)
+  "Return cue timestamp VALUE in seconds, or nil.
+A cue timestamp is MM:SS:FF, where FF counts 75ths of a second."
+  (when (and (stringp value)
+             (string-match "\\`\\([0-9]+\\):\\([0-9]+\\):\\([0-9]+\\)\\'"
+                           value))
+    (+ (* 60 (string-to-number (match-string 1 value)))
+       (string-to-number (match-string 2 value))
+       (/ (string-to-number (match-string 3 value)) 75.0))))
+
+(defun orpheus-local--cue-index-start (track fields)
+  "Return TRACK's start in seconds, from the INDEX FIELDS of a cue sheet.
+INDEX 01 is where a track begins; a track with only INDEX 00 starts there."
+  (let* ((number (car fields))
+         (seconds (orpheus-local--cue-seconds (cadr fields))))
+    (cond ((and seconds (equal number "01")) seconds)
+          ((and seconds (equal number "00") (null (plist-get track :start)))
+           seconds)
+          ((plist-get track :start)))))
+
+(defun orpheus-local--cue-tracks (text)
+  "Return the tracks in the cue sheet TEXT, in playing order.
+Each track is a plist of :number, :title, :artist, :start and :end, with the
+times in seconds.  The last track has no :end, because it runs to the end of
+the file.  A sheet with no INDEX line names no track and gives back nil."
+  (let ((album-artist nil)
+        (current nil)
+        (tracks nil))
+    (dolist (line (split-string (or text "") "\n"))
+      (when (string-match "\\`[ \t]*\\([A-Za-z]+\\)[ \t]+\\(.*\\)\\'" line)
+        (let* ((keyword (upcase (match-string 1 line)))
+               (value (string-trim (match-string 2 line)))
+               (value (replace-regexp-in-string "\\`\"\\(.*\\)\"\\'" "\\1"
+                                                value)))
+          (cond
+           ((equal keyword "PERFORMER")
+            (if current
+                (unless (plist-get current :artist)
+                  (setf (plist-get current :artist) value))
+              (setq album-artist value)))
+           ((equal keyword "TITLE")
+            (when (and current (null (plist-get current :title)))
+              (setf (plist-get current :title) value)))
+           ((equal keyword "TRACK")
+            (when current (push current tracks))
+            (setq current (list :number
+                                (string-to-number
+                                 (car (split-string value))))))
+           ((equal keyword "INDEX")
+            (when current
+              (setf (plist-get current :start)
+                    (orpheus-local--cue-index-start
+                     current (split-string value)))))))))
+    (when current (push current tracks))
+    ;; A track is built as a value here: `setf' on a key a plist does not have
+    ;; yet answers a new head, which the loop would drop.
+    (cl-loop for tail on (sort (cl-remove-if-not
+                                (lambda (track)
+                                  (plist-get track :start))
+                                (nreverse tracks))
+                               (lambda (a b)
+                                 (< (plist-get a :start)
+                                    (plist-get b :start))))
+             for track = (car tail)
+             collect (let ((copy (copy-sequence track)))
+                       (unless (plist-get copy :artist)
+                         (setq copy (plist-put copy :artist album-artist)))
+                       (plist-put copy :end (plist-get (cadr tail) :start))))))
+
+(defun orpheus-local--file-bytes (file start end)
+  "Return FILE's bytes from START to END as a unibyte string."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file nil start end)
+    (buffer-string)))
+
+(defun orpheus-local--bytes-uint (bytes position count)
+  "Return COUNT big-endian bytes of BYTES, read from POSITION, as an integer."
+  (let ((value 0))
+    (dotimes (index count)
+      (setq value (+ (* value 256) (aref bytes (+ position index)))))
+    value))
+
+(defun orpheus-local--flac-blocks (file)
+  "Return FILE's FLAC metadata blocks as a list of (TYPE START END).
+START and END are byte positions in FILE.  Only the four-byte headers are
+read, so a large picture block costs nothing here."
+  (when (equal (orpheus-local--file-bytes file 0 4) "fLaC")
+    (let ((size (or (file-attribute-size (file-attributes file)) 0))
+          (position 4)
+          (blocks nil)
+          (last nil))
+      (while (and (not last) (< position size))
+        (let ((header (orpheus-local--file-bytes file position
+                                                 (+ position 4))))
+          (if (/= (length header) 4)
+              (setq last t)
+            (setq last (/= 0 (logand (aref header 0) 128)))
+            (let ((length (orpheus-local--bytes-uint header 1 3)))
+              (push (list (logand (aref header 0) 127)
+                          (+ position 4) (+ position 4 length))
+                    blocks)
+              (setq position (+ position 4 length))))))
+      (nreverse blocks))))
+
+(defun orpheus-local--flac-stream (file blocks)
+  "Return FILE's FLAC sample rate and sample count, as a cons, or nil.
+BLOCKS is what `orpheus-local--flac-blocks' returned."
+  (when-let* ((block (cl-find-if (lambda (block) (eq (nth 0 block) 0))
+                                 blocks))
+              (bytes (orpheus-local--file-bytes file (nth 1 block)
+                                                (nth 2 block))))
+    (unless (< (length bytes) 18)
+      (cons (+ (* (aref bytes 10) 4096) (* (aref bytes 11) 16)
+               (/ (aref bytes 12) 16))
+            (logior (ash (logand (aref bytes 13) 15) 32)
+                    (orpheus-local--bytes-uint bytes 14 4))))))
+
+(defun orpheus-local--flac-cuesheet (bytes rate)
+  "Return the tracks in BYTES, a FLAC CUESHEET block, in playing order.
+RATE turns the block's sample offsets into seconds.  A track's offset is where
+it begins, and the block ends with the disc's lead-out track, whose offset is
+where the last track ends."
+  (when (and (>= (length bytes) 396) (numberp rate) (> rate 0))
+    (let ((count (aref bytes 395))
+          (position 396)
+          (entries nil))
+      (dotimes (_ count)
+        (when (>= (length bytes) (+ position 36))
+          (let ((offset (orpheus-local--bytes-uint bytes position 8))
+                (number (aref bytes (+ position 8)))
+                (indices (aref bytes (+ position 35))))
+            (push (cons number (/ (float offset) rate)) entries)
+            (setq position (+ position 36 (* indices 12))))))
+      (let* ((entries (nreverse entries))
+             (lead (cdr (car (last entries))))
+             (tracks (butlast entries)))
+        (cl-loop for (entry . rest) on tracks
+                 collect (list :number (car entry)
+                               :start (cdr entry)
+                               :end (if rest (cdr (car rest)) lead)))))))
+
+(defun orpheus-local--flac-tracks (file)
+  "Return the tracks in FILE's FLAC cue sheet, or nil when it has none."
+  (when (equal (downcase (or (file-name-extension file) "")) "flac")
+    (let ((blocks (orpheus-local--flac-blocks file)))
+      (when-let* ((block (cl-find-if (lambda (block) (eq (nth 0 block) 5))
+                                     blocks))
+                  (rate (car (orpheus-local--flac-stream file blocks)))
+                  (bytes (orpheus-local--file-bytes file (nth 1 block)
+                                                    (nth 2 block))))
+        (orpheus-local--flac-cuesheet bytes rate)))))
+
+(defun orpheus-local--cue-file (file)
+  "Return the cue sheet beside FILE, or nil when there is none.
+The name is matched without regard to case, so `Disc.CUE' is found."
+  (let* ((dir (file-name-directory (expand-file-name file)))
+         (pattern (concat "\\`" (regexp-quote (file-name-base file))
+                          "\\.cue\\'"))
+         (case-fold-search t))
+    (when (file-directory-p dir)
+      (let ((name (cl-find-if (lambda (name) (string-match-p pattern name))
+                              (directory-files dir nil nil t))))
+        (and name (expand-file-name name dir))))))
+
+(defun orpheus-local--cd-tracks (file)
+  "Return the tracks FILE holds as a CD image, or nil when it is one track.
+The cue sheet beside FILE is read first, then the one inside a FLAC file."
+  (if-let* ((cue (orpheus-local--cue-file file)))
+           (orpheus-local--cue-tracks
+            (with-temp-buffer
+              (insert-file-contents cue)
+              (buffer-string)))
+    (orpheus-local--flac-tracks file)))
+
+(defun orpheus-local--cd-item (path track)
+  "Return the row for TRACK, one track of the CD image at PATH."
+  (let* ((start (plist-get track :start))
+         (end (plist-get track :end))
+         (uri (orpheus-track-range-uri path start end)))
+    (orpheus-item-create
+     :label (format "%02d  %s" (or (plist-get track :number) 0)
+                    (or (plist-get track :title)
+                        (file-name-nondirectory path)))
+     :detail (orpheus-format-time (and end (- end start)))
+     :kind 'track
+     :data (list (cons 'uri uri)
+                 (cons 'track (orpheus-track-create
+                               :uri uri
+                               :title (plist-get track :title)
+                               :artist (plist-get track :artist)
+                               :trackno (plist-get track :number)
+                               :duration (and end (- end start))))))))
+
+(defun orpheus-local--file-items (path)
+  "Return the rows the playable file PATH contributes.
+A CD image becomes one row per track it holds, so a 45 minute disc shows the
+tracks you can pick instead of a single file."
+  (if-let* ((tracks (orpheus-local--cd-tracks path)))
+           (mapcar (lambda (track)
+                     (orpheus-local--cd-item (expand-file-name path) track))
+                   tracks)
+    (list (orpheus-item-create
+           :label (file-name-nondirectory path)
+           :detail (file-size-human-readable
+                    (or (file-attribute-size (file-attributes path)) 0))
+           :kind 'track
+           :data (list (cons 'uri path))))))
 
 ;;; Browsing files
 
@@ -740,24 +1005,19 @@ backend, so a parent row here would show the way up twice."
                     (directory-files dir t "\\`[^.]")
                     (error nil))))
     (delq nil
-          (mapcar
+          (mapcan
            (lambda (path)
              (cond
                ((file-directory-p path)
-                (orpheus-item-create
-                 :label (concat (file-name-nondirectory
-                                 (directory-file-name path))
-                                "/")
-                 :kind 'directory
-                 :data (list (cons 'browse (cons 'directories (list path)))
-                             (cons 'uri path))))
+                (list (orpheus-item-create
+                       :label (concat (file-name-nondirectory
+                                       (directory-file-name path))
+                                      "/")
+                       :kind 'directory
+                       :data (list (cons 'browse (cons 'directories (list path)))
+                                   (cons 'uri path)))))
                ((orpheus-local--media-file-p path)
-                (orpheus-item-create
-                 :label (file-name-nondirectory path)
-                 :detail (file-size-human-readable
-                          (or (file-attribute-size (file-attributes path)) 0))
-                 :kind 'track
-                 :data (list (cons 'uri path))))))
+                (orpheus-local--file-items path))))
            entries))))
 
 ;;; Backend methods

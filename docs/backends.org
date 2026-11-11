@@ -19,7 +19,7 @@ Emacs.
 |---------+----------+-------|
 | MPD     | an existing library and daemon, especially on another machine | ~mpd~ and a running daemon |
 | local   | files and URLs on this machine | ~mpv~; ~ffmpeg~ for extracted covers, ~yt-dlp~ for video links |
-| SSH     | a library on a remote machine with no daemon there | ~ssh~; ~sftp~ only when the remote shell cannot run ~cat~ |
+| SSH     | a library on a remote machine with no daemon there | ~ssh~; ~sftp~ only when the remote shell cannot run ~cat~; ~ffmpeg~ there to send one track of a disc instead of the whole image |
 
 The trade-off is where the queue lives.  MPD owns its queue in the daemon;
 local and SSH keep the queue in Emacs, and SSH copies each track before mpv
@@ -85,7 +85,10 @@ Three backends are shipped and are the reference implementations:
 - =orpheus-local.el= — mpv over its JSON IPC socket, with the queue kept in
   Emacs, tags read from mpv's ~metadata~ property, cover art found next to the
   file or in its album folder, or extracted with ffmpeg, and URLs delegated to
-  mpv (and so to yt-dlp).
+  mpv (and so to yt-dlp).  A disc kept as one file is listed as the tracks its
+  cue sheet names — a ~.cue~ beside the image, or the ~CUESHEET~ block inside a
+  FLAC file — and each track plays from its own minutes with mpv's ~start~ and
+  ~end~, so the position shown counts within the track.
 - =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
   files tab, ~find~ fills Search, and ~cat~ streams the chosen track into the
   cache; a cover near the track's folder is copied to the same cache.  ~sftp~
@@ -95,7 +98,11 @@ Three backends are shipped and are the reference implementations:
   prefetches, and the Downloads tab shows each one.  Listings, searches, size
   probes and covers share one multiplexed connection
   (~orpheus-ssh-multiplex~), while downloads keep connections of their own, so
-  a slow link still answers a directory change.  The control socket is kept in
+  a slow link still answers a directory change.  A disc kept as one file is
+  listed from its cue sheet, which costs one extra cat for the folder, and the
+  track you pick is cut out on the host by ~ffmpeg~ and remuxed, so only its
+  minutes cross the link.  A host without ~ffmpeg~ sends the whole image once
+  and every track of that disc plays from the copy.  The control socket is kept in
   a short private directory (~orpheus-ssh-control-directory~); a host that
   rejects it is retried once without multiplexing instead of failing the
   listing.  The local backend plays a copy

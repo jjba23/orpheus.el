@@ -30,7 +30,7 @@ restarting Emacs.
 |----------------+--------+---------------|
 | in a Music Player Daemon library | ~mpd~ | a running MPD and its socket or address |
 | a folder or links on this computer | ~local~ | ~mpv~ on ~exec-path~ |
-| on another computer, with no daemon there | ~ssh~ | ~ssh~, and ~sftp~ when the shell cannot run ~cat~ |
+| on another computer, with no daemon there | ~ssh~ | ~ssh~ here, and ~sftp~ when the shell cannot run ~cat~; ~ffmpeg~ there to send one track of a CD image |
 
 If you already run MPD, ~mpd~ is usually the least surprising choice: the
 daemon keeps the library and the queue, and orpheus is the window onto it.
@@ -180,7 +180,11 @@ must already let you in, because ssh has no terminal in which to ask for a
 passphrase.  A host whose key is not in =~/.ssh/known_hosts= needs one
 ~ssh music.example.org~ from a terminal first, or
 ~(setq orpheus-ssh-extra-args '("-o" "StrictHostKeyChecking=accept-new"))~ once.
-mpv must be installed here, and the audio comes out of this machine.  The start
+mpv must be installed here, and the audio comes out of this machine.  When the
+host has ~ffmpeg~, a CD kept as one file is listed by the tracks its ~.cue~
+names and the track you pick is cut out there and remuxed, so only its minutes
+are transferred; without ~ffmpeg~ the image is copied once and the tracks play
+from that copy.  The start
 directory is relative to the login home or absolute; a leading =~= is not
 expanded, because the path is quoted for the remote shell.  The shared socket
 lives in a short private directory (~orpheus-ssh-control-directory~); when ssh
