@@ -53,6 +53,44 @@ daemon; the local and SSH backends keep it in Emacs, because there is no daemon
 on the far side to keep it for them.  That is also why MPD can be gapless while
 the local backend plays one file at a time.
 
+* The backend lifecycle
+:PROPERTIES:
+:CUSTOM_ID: backend-lifecycle
+:END:
+
+Connecting is a callback, never a wait.  The chosen backend is built from the
+registry, starts its player and its work, and calls back when it can answer.
+The local backend starts the library watch before mpv, so a change during
+startup is not missed, then retries the IPC endpoint every 50 ms until mpv
+answers or about five seconds have passed.  Disconnecting is the reverse: the
+watches go first, then the process.
+
+#+begin_src mermaid
+sequenceDiagram
+    participant U as orpheus-connect
+    participant R as backend registry
+    participant B as local backend
+    participant M as mpv
+    participant W as file notifications
+    U->>R: make the chosen backend
+    U->>B: connect(callback)
+    B->>W: watch the library tree
+    B->>M: spawn with --input-ipc-server
+    loop until the socket or pipe answers
+        B->>M: connect IPC
+    end
+    M-->>B: JSON events
+    B-->>U: connected
+    U->>B: disconnect
+    B->>W: remove every watch
+    B->>M: stop the process
+#+end_src
+
+The SSH backend has the same shape with an ssh process and a download queue
+instead of mpv; MPD connects its socket and reads the greeting.  A backend
+that cannot connect calls back with nil, so the interface says so instead of
+showing a player that is not there.
+
 * One disc image, many tracks
 :PROPERTIES:
 :CUSTOM_ID: disc-images
@@ -104,8 +142,11 @@ flight.  The cache file is versioned and replaced through a temporary file, so
 an interrupted write leaves the previous index intact.  Loading the cache
 prunes entries for files that are gone or changed, so a removed title is not
 served; ~M-u~ prunes on demand and ~M-U~ clears the index.  Either library
-command also drops the cached tab rows and covers.  SSH still reads sidecar
-~.cue~ files only.
+command also drops the cached tab rows and covers.  The local backend watches
+every library directory with file notifications, so an external change prunes
+the cache and runs ~orpheus-backend-library-changed-hook~ on its own; the hook
+is what drops the cached tabs and covers.  A directory the system cannot watch
+still falls back to the on-access checks.  SSH reads sidecar ~.cue~ files only.
 
 * Search matches songs, not only files
 :PROPERTIES:
@@ -134,14 +175,51 @@ sequenceDiagram
 #+end_src
 
 MPD searches its library through the daemon.  The local backend runs GNU
-~find~ as a process, so a large tree does not block Emacs; on Windows, or on a
-host with no GNU ~find~, it walks the tree with
-~directory-files-recursively~ instead.  That fallback is synchronous, so a
-very large library can pause for a moment; it is the price of a portable
-search with no extra program.  SSH runs ~find~, and when the host has no
-~find~ it falls back to a recursive ~ls~.  In both remote cases the cue sheets
-in the result are fetched one ~cat~ each, grouped by directory, so a restricted
-shell with no loops still answers.
+~find~ as a process, so a large tree does not block Emacs; on Windows, whose
+~find.exe~ is a text-search program rather than a file lister, or on a host
+with no GNU ~find~, it walks the tree with ~directory-files-recursively~
+instead.  That fallback is synchronous, so a very large library can pause for
+a moment; it is the price of a portable search with no extra program.  SSH
+runs ~find~, and when the host has no ~find~ it falls back to a recursive
+~ls~.  In both remote cases the cue sheets in the result are fetched one ~cat~
+each, grouped by directory, so a restricted shell with no loops still answers.
+
+* The library watcher
+:PROPERTIES:
+:CUSTOM_ID: library-watcher
+:END:
+
+File notifications are not recursive, so the local backend walks the library
+once and keeps one watch per directory.  Events are coalesced for half a
+second, because one save often produces several; then the cue cache is pruned,
+saved if it changed, and the library hook tells the interface to drop its
+cached tabs and covers.  A directory the system refuses to watch is not an
+error: the on-access checks still catch a changed file, and ~M-u~ and ~M-U~
+remain the manual repair.
+
+#+begin_src mermaid
+flowchart TD
+  Connect["connect"] --> Walk["walk the library tree"]
+  Walk --> Watch["one file-notify watch per directory"]
+  Watch --> Event{"created, changed, deleted or renamed"}
+  Event -->|created directory| Add["add watches below it"]
+  Event -->|deleted or renamed directory| Remove["remove watches below it"]
+  Event -->|file or directory change| Debounce["coalesce for 0.5 s"]
+  Add --> Debounce
+  Remove --> Debounce
+  Debounce --> Prune["prune changed and missing cue entries"]
+  Prune --> Save["save the cache when it changed"]
+  Save --> Hook["run orpheus-backend-library-changed-hook"]
+  Hook --> Tabs["drop cached tabs and covers"]
+  Watch -->|watch refused| Fallback["keep serving with on-access checks"]
+#+end_src
+
+The watch tree skips hidden and symlinked directories, so a link back up the
+tree cannot make the walk endless.  New directories are added when the event
+arrives; deleted and renamed ones lose their watches, and a renamed directory
+gets a new set at its new path.  The hook is a backend-neutral seam: another
+backend can report a library change the same way without knowing about the
+player's tabs.
 
 * The event loop
 :PROPERTIES:
@@ -152,7 +230,30 @@ Nothing waits for a socket.  MPD replies, mpv's JSON, SSH's listings, transfers
 and cava's frames all arrive in process filters or sentinels.  One timer reads
 the status; the list is redrawn only when something it shows changed.  The
 header line and the mode line are functions over the same state, so a redraw
-does not move point or the scroll position.
+does not move point or the scroll position.  The local and SSH queue is
+Emacs's, so the end of a file is what moves it forward.
+
+#+begin_src mermaid
+sequenceDiagram
+    participant U as player buffer
+    participant C as orpheus core
+    participant B as local backend
+    participant M as mpv
+    participant T as status timer
+    U->>C: RET on a row
+    C->>B: play-uri or add
+    B->>B: ensure mpv is running
+    B->>M: loadfile with start and end
+    M-->>B: file-loaded and metadata
+    T->>B: status every second
+    B->>M: time-pos, pause, volume
+    M-->>B: properties
+    B-->>C: status and track
+    C-->>U: header, mode line, list if it changed
+    M-->>B: end-file eof
+    B->>B: advance the queue
+    B->>M: loadfile the next entry
+#+end_src
 
 #+begin_src mermaid
 flowchart LR
@@ -214,20 +315,26 @@ feature, not by failing to open.
 
 | Feature | GNU/Linux | macOS | Windows |
 |---------+-----------+-------+---------|
-| Playback | mpv with PipeWire, PulseAudio or ALSA | mpv with CoreAudio | mpv with WASAPI; the named-pipe path is written and compiled but unproven |
+| Playback | mpv with PipeWire, PulseAudio or ALSA | mpv with CoreAudio | mpv with WASAPI over a per-Emacs named pipe; compiled but unproven |
 | MPD | TCP or a Unix socket | TCP or a Unix socket | TCP; use ~orpheus-mpd-host~ and ~orpheus-mpd-port~ |
-| SSH | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH; multiplexing is left to it |
-| Search | asynchronous GNU ~find~ | asynchronous BSD ~find~ | no GNU ~find~, so Emacs walks the tree synchronously |
-| Visualizer | cava with PipeWire | cava with PortAudio; a loopback device is needed for system output | cava is not normally available; playback still works |
-| Cover art | images in a graphical frame | images in a graphical frame | images in a graphical frame |
+| SSH | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH client; multiplexing is left to it; the remote host must offer a POSIX shell |
+| Search | asynchronous GNU ~find~ | asynchronous BSD ~find~ | Windows ~find.exe~ searches text, so Emacs walks the tree synchronously |
+| Library watch | one watch per directory; on-access fallback | one watch per directory; on-access fallback | one watch per directory when the Emacs build has ~w32notify~; on-access fallback |
+| Visualizer | cava with PipeWire | cava with PortAudio; a loopback device is needed for system output | cava captures the default output with no input method; availability varies |
+| Cover art | images in a graphical frame | images in a graphical frame | images in a graphical frame; the scan runs in Emacs |
 | Detach | a new graphical frame | a new graphical frame | a new graphical frame; a terminal says it needs a display |
 | Terminal | text, Unicode and ASCII fallbacks | same | same |
 
-The Windows search fallback is covered by a unit test that makes ~find~
-unavailable; the WASAPI and named-pipe playback path is not exercised on this
-machine and is documented as unproven rather than called supported.  Everything
-else in the table is the same code on every platform, with the external program
-doing the platform-specific part.
+Windows behavior is covered by unit tests that bind ~system-type~: the named
+pipe carries the Emacs pid, art and search refuse Windows ~find.exe~, cava's
+input section is omitted, and local path comparisons fold case.  No Windows
+machine runs in this gate, so mpv over the named pipe and the cava binary
+remain unproven rather than called supported.  On macOS, BSD ~find~ accepts
+the ~-maxdepth~ and ~-iname~ flags the art scan uses.  The watcher uses
+whatever directory notifications the Emacs build provides; when it provides
+none, the on-access checks take over.  Everything else in the table is the
+same code on every platform, with the external program doing the
+platform-specific part.
 
 * Where to go next
 

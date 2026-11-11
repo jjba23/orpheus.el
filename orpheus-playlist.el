@@ -59,7 +59,7 @@ With DIRECTORY, only that directory counts."
                        (orpheus-playlist-directories))))
     (cl-some (lambda (directory)
                (and (not (equal directory file))
-                    (string-prefix-p directory file)))
+                    (orpheus-backend--path-prefix-p directory file)))
              directories)))
 
 (defun orpheus-playlist--base-name (name)

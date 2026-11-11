@@ -44,8 +44,9 @@
 
 (defcustom orpheus-vis-input nil
   "Capture method for cava, or nil to choose one for this system.
-The value is a cava input method: `pipewire', `pulse', `alsa',
-`portaudio', `wasapi' or `fifo'."
+The value is a cava input method such as `pipewire', `pulse', `portaudio'
+or `fifo'.  Windows cava captures the default output itself and rejects a
+configured method, so leave this nil there."
   :type '(choice (const :tag "Choose for this system" nil) symbol)
   :group 'orpheus)
 
@@ -122,24 +123,25 @@ back to nil."
 ;;; Platform and configuration
 
 (defun orpheus-vis--input ()
-  "Return the cava input method to use."
+  "Return the cava input method to use, or nil when cava chooses.
+Upstream cava rejects a configured input method on Windows; its Windows build
+captures the default output without one."
   (or orpheus-vis-input
       (pcase system-type
              ('gnu/linux 'pipewire)
              ('darwin 'portaudio)
-             ('windows-nt 'wasapi)
+             ('windows-nt nil)
              (_ 'pulse))))
 
 (defun orpheus-vis--config-string (input bars framerate)
-  "Return a cava configuration reading INPUT into BARS at FRAMERATE."
-  (format "[general]
+  "Return a cava configuration reading INPUT into BARS at FRAMERATE.
+INPUT nil leaves the input section out, which is what Windows cava wants."
+  (concat (format "[general]
 bars = %d
 framerate = %d
-
-[input]
-method = %s
-
-[output]
+" bars framerate)
+          (when input (format "\n[input]\nmethod = %s\n" input))
+          (format "\n[output]
 method = raw
 raw_target = /dev/stdout
 data_format = ascii
@@ -147,8 +149,7 @@ ascii_max_range = 100
 bar_delimiter = 59
 frame_delimiter = 10
 channels = mono
-"
-          bars framerate input))
+")))
 
 ;;; Reading frames
 
@@ -380,7 +381,8 @@ font still fills it; the column arithmetic is only for a terminal."
               (insert (orpheus-vis--text levels width height))))
           (insert "\n")
           (insert (propertize
-                   (format " %s, %d bars  (q stops)" (orpheus-vis--input)
+                   (format " %s, %d bars  (q stops)"
+                           (or (orpheus-vis--input) 'automatic)
                            (length levels))
                    'face 'orpheus-vis-status-face))
           (goto-char (point-min)))))))

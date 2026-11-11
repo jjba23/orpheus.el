@@ -833,6 +833,18 @@ and the password with it."
           (orpheus-local-audio-driver "coreaudio/1"))
       (should (equal (orpheus-local--audio-args) '("--ao=coreaudio/1"))))))
 
+(ert-deftest orpheus-test/local-socket-path-is-unique-on-windows ()
+  "Each Emacs gets its own named pipe, and a chosen pipe is left alone."
+  (let* ((orpheus-local-socket nil)
+         (system-type 'windows-nt)
+         (path (orpheus-local--socket-path)))
+    (should (string-prefix-p "\\\\.\\pipe\\orpheus-emacs-" path))
+    (should (string-suffix-p (number-to-string (emacs-pid)) path)))
+  (let ((orpheus-local-socket "\\\\.\\pipe\\chosen")
+        (system-type 'windows-nt))
+    (should (equal (orpheus-local--socket-path)
+                   "\\\\.\\pipe\\chosen"))))
+
 (ert-deftest orpheus-test/local-request-json ()
   "A request is one JSON object per line, as mpv's IPC wants it."
   (let* ((json (orpheus-local--request-json 7 '("loadfile" "/a/b.mp3")))
@@ -1313,6 +1325,96 @@ and the password with it."
           (should (file-readable-p cache)))
       (delete-directory dir t))))
 
+(ert-deftest orpheus-test/local-watch-starts-and-stops-with-the-backend ()
+  "Connecting watches the library tree; disconnecting removes every watch."
+  (let* ((dir (make-temp-file "orpheus-watch" t))
+         (album (expand-file-name "album/" dir))
+         (local (make-orpheus-local :name 'local))
+         (orpheus-local-directory dir)
+         (added 0)
+         (removed 0))
+    (make-directory album)
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-notify-add-watch)
+                   (lambda (_file _flags _callback)
+                     (setq added (1+ added))
+                     (list 'watch added)))
+                  ((symbol-function 'file-notify-rm-watch)
+                   (lambda (_watch) (setq removed (1+ removed))))
+                  ((symbol-function 'orpheus-local--ensure)
+                   (lambda (_local callback) (funcall callback nil)))
+                  ((symbol-function 'orpheus-local--kill) #'ignore))
+          (orpheus-backend-connect local #'ignore)
+          (should (= 2 added))
+          (should (= 2 (length (orpheus-local-instance-watches local))))
+          (orpheus-backend-disconnect local)
+          (should (= 2 removed))
+          (should-not (orpheus-local-instance-watches local)))
+      (ignore-errors (orpheus-local--watch-stop local))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-watch-invalidates-cue-and-player-caches ()
+  "A filesystem change prunes the cue cache and runs the library hook."
+  (let* ((dir (make-temp-file "orpheus-watch-cache" t))
+         (missing (expand-file-name "gone.flac" dir))
+         (cache (expand-file-name "cues.json" dir))
+         (local (make-orpheus-local :name 'local))
+         (orpheus-local-directory dir)
+         (orpheus-local--cue-cache-file cache)
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded t)
+         (orpheus-local--cue-cache-dirty nil)
+         (callbacks nil)
+         (changes 0)
+         (orpheus-backend-library-changed-hook
+          (list (lambda () (setq changes (1+ changes))))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-notify-add-watch)
+                   (lambda (_file _flags callback)
+                     (push callback callbacks)
+                     (list 'watch (length callbacks))))
+                  ((symbol-function 'file-notify-rm-watch) #'ignore))
+          (orpheus-local--watch-start local)
+          (puthash missing (list 1 2.0 nil) orpheus-local--cue-cache)
+          (funcall (car callbacks) (list 'watch 'changed missing))
+          (should (timerp (orpheus-local-instance-watch-timer local)))
+          (cancel-timer (orpheus-local-instance-watch-timer local))
+          (setf (orpheus-local-instance-watch-timer local) nil)
+          (orpheus-local--watch-apply local)
+          (should-not (gethash missing orpheus-local--cue-cache))
+          (should (= 1 changes)))
+      (ignore-errors (orpheus-local--watch-stop local))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-watch-tracks-created-and-deleted-directories ()
+  "New directories get their own watch, and deleted ones lose it."
+  (let* ((dir (make-temp-file "orpheus-watch-tree" t))
+         (new (expand-file-name "new/" dir))
+         (local (make-orpheus-local :name 'local))
+         (orpheus-local-directory dir)
+         (callbacks nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-notify-add-watch)
+                   (lambda (file _flags callback)
+                     (push (cons (file-name-as-directory file) callback)
+                           callbacks)
+                     (list 'watch (length callbacks))))
+                  ((symbol-function 'file-notify-rm-watch) #'ignore))
+          (orpheus-local--watch-start local)
+          (should (= 1 (length (orpheus-local-instance-watches local))))
+          (make-directory new)
+          (funcall (cdr (assoc (file-name-as-directory dir) callbacks))
+                   (list 'watch 'created (directory-file-name new)))
+          (should (= 2 (length (orpheus-local-instance-watches local))))
+          (should (assoc (file-name-as-directory new)
+                         (orpheus-local-instance-watches local)))
+          (delete-directory new)
+          (funcall (cdr (assoc (file-name-as-directory dir) callbacks))
+                   (list 'watch 'deleted (directory-file-name new)))
+          (should (= 1 (length (orpheus-local-instance-watches local)))))
+      (ignore-errors (orpheus-local--watch-stop local))
+      (delete-directory dir t))))
+
 (ert-deftest orpheus-test/local-search-walks-the-tree-without-find ()
   "A host without GNU find is searched by walking the tree in Emacs."
   (let* ((dir (make-temp-file "orpheus-search" t))
@@ -1571,14 +1673,22 @@ and the password with it."
     (should (string-match-p "^\\[output\\]" linux)))
   (let ((mac (orpheus-vis--config-string 'portaudio 16 60)))
     (should (string-match-p "method = portaudio" mac))
-    (should (not (string-match-p "pipewire" mac)))))
+    (should (not (string-match-p "pipewire" mac))))
+  (let ((windows (orpheus-vis--config-string nil 16 60)))
+    (should-not (string-match-p "\\[input\\]" windows))
+    (should (string-match-p "^\\[output\\]" windows))))
 
 (ert-deftest orpheus-test/vis-input-for-platform ()
   "Linux captures pipewire; macOS falls back to portaudio."
   (let ((orpheus-vis-input nil))
     (let ((system-type 'gnu/linux)) (should (eq (orpheus-vis--input) 'pipewire)))
     (let ((system-type 'darwin)) (should (eq (orpheus-vis--input) 'portaudio)))
-    (let ((system-type 'windows-nt)) (should (eq (orpheus-vis--input) 'wasapi))))
+    (let ((system-type 'windows-nt))
+      (should-not (orpheus-vis--input))
+      (should-not (string-match-p
+                   "\\[input\\]"
+                   (orpheus-vis--config-string
+                    (orpheus-vis--input) 16 60)))))
   (let ((orpheus-vis-input 'fifo))
     (should (eq (orpheus-vis--input) 'fifo))))
 
@@ -1672,6 +1782,35 @@ and the password with it."
                  (expand-file-name orpheus-playlist-directory))
                 file)))
      (should-error (orpheus-playlist-file "")))))
+
+(ert-deftest orpheus-test/windows-relative-paths-ignore-case ()
+  "Windows paths compare without case, so ownership checks still match."
+  (let* ((root (make-temp-file "orpheus-case" t))
+         (directory (file-name-as-directory root))
+         (uri (concat (upcase root) "/Album/a.mp3"))
+         (local (make-orpheus-local :name 'local)))
+    (unwind-protect
+        (progn
+          (let ((system-type 'windows-nt))
+            (should (equal (orpheus-backend--relative-uri uri root)
+                           "Album/a.mp3"))
+            (should (orpheus-playlist--inside-p
+                     (expand-file-name "Mix.m3u8" (upcase directory))
+                     directory))
+            (should (= 2 (orpheus-local--art-rank
+                          directory
+                          (concat (upcase directory) "Disc/cover.jpg"))))
+            (setf (orpheus-local-instance-watches local)
+                  (list (cons (upcase directory) 'watch)))
+            (cl-letf (((symbol-function 'file-notify-rm-watch) #'ignore))
+              (orpheus-local--watch-remove-tree local directory))
+            (should-not (orpheus-local-instance-watches local)))
+          (let ((system-type 'gnu/linux))
+            (should-not (orpheus-backend--relative-uri uri root))
+            (should-not (orpheus-playlist--inside-p
+                         (expand-file-name "Mix.m3u8" (upcase directory))
+                         directory))))
+      (delete-directory root t))))
 
 (ert-deftest orpheus-test/playlist-items ()
   "Portable playlists become rows with a file and a track count."
@@ -4215,6 +4354,24 @@ A track cut on the host or here is cached separately, because it is the track."
             (should orpheus-ui--needs-refresh)))
       (kill-buffer orpheus-ui-buffer-name))))
 
+(ert-deftest orpheus-test/ui-library-changed-hook-clears-tabs ()
+  "The player listens for backend library changes."
+  (let ((orpheus-ui-buffer-name
+         (generate-new-buffer-name "*orpheus-library-hook*"))
+        (tab (orpheus-ui-tab-create :kind 'directories :title "Directories"
+                                    :loaded t :loaded-at (float-time))))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+            (orpheus-ui-mode)
+            (setq orpheus-ui--tabs (vector tab)
+                  orpheus-ui--tab 0
+                  orpheus-ui--needs-refresh nil)
+            (run-hooks 'orpheus-backend-library-changed-hook)
+            (should-not (orpheus-ui-tab-loaded tab))
+            (should orpheus-ui--needs-refresh)))
+      (kill-buffer orpheus-ui-buffer-name))))
+
 (ert-deftest orpheus-test/ui-database-commands-invalidate-the-tab-cache ()
   "Updating or rescanning the library drops rows cached in every tab."
   (let ((actions nil)
@@ -4361,6 +4518,29 @@ A track cut on the host or here is cached separately, because it is the track."
                      (lambda () (not (eq found 'waiting))) 20))
             (should (equal found child-cover))))
       (delete-directory root t))))
+
+(ert-deftest orpheus-test/local-art-scan-skips-the-windows-find ()
+  "Windows ships find.exe, not GNU find; art uses the Emacs fallback."
+  (let* ((dir (make-temp-file "orpheus-art-win" t))
+         (cover (expand-file-name "cover.jpg" dir))
+         (found 'waiting)
+         (started nil))
+    (unwind-protect
+        (progn
+          (with-temp-file cover (insert "jpg"))
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (_program) "C:/Windows/System32/find.exe"))
+                    ((symbol-function 'make-process)
+                     (lambda (&rest _) (setq started t) nil)))
+            (let ((system-type 'windows-nt))
+              (orpheus-local--scan-art
+               dir (lambda (path) (setq found path)))))
+          (should-not started)
+          (should (equal found cover)))
+      (dolist (buffer (buffer-list))
+        (when (equal (buffer-name buffer) " *orpheus-art*")
+          (kill-buffer buffer)))
+      (delete-directory dir t))))
 
 (ert-deftest orpheus-test/local-file-answers-for-open-externally ()
   "A local track is its own file; a stream has none."

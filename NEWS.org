@@ -9,6 +9,37 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- The local backend watches its library tree with filesystem notifications.
+  Adding, changing or deleting a file prunes the embedded cue cache and drops
+  cached tab rows and covers automatically.  It uses one watch per directory,
+  and a directory the system cannot watch falls back to the existing on-access
+  checks.
+- A backend that notices a library change runs
+  ~orpheus-backend-library-changed-hook~; the player uses it to clear its tab
+  and cover caches.
+- The architecture guide diagrams the backend lifecycle, the library
+  watcher's invalidation path and the queue-to-sound trip.
+
+*** Changed
+
+- The platform notes separate what is tested from what is only compiled.
+  Windows named-pipe playback and the cava binary remain unproven, while pipe
+  naming, the Windows art and search fallbacks, cava's Windows configuration
+  and local path case handling have unit tests.
+
+*** Fixed
+
+- On Windows, each Emacs session gets its own mpv named pipe instead of
+  sharing a fixed name, and a custom pipe path is no longer expanded like a
+  file.  Cover art no longer tries to run Windows' text-search ~find.exe~.
+  cava's generated config omits the input method, which upstream cava rejects
+  on Windows.  Local path comparisons fold case on Windows for playlists,
+  cover ranking and watch cleanup.
+
 * 0.22.0 (2026-11-11)
 
 *** Changed

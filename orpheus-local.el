@@ -29,6 +29,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'json)
+(require 'filenotify)
 (require 'orpheus-backend)
 (require 'orpheus-lyrics)
 
@@ -122,7 +123,9 @@ video window.  MPD uses the formats its own daemon supports."
   (waiting nil)
   (tags-loaded nil)
   (duration-loaded nil)
-  (attempts 0))
+  (attempts 0)
+  (watches nil)
+  (watch-timer nil))
 
 (defvar orpheus-local--track-registry (make-hash-table :test #'equal)
   "Tracks a cue sheet named, keyed by their ranged URI.
@@ -163,13 +166,25 @@ what makes the same default work on a desktop, a laptop and a headless box."
 
 (defun orpheus-local--socket-path ()
   "Return the path of the IPC socket to make mpv listen on."
-  (or (when orpheus-local-socket
-        (expand-file-name orpheus-local-socket))
-      (if (eq system-type 'windows-nt)
-        ;; Windows has no unix sockets; mpv takes a named pipe.
-        "\\\\.\\pipe\\orpheus-emacs"
-        (expand-file-name (format "orpheus-mpv-%d" (emacs-pid))
-                          temporary-file-directory))))
+  (let ((custom orpheus-local-socket))
+    (cond
+     ((and custom (eq system-type 'windows-nt)
+           (string-match-p "\\`[/\\\\][/\\\\]" custom))
+      custom)
+     (custom (expand-file-name custom))
+     ((eq system-type 'windows-nt)
+      ;; Windows has no unix sockets; mpv takes a named pipe.  The pid keeps
+      ;; two Emacs sessions from fighting over the same pipe.
+      (format "\\\\.\\pipe\\orpheus-emacs-%d" (emacs-pid)))
+     (t
+      (expand-file-name (format "orpheus-mpv-%d" (emacs-pid))
+                        temporary-file-directory)))))
+
+(defun orpheus-local--find-program ()
+  "Return a find program that lists files, or nil.
+Windows ships a text-search find.exe, not GNU find, so it is never used."
+  (and (not (memq system-type '(windows-nt ms-dos)))
+       (executable-find "find")))
 
 ;;; The queue
 
@@ -622,7 +637,9 @@ elsewhere, such as the cover of a sibling album, and must not be shown."
     (cond
      ((equal folder dir) 0)
      ((equal folder parent) 1)
-     ((and (not (equal parent dir)) (string-prefix-p dir path)) 2)
+     ((and (not (equal parent dir))
+           (orpheus-backend--path-prefix-p dir path))
+      2)
      (t nil))))
 
 (defun orpheus-local--art-best (dir paths)
@@ -700,8 +717,9 @@ find is not installed."
   "Find cover art for DIR without blocking, then call CALLBACK with a path.
 DIR, its parent and one level of its child folders are searched by find, so an
 album root or a Scans folder is found from a disc folder.  Nothing is read on
-the main thread; when find is missing the fallback reads the same folders."
-  (let ((program (executable-find "find"))
+the main thread; when find is missing, or this is Windows, the fallback reads
+the same folders."
+  (let ((program (orpheus-local--find-program))
         (buffer (generate-new-buffer " *orpheus-art*")))
     (if (null program)
         (progn
@@ -1395,7 +1413,8 @@ FLAC with no sidecar uses the embedded cue index when that index is ready."
                         (t
                          (list
                           (orpheus-item-create
-                           :label (if (string-prefix-p root path)
+                           :label (if (orpheus-backend--path-prefix-p
+                                      root path)
                                       (substring path (length root))
                                     path)
                            :kind 'track
@@ -1420,8 +1439,7 @@ ships a different find, so its tree is walked here instead.  CALLBACK may run
 once more when the embedded cue index for the result finishes."
   (orpheus-local--cue-cache-load)
   (let* ((dir (expand-file-name (or orpheus-local-directory "~")))
-         (program (and (not (eq system-type 'windows-nt))
-                       (executable-find "find")))
+         (program (orpheus-local--find-program))
          (emit
           (lambda (output)
             (funcall callback
@@ -1483,6 +1501,110 @@ backend, so a parent row here would show the way up twice."
                 (orpheus-local--file-items path))))
            entries))))
 
+;;; Watching the library
+
+(defconst orpheus-local--watch-delay 0.5
+  "Seconds to coalesce filesystem events before invalidating the caches.")
+
+(defun orpheus-local--watch-tree (directory)
+  "Return DIRECTORY and the directories below it."
+  (cons directory
+        (mapcan
+         (lambda (path)
+           (when (and (file-directory-p path)
+                      (not (file-symlink-p path)))
+             (orpheus-local--watch-tree path)))
+         (condition-case nil
+             (directory-files directory t "\\`[^.]")
+           (error nil)))))
+
+(defun orpheus-local--watch-add (local directory)
+  "Watch DIRECTORY for LOCAL when it is not watched already."
+  (let ((directory (file-name-as-directory (expand-file-name directory))))
+    (unless (assoc directory (orpheus-local-instance-watches local))
+      (condition-case nil
+          (let ((watch
+                 (file-notify-add-watch
+                  directory '(change)
+                  (lambda (event)
+                    (orpheus-local--watch-event local directory event)))))
+            (push (cons directory watch)
+                  (orpheus-local-instance-watches local)))
+        (error nil)))))
+
+(defun orpheus-local--watch-add-tree (local directory)
+  "Watch DIRECTORY and every directory below it for LOCAL."
+  (dolist (path (orpheus-local--watch-tree
+                 (file-name-as-directory (expand-file-name directory))))
+    (orpheus-local--watch-add local path)))
+
+(defun orpheus-local--watch-remove-tree (local directory)
+  "Stop watching DIRECTORY and every directory below it for LOCAL."
+  (let ((prefix (file-name-as-directory (expand-file-name directory))))
+    (setf (orpheus-local-instance-watches local)
+          (cl-loop
+           for pair in (orpheus-local-instance-watches local)
+           if (orpheus-backend--path-prefix-p
+               prefix (file-name-as-directory (car pair)))
+           do (ignore-errors (file-notify-rm-watch (cdr pair)))
+           else collect pair))))
+
+(defun orpheus-local--watch-schedule (local)
+  "Coalesce filesystem events for LOCAL into one invalidation."
+  (unless (timerp (orpheus-local-instance-watch-timer local))
+    (setf (orpheus-local-instance-watch-timer local)
+          (run-at-time orpheus-local--watch-delay nil
+                       #'orpheus-local--watch-apply local))))
+
+(defun orpheus-local--watch-apply (local)
+  "Invalidate LOCAL's cue and player caches after a library change."
+  (setf (orpheus-local-instance-watch-timer local) nil)
+  (when (orpheus-local-instance-watches local)
+    (orpheus-local--cue-cache-load)
+    (orpheus-local--cue-cache-prune)
+    (when orpheus-local--cue-cache-dirty
+      (orpheus-local--cue-cache-save))
+    (run-hooks 'orpheus-backend-library-changed-hook)))
+
+(defun orpheus-local--watch-event (local directory event)
+  "Handle a filesystem EVENT in DIRECTORY for LOCAL."
+  (let* ((action (nth 1 event))
+         (path (let ((file (nth 2 event)))
+                 (and file (expand-file-name file directory))))
+         (new-path (let ((file (nth 3 event)))
+                     (and file (expand-file-name file directory)))))
+    (pcase action
+           ('created
+            (when (and path (file-directory-p path))
+              (orpheus-local--watch-add-tree local path)))
+           ((or 'deleted 'renamed)
+            (when (and path
+                       (or (file-directory-p path)
+                           (assoc (file-name-as-directory path)
+                                  (orpheus-local-instance-watches local))))
+              (orpheus-local--watch-remove-tree local path))
+            (when (and new-path (file-directory-p new-path))
+              (orpheus-local--watch-add-tree local new-path))))
+    (orpheus-local--watch-schedule local)))
+
+(defun orpheus-local--watch-start (local)
+  "Watch LOCAL's library and its subdirectories for changes."
+  (orpheus-local--watch-stop local)
+  (let ((root (file-name-as-directory
+               (expand-file-name (or orpheus-local-directory "~")))))
+    (when (file-directory-p root)
+      (orpheus-local--watch-add-tree local root)
+      (orpheus-local-instance-watches local))))
+
+(defun orpheus-local--watch-stop (local)
+  "Stop watching LOCAL's library."
+  (dolist (pair (orpheus-local-instance-watches local))
+    (ignore-errors (file-notify-rm-watch (cdr pair))))
+  (setf (orpheus-local-instance-watches local) nil)
+  (when (timerp (orpheus-local-instance-watch-timer local))
+    (cancel-timer (orpheus-local-instance-watch-timer local)))
+  (setf (orpheus-local-instance-watch-timer local) nil))
+
 ;;; Backend methods
 
 (cl-defmethod orpheus-backend-connected-p ((local orpheus-local))
@@ -1490,11 +1612,13 @@ backend, so a parent row here would show the way up twice."
   (orpheus-local--ready-p local))
 
 (cl-defmethod orpheus-backend-connect ((local orpheus-local) callback)
-  "Start mpv, then call CALLBACK with LOCAL."
+  "Start mpv, watch the library, then call CALLBACK with LOCAL."
+  (orpheus-local--watch-start local)
   (orpheus-local--ensure local callback))
 
 (cl-defmethod orpheus-backend-disconnect ((local orpheus-local))
-  "Stop LOCAL's mpv."
+  "Stop LOCAL's mpv and its library watch."
+  (orpheus-local--watch-stop local)
   (orpheus-local--kill local))
 
 (cl-defmethod orpheus-backend-status ((local orpheus-local) callback)

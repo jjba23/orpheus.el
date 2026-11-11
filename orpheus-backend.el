@@ -39,6 +39,10 @@
   "Hook run when a backend loses its connection.
 Each function is called with the backend and a description of the event.")
 
+(defvar orpheus-backend-library-changed-hook nil
+  "Hook run after a backend notices that its library changed.
+The player uses it to drop cached tabs and cover lookups.")
+
 ;;; Values
 
 (cl-defstruct (orpheus-track (:constructor orpheus-track-create))
@@ -392,6 +396,13 @@ The default keeps URI as written; a backend with a library root overrides it."
        (or (orpheus-backend--url-p uri)
            (file-name-absolute-p uri))))
 
+(defun orpheus-backend--path-prefix-p (prefix path)
+  "Return non-nil when PATH is below PREFIX.
+Case is folded on Windows, where the filesystem does not distinguish it.
+PREFIX ends in a directory separator.  Remote relative paths are not passed
+here, because their case is significant on the remote host."
+  (string-prefix-p prefix path (eq system-type 'windows-nt)))
+
 (defun orpheus-backend--relative-uri (uri root)
   "Return URI below ROOT as a relative path, or nil.
 ROOT may be an absolute local directory or a relative remote one.  URLs are
@@ -404,7 +415,7 @@ never rewritten."
       (if (file-name-absolute-p directory)
           (let ((path (expand-file-name uri directory)))
             (when (and (not (equal directory path))
-                       (string-prefix-p directory path))
+                       (orpheus-backend--path-prefix-p directory path))
               (substring path (length directory))))
         (when (string-prefix-p directory uri)
           (substring uri (length directory)))))))

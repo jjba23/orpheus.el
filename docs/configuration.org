@@ -105,7 +105,7 @@ button after the tabs runs the same command.
 | ~orpheus-local-mpv-program~  | ~"mpv"~     | the player                             |
 | ~orpheus-local-audio-driver~ | ~nil~       | what follows ~--ao=~, or nil for the platform |
 | ~orpheus-local-extra-args~   | ~nil~       | more mpv arguments, as a list          |
-| ~orpheus-local-socket~       | ~nil~       | IPC socket path, or nil for a temporary one |
+| ~orpheus-local-socket~       | ~nil~       | IPC socket path, or nil for a temporary one; Windows pipes are per Emacs |
 | ~orpheus-local-cover-names~  | ~cover.jpg~, ~front.jpg~, … | names tried first next to a track or album folder |
 | ~orpheus-local-art-extensions~ | ~jpg~, ~png~, ~webp~, … | extensions accepted as cover art; local and SSH |
 | ~orpheus-local-extensions~   | ~mp3~, ~flac~, ~opus~, … | what the files tab shows |
@@ -303,11 +303,14 @@ staying empty.
 | ~orpheus-vis-program~       | ~"cava"~  | the visualizer program                   |
 | ~orpheus-vis-bars~          | ~32~      | bars asked for                           |
 | ~orpheus-vis-framerate~     | ~30~      | frames per second drawn                  |
-| ~orpheus-vis-input~         | ~nil~     | cava's input method, or nil for the platform |
+| ~orpheus-vis-input~         | ~nil~     | cava's input method, or nil for the platform; must stay nil on Windows |
 | ~orpheus-vis-graphical~     | ~t~       | SVG bars in a graphical frame            |
 | ~orpheus-vis-colors~        | five colours | the bar ramp, quiet to loud           |
 | ~orpheus-vis-theme~         | ~nil~     | named ramp from ~orpheus-vis-theme-presets~; ~M-c~ walks them |
 | ~orpheus-vis-background~    | ~nil~     | visualizer background, or nil for the frame's |
+
+On Windows, upstream cava rejects a configured input method; leave
+~orpheus-vis-input~ nil so cava captures the default output.
 
 ~orpheus-theme-presets~ and ~orpheus-vis-theme-presets~ map a name to a plist
 of colours, and ~orpheus-ui-layout-presets~ maps a name to a list of sections.

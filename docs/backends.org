@@ -98,8 +98,14 @@ Three backends are shipped and are the reference implementations:
   finishes, browsing reuses the same cache, and the header line reports
   ~indexing cues n/m~ while it fills.  ~M-u~ prunes entries for files that are
   gone or changed, and ~M-U~ clears the cache; either command drops cached tab
-  rows and covers.  The binary ~CUESHEET~ block remains the titleless
-  fallback.
+  rows and covers.  The backend also watches the library directories with file
+  notifications, prunes changed or missing cue entries on its own and runs
+  ~orpheus-backend-library-changed-hook~ so the player can clear its caches.
+  One watch is used per directory; a directory the system cannot watch falls
+  back to the on-access checks.  Search and cover art use
+  ~orpheus-local--find-program~, which never returns Windows' text-search
+  ~find.exe~; on Windows both read the folders in Emacs instead.  The binary
+  ~CUESHEET~ block remains the titleless fallback.
 - =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
   files tab, ~find~ fills Search, and ~cat~ streams the chosen track into the
   cache; a cover near the track's folder is copied to the same cache.  ~sftp~
@@ -223,22 +229,33 @@ as anywhere else.
 :END:
 
 The local backend asks mpv for ~--ao=wasapi~ on Windows and drives it over a
-named pipe; that path is written and compiled but untested, so treat it as
-unproven rather than supported.  Windows has no GNU ~find~, so the local
-search walks the tree with ~directory-files-recursively~ instead; that walk is
-synchronous and is meant for ordinary libraries.  Video files are listed and
-played for their sound only, on every platform, because mpv starts with
-~--no-video~.  ssh multiplexing is left to OpenSSH; orpheus gives it a short
-private socket directory and retries without multiplexing when OpenSSH rejects
-it, so a path limit does not fail the listing.  With
-~(setq orpheus-ssh-multiplex nil)~ the backend opens one connection per
-command, as before.  MPD works wherever MPD does — that includes an MPD on
-another machine, which is the case that needs no platform support at all.  A
-terminal can use every command except ~orpheus-detach~, which needs a
-graphical frame and says so.  Nothing in the package reads or writes a path in
-a platform-specific way beyond ~temporary-file-directory~ and
-~orpheus-cache-directory~.  The visualizer's ~cava~ is least likely to be
-available on Windows; playback does not depend on it.
+named pipe whose name carries the Emacs pid, so two sessions do not collide.
+That path is written and compiled but untested on Windows, so treat it as
+unproven rather than supported.  Windows ships ~find.exe~, a text-search
+program, not a file lister: search walks the tree with
+~directory-files-recursively~ and cover art reads the album, parent and one
+level of child folders in Emacs.  Both fallbacks are synchronous and meant for
+ordinary libraries.  cava's Windows build captures the default output with no
+input method; upstream cava rejects any configured method, so orpheus leaves
+the ~[input]~ section out.  Set ~orpheus-vis-input~ only for a fork that
+accepts one, and remember that playback does not depend on cava.
+
+The local library watch uses one ~file-notify~ watch per directory where the
+Emacs build supports directory notifications; a directory that cannot be
+watched falls back to the on-access checks.  ssh multiplexing is left to
+OpenSSH; orpheus gives it a short private socket directory and retries without
+multiplexing when OpenSSH rejects it, so a path limit does not fail the
+listing.  With ~(setq orpheus-ssh-multiplex nil)~ the backend opens one
+connection per command, as before.  The SSH backend's remote commands are
+POSIX (~ls~, ~find~, ~cat~, ~dd~), so a Windows host whose SSH server runs
+~cmd.exe~ or PowerShell is not a supported remote.  MPD works wherever MPD
+does — that includes an MPD on another machine, which is the case that needs no
+platform support at all.  A terminal can use every command except
+~orpheus-detach~, which needs a graphical frame and says so.  Paths go through
+Emacs's file-name functions; the Windows named pipe is the one
+platform-specific spelling, and local path comparisons fold case there.
+Video files are listed and played for their sound only, on every platform,
+because mpv starts with ~--no-video~.
 
 
 * Where to go next

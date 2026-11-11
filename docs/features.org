@@ -69,9 +69,12 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   background index fills it.  ~M-u~ prunes entries for files that are gone or
   changed and ~M-U~ clears the local cue cache; either library command also
   drops cached tab rows and cover lookups, so a changed library does not wait
-  for ~orpheus-ui-cache-seconds~.  The local backend uses GNU ~find~ when it
-  is there and walks the tree in Emacs otherwise (Windows has no GNU ~find~).
-  The results land in the same Search tab.
+  for ~orpheus-ui-cache-seconds~.  The local backend watches the library tree
+  too, so a file added, changed or deleted outside Emacs triggers the same
+  invalidation.  The local backend uses a file-listing ~find~ when it is there
+  and walks the tree in Emacs otherwise; Windows' ~find.exe~ is a text search,
+  not a file lister, so it is never used.  The results land in the same Search
+  tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
   artist and album, and a coloured progress bar.  Its controls are a media row:
   one row of plain glyphs — ~◁◁~, ~▶~ or ~⏸~, ~■~, ~▷▷~, ~➦~ — followed by the
@@ -235,7 +238,9 @@ them: block characters in a terminal, an SVG bar graph with a colour ramp in a
 graphical frame that can draw SVG, redrawn ~orpheus-vis-framerate~ times a
 second.  cava listens
 to the system, not to one player, so it draws the same bars for MPD, for mpv
-and for anything else the machine is playing.
+and for anything else the machine is playing.  On Windows cava captures the
+default output without an input method, so orpheus leaves that setting out;
+playback does not depend on cava.
 
 #+begin_quote
 The image is the package's own ~orpheus-vis--svg~ fed a sample frame and

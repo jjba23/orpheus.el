@@ -704,6 +704,8 @@ A redraw every second must not decode the same cover again.")
   (clrhash orpheus-ui--art-cache)
   (clrhash orpheus-ui--image-cache))
 
+(add-hook 'orpheus-backend-library-changed-hook #'orpheus-ui-invalidate-cache)
+
 (defun orpheus-ui--current-tab ()
   "Return the tab this buffer shows."
   (and (vectorp orpheus-ui--tabs)
