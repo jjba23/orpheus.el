@@ -999,13 +999,14 @@ The name is matched without regard to case, so `Disc.CUE' is found."
 
 (defun orpheus-local--cd-tracks (file)
   "Return the tracks FILE holds as a CD image, or nil when it is one track.
-The cue sheet beside FILE is read first, then the one inside a FLAC file."
+The cue sheet beside FILE is read first, then the indexed one inside a FLAC."
   (if-let* ((cue (orpheus-local--cue-file file)))
            (orpheus-local--cue-tracks
             (with-temp-buffer
               (insert-file-contents cue)
               (buffer-string)))
-    (orpheus-local--flac-tracks file)))
+    (when (orpheus-local--embedded-cue-p file)
+      (orpheus-local--cached-flac-tracks file))))
 
 ;;; Embedded cue sheet index
 
@@ -1013,6 +1014,9 @@ The cue sheet beside FILE is read first, then the one inside a FLAC file."
 ;; search returns sidecar and cached rows at once; the FLACs in that result are
 ;; then indexed in small batches.  The index is keyed by path, size and
 ;; modification time, so a normal search is a lookup and a stat per FLAC.
+
+(defconst orpheus-local--cue-cache-version 1
+  "Version of the embedded cue cache format.")
 
 (defvar orpheus-local--cue-cache (make-hash-table :test #'equal)
   "Embedded FLAC cue tracks, keyed by absolute file name.
@@ -1036,6 +1040,12 @@ CUESHEET tag or block, which is also worth remembering.")
 
 (defvar orpheus-local--cue-index-running nil
   "Whether the embedded cue indexer has work in flight.")
+
+(defvar orpheus-local--cue-index-total 0
+  "FLACs in the current embedded cue index run.")
+
+(defvar orpheus-local--cue-index-done 0
+  "FLACs read so far in the current embedded cue index run.")
 
 (defconst orpheus-local--cue-index-batch 16
   "Number of FLACs read before the indexer yields to the event loop.")
@@ -1062,8 +1072,10 @@ CUESHEET tag or block, which is also worth remembering.")
                (data (json-parse-string text :object-type 'hash-table
                                         :null-object nil
                                         :false-object nil))
+               (version (and (hash-table-p data) (gethash "version" data)))
                (files (and (hash-table-p data) (gethash "files" data))))
-          (when (hash-table-p files)
+          (when (and (eql version orpheus-local--cue-cache-version)
+                     (hash-table-p files))
             (maphash
              (lambda (path value)
                (when (and (vectorp value) (= (length value) 3))
@@ -1098,7 +1110,7 @@ CUESHEET tag or block, which is also worth remembering.")
   "Return the embedded cue cache as JSON text."
   (json-encode
    (list
-    (cons "version" 1)
+    (cons "version" orpheus-local--cue-cache-version)
     (cons "files"
           (cl-loop for path being the hash-keys of orpheus-local--cue-cache
                    using (hash-value entry)
@@ -1117,14 +1129,27 @@ CUESHEET tag or block, which is also worth remembering.")
                                       (plist-get track :end)))
                             (nth 2 entry))))))))))
 
+(defun orpheus-local--cue-cache-write (file)
+  "Write the embedded cue cache to FILE through a temporary file."
+  (let* ((directory (file-name-directory file))
+         (temporary (make-temp-file
+                     (expand-file-name "local-cues.json.tmp-" directory))))
+    (unwind-protect
+        (progn
+          (with-temp-file temporary
+            (setq coding-system-for-write 'utf-8-unix)
+            (insert (orpheus-local--cue-cache-json)))
+          (rename-file temporary file t))
+      (when (file-exists-p temporary)
+        (ignore-errors (delete-file temporary))))))
+
 (defun orpheus-local--cue-cache-save ()
   "Write the embedded cue cache, if it has changed."
   (let ((file (orpheus-local--cue-cache-path)))
     (condition-case err
         (progn
           (make-directory (file-name-directory file) t)
-          (with-temp-file file
-            (insert (orpheus-local--cue-cache-json)))
+          (orpheus-local--cue-cache-write file)
           (setq orpheus-local--cue-cache-dirty nil)
           t)
       (error
@@ -1149,6 +1174,15 @@ CUESHEET tag or block, which is also worth remembering.")
 (defun orpheus-local--cue-cache-tracks (path)
   "Return the indexed embedded cue tracks of PATH, or nil."
   (nth 2 (gethash path orpheus-local--cue-cache)))
+
+(defun orpheus-local--cached-flac-tracks (file)
+  "Return FILE's embedded cue tracks, reading it only when the cache is stale."
+  (orpheus-local--cue-cache-load)
+  (if (orpheus-local--cue-cache-stale-p file)
+      (let ((tracks (orpheus-local--flac-tracks file)))
+        (orpheus-local--cue-cache-store file tracks)
+        tracks)
+    (orpheus-local--cue-cache-tracks file)))
 
 (defun orpheus-local--embedded-cue-p (path)
   "Return non-nil when PATH is a FLAC file."
@@ -1190,6 +1224,10 @@ CUESHEET tag or block, which is also worth remembering.")
         (error
          (message "orpheus: cannot index %s: %s"
                   path (error-message-string err)))))
+    (setq orpheus-local--cue-index-done
+          (min orpheus-local--cue-index-total
+               (+ orpheus-local--cue-index-done (length batch))))
+    (force-mode-line-update t)
     (if orpheus-local--cue-index-queue
         (run-at-time 0 nil #'orpheus-local--cue-index-step)
       (orpheus-local--cue-index-finish))))
@@ -1198,7 +1236,9 @@ CUESHEET tag or block, which is also worth remembering.")
   "Save the cache and tell every waiting search to read its rows again."
   (when orpheus-local--cue-cache-dirty
     (orpheus-local--cue-cache-save))
-  (setq orpheus-local--cue-index-running nil)
+  (setq orpheus-local--cue-index-running nil
+        orpheus-local--cue-index-queue nil)
+  (force-mode-line-update t)
   (let ((waiters (nreverse orpheus-local--cue-index-waiters)))
     (setq orpheus-local--cue-index-waiters nil)
     (dolist (callback waiters)
@@ -1216,15 +1256,32 @@ already in flight."
   (orpheus-local--cue-cache-load)
   (let ((candidates (orpheus-local--cue-index-candidates paths)))
     (when (or candidates orpheus-local--cue-index-running)
-      (when candidates
-        (setq orpheus-local--cue-index-queue
-              (delete-dups
-               (append orpheus-local--cue-index-queue candidates))))
+      (if orpheus-local--cue-index-running
+          (let* ((before (length orpheus-local--cue-index-queue))
+                 (merged (delete-dups
+                          (append orpheus-local--cue-index-queue candidates))))
+            (setq orpheus-local--cue-index-queue merged)
+            (setq orpheus-local--cue-index-total
+                  (+ orpheus-local--cue-index-total
+                     (- (length merged) before))))
+        (setq orpheus-local--cue-index-queue (delete-dups candidates)
+              orpheus-local--cue-index-total
+              (length orpheus-local--cue-index-queue)
+              orpheus-local--cue-index-done 0))
       (push callback orpheus-local--cue-index-waiters)
       (unless orpheus-local--cue-index-running
         (setq orpheus-local--cue-index-running t)
         (orpheus-local--cue-index-step))
       t)))
+
+(defun orpheus-local--cue-index-progress ()
+  "Return a short progress string for the embedded cue index, or nil."
+  (when (and orpheus-local--cue-index-running
+             (> orpheus-local--cue-index-total 0))
+    (format "indexing cues %d/%d"
+            (min orpheus-local--cue-index-done
+                 orpheus-local--cue-index-total)
+            orpheus-local--cue-index-total)))
 
 (defun orpheus-local--cd-item (path track)
   "Return the row for TRACK, one track of the CD image at PATH."
@@ -1542,9 +1599,11 @@ The filter is kept even while mpv is stopped, and applied when it starts."
   (pcase kind
          ('queue (funcall callback (orpheus-local--queue-items local)))
          ('directories
-          (funcall callback
-                   (orpheus-local--directory-items (or (car arg)
-                                                       orpheus-local-directory))))
+          (let ((items (orpheus-local--directory-items
+                        (or (car arg) orpheus-local-directory))))
+            (when orpheus-local--cue-cache-dirty
+              (orpheus-local--cue-cache-save))
+            (funcall callback items)))
          ('search (orpheus-local--search (car arg) callback))
          (_ (funcall callback nil))))
 
@@ -1557,6 +1616,10 @@ The filter is kept even while mpv is stopped, and applied when it starts."
   (cond ((null uri) nil)
         ((orpheus-backend--absolute-uri-p uri) uri)
         (t (expand-file-name uri orpheus-local-directory))))
+
+(cl-defmethod orpheus-backend-progress ((_local orpheus-local))
+  "Return the embedded cue indexing progress, or nil."
+  (orpheus-local--cue-index-progress))
 
 (cl-defmethod orpheus-backend-capabilities ((_local orpheus-local))
   "Return what mpv can browse.

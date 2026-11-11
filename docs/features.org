@@ -64,9 +64,11 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   is indexed from its ~CUESHEET~ Vorbis comment in the background; the first
   search answers from the cache and refreshes when indexing finishes, and the
   binary ~CUESHEET~ block still supplies the track boundaries when only it is
-  present.  SSH reads sidecar ~.cue~ files only.  The local backend uses GNU
-  ~find~ when it is there and walks the tree in Emacs otherwise (Windows has
-  no GNU ~find~).  The results land in the same Search tab.
+  present.  SSH reads sidecar ~.cue~ files only.  Browsing a local FLAC uses
+  the same cache, and the header line shows ~indexing cues n/m~ while the
+  background index fills it.  The local backend uses GNU ~find~ when it is
+  there and walks the tree in Emacs otherwise (Windows has no GNU ~find~).
+  The results land in the same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
   artist and album, and a coloured progress bar.  Its controls are a media row:
   one row of plain glyphs — ~◁◁~, ~▶~ or ~⏸~, ~■~, ~▷▷~, ~➦~ — followed by the

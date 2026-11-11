@@ -82,6 +82,64 @@
   "Return non-nil when every one of PROGRAMS can be found."
   (cl-every #'executable-find programs))
 
+(defun orpheus-integration--u24-bytes (value)
+  "Return VALUE as three big-endian bytes."
+  (apply #'unibyte-string
+         (cl-loop for shift from 16 downto 0 by 8
+                  collect (logand (ash value (- shift)) 255))))
+
+(defun orpheus-integration--le32-bytes (value)
+  "Return VALUE as four little-endian bytes."
+  (apply #'unibyte-string
+         (cl-loop for shift from 0 to 24 by 8
+                  collect (logand (ash value (- shift)) 255))))
+
+(defun orpheus-integration--write-flac-cue (file)
+  "Write a search-only FLAC with titled cue tracks to FILE."
+  (let* ((text (concat "PERFORMER \"Band\"\nTITLE \"Record\"\n"
+                       "TRACK 01 AUDIO\n  TITLE \"First\"\n  INDEX 01 00:00:00\n"
+                       "TRACK 02 AUDIO\n  TITLE \"Second\"\n  INDEX 01 00:10:00\n"))
+         (vendor (encode-coding-string "orpheus-integration" 'utf-8))
+         (comment (encode-coding-string (concat "CUESHEET=" text) 'utf-8))
+         (body (concat (orpheus-integration--le32-bytes (length vendor)) vendor
+                       (orpheus-integration--le32-bytes 1)
+                       (orpheus-integration--le32-bytes (length comment))
+                       comment)))
+    (with-temp-file file
+      (set-buffer-multibyte nil)
+      (let ((coding-system-for-write 'binary))
+        (insert "fLaC" (unibyte-string 132)
+                (orpheus-integration--u24-bytes (length body)) body)))))
+
+(ert-deftest orpheus-test/integration-local-embedded-cue-search ()
+  "A real find and the local cache find an embedded FLAC cue title."
+  (skip-unless (orpheus-integration--programs-p "find"))
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "orpheus-integration-cue" t)))
+         (file (expand-file-name "disc.flac" dir))
+         (cache (expand-file-name "cues.json" dir))
+         (orpheus-local-directory dir)
+         (orpheus-local--cue-cache-file cache)
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded nil)
+         (orpheus-local--cue-index-queue nil)
+         (orpheus-local--cue-index-waiters nil)
+         (orpheus-local--cue-index-running nil)
+         (orpheus-local--cue-index-total 0)
+         (orpheus-local--cue-index-done 0)
+         (results nil))
+    (unwind-protect
+        (progn
+          (orpheus-integration--write-flac-cue file)
+          (orpheus-local--search
+           "Second" (lambda (rows) (push rows results)))
+          (should (orpheus-integration--wait
+                   (lambda () (= 2 (length results)))))
+          (should (equal '("02  Second")
+                         (mapcar #'orpheus-item-label (car results))))
+          (should (file-readable-p cache)))
+      (delete-directory dir t))))
+
 
 ;;; MPD
 

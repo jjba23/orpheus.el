@@ -58,6 +58,7 @@ these generics from =orpheus-backend.el=:
 | ~orpheus-backend-lyrics~         | an ~orpheus-lyrics~ for a track, or nil      |
 | ~orpheus-backend-album-art~      | a file path to the cover, or nil |
 | ~orpheus-backend-local-file~     | a local file the backend holds for a track, or nil |
+| ~orpheus-backend-progress~       | a short background-work string for the header, or nil |
 | ~orpheus-backend-downloads~      | active and recent transfers as rows, when it has a ~downloads~ capability |
 | ~orpheus-backend-cancel-download~ | cancel the transfer for a URI                 |
 | ~orpheus-backend-capabilities~   | which of the browse kinds it can do            |
@@ -94,7 +95,9 @@ Three backends are shipped and are the reference implementations:
   track titles, artists and albums, so a song name finds its track.  A local
   FLAC with no sidecar uses the background index of its embedded cue sheet;
   the first search answers from the cache and refreshes when indexing
-  finishes, and the binary ~CUESHEET~ block remains the titleless fallback.
+  finishes, browsing reuses the same cache, and the header line reports
+  ~indexing cues n/m~ while it fills.  The binary ~CUESHEET~ block remains the
+  titleless fallback.
 - =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
   files tab, ~find~ fills Search, and ~cat~ streams the chosen track into the
   cache; a cover near the track's folder is copied to the same cache.  ~sftp~

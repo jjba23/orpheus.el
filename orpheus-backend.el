@@ -353,6 +353,12 @@ A backend with a `downloads' capability implements this; the rows have a
   (ignore backend)
   (funcall callback nil))
 
+(cl-defgeneric orpheus-backend-progress (backend)
+  "Return a short description of BACKEND's background work, or nil.
+The player puts it in the header line, so keep it to one short line."
+  (ignore backend)
+  nil)
+
 (cl-defgeneric orpheus-backend-cancel-download (backend uri)
   "Cancel BACKEND's transfer for URI and forget its cached copy."
   (ignore backend uri))

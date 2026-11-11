@@ -1118,6 +1118,101 @@ and the password with it."
           (should (orpheus-local--cue-cache-stale-p file)))
       (delete-directory dir t))))
 
+(ert-deftest orpheus-test/local-cd-tracks-reuses-the-cue-cache ()
+  "Browsing a FLAC reuses cached tracks until its size or time changes."
+  (let* ((dir (make-temp-file "orpheus-cd-cache" t))
+         (file (expand-file-name "disc.flac" dir))
+         (orpheus-local--cue-cache-file (expand-file-name "cues.json" dir))
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded nil)
+         (calls 0)
+         (tracks (list (list :number 1 :title "First" :start 0.0 :end 10.0))))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-cue file)
+          (cl-letf (((symbol-function 'orpheus-local--flac-tracks)
+                     (lambda (_file)
+                       (setq calls (1+ calls))
+                       tracks)))
+            (should (equal tracks (orpheus-local--cd-tracks file)))
+            (should (equal tracks (orpheus-local--cd-tracks file)))
+            (should (= 1 calls))
+            (set-file-times file (time-add (current-time) 60))
+            (should (equal tracks (orpheus-local--cd-tracks file)))
+            (should (= 2 calls))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-cue-index-reports-progress ()
+  "The indexer reports how many FLACs are left, then clears the report."
+  (let* ((dir (make-temp-file "orpheus-cue-progress" t))
+         (files (cl-loop for index below 17
+                         collect (let ((file (expand-file-name
+                                               (format "disc%02d.flac" index)
+                                               dir)))
+                                   (with-temp-file file)
+                                   file)))
+         (orpheus-local--cue-cache-file (expand-file-name "cues.json" dir))
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded t)
+         (orpheus-local--cue-index-queue nil)
+         (orpheus-local--cue-index-waiters nil)
+         (orpheus-local--cue-index-running nil)
+         (orpheus-local--cue-index-total 0)
+         (orpheus-local--cue-index-done 0)
+         (refreshed 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'run-at-time)
+                   (lambda (&rest _arguments) nil)))
+          (should (orpheus-local--embedded-cue-index-start
+                   files
+                   (lambda () (setq refreshed (1+ refreshed)))))
+          (should (equal "indexing cues 16/17"
+                         (orpheus-local--cue-index-progress)))
+          (should (equal "indexing cues 16/17"
+                         (orpheus-backend-progress
+                          (make-orpheus-local :name 'local))))
+          (orpheus-local--cue-index-step)
+          (should (= 1 refreshed))
+          (should-not (orpheus-local--cue-index-progress)))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-cue-cache-ignores-an-unknown-version ()
+  "A cache written by another version is ignored, not half-read."
+  (let* ((dir (make-temp-file "orpheus-cue-version" t))
+         (cache (expand-file-name "cues.json" dir))
+         (orpheus-local--cue-cache (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (with-temp-file cache
+            (insert "{\"version\":99,\"files\":{\"/music/disc.flac\":[1,2,null]}}"))
+          (orpheus-local--cue-cache-read cache)
+          (should (= 0 (hash-table-count orpheus-local--cue-cache))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-cue-cache-saves-atomically ()
+  "Saving writes one versioned file and leaves no temporary file."
+  (let* ((dir (make-temp-file "orpheus-cue-save" t))
+         (file (expand-file-name "disc.flac" dir))
+         (cache (expand-file-name "cues.json" dir))
+         (orpheus-local--cue-cache-file cache)
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-dirty nil))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-cue file)
+          (orpheus-local--cue-cache-store
+           file (list (list :number 1 :title "First" :start 0.0 :end 10.0)))
+          (should (orpheus-local--cue-cache-save))
+          (should (file-readable-p cache))
+          (should-not
+           (cl-find-if (lambda (name)
+                         (string-prefix-p "local-cues.json.tmp-" name))
+                       (directory-files dir)))
+          (with-temp-buffer
+            (insert-file-contents cache)
+            (should (string-match-p "\"version\":1" (buffer-string)))))
+      (delete-directory dir t))))
+
 (ert-deftest orpheus-test/local-search-walks-the-tree-without-find ()
   "A host without GNU find is searched by walking the tree in Emacs."
   (let* ((dir (make-temp-file "orpheus-search" t))
@@ -1920,6 +2015,20 @@ appends the rest."
     (should (string-match-p "vol 80" line))
     (should (string-match-p "R" line))
     (should (string-match-p "Z" line))))
+
+(ert-deftest orpheus-test/ui-background-summary ()
+  "The header reports a backend's background work."
+  (let ((orpheus-backend-current (make-orpheus-local :name 'local))
+        (orpheus-local--cue-index-running t)
+        (orpheus-local--cue-index-total 5)
+        (orpheus-local--cue-index-done 2))
+    (should (equal "  indexing cues 2/5"
+                   (orpheus-ui--background-summary-string)))
+    (let ((line (orpheus-ui--status-string
+                 (orpheus-status-create :state 'play :elapsed 1 :total 2
+                                        :volume 50)
+                 (orpheus-track-create :title "Song"))))
+      (should (string-match-p "indexing cues 2/5" line)))))
 
 (ert-deftest orpheus-test/ui-download-summary ()
   "The header counts active and queued transfers and their aggregate speed."

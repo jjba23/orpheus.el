@@ -21,6 +21,12 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   block as the titleless fallback.
 - A local FLAC with a ~CUESHEET~ Vorbis comment now shows its track titles when
   browsed, not just its track numbers.
+- Browsing a local FLAC reuses the embedded cue cache, so moving through a
+  directory of disc images does not reread every cue sheet.  The cache file is
+  versioned and replaced through a temporary file, so an interrupted write
+  leaves the previous index intact.
+- The header line reports embedded cue indexing as ~indexing cues n/m~ while
+  the background index is running, then clears the report.
 
 * 0.20.0 (2026-11-11)
 

@@ -528,6 +528,12 @@ one keystroke is what turns a queue into thousands of rows."
                 (format " %s/s"
                         (file-size-human-readable (round speed) 'iec)))))))
 
+(defun orpheus-ui--background-summary-string ()
+  "Return the backend's background progress, ready for the header."
+  (when-let* ((backend orpheus-backend-current)
+              (progress (orpheus-backend-progress backend)))
+    (concat "  " progress)))
+
 (defun orpheus-ui--progress-string (elapsed total width)
   "Return a two-face progress bar WIDTH columns wide, from ELAPSED and TOTAL."
   (let* ((width (max 1 width))
@@ -556,7 +562,7 @@ WIDTH is in columns; nil keeps the natural width."
                                             (orpheus-track-label track))))
                            (orpheus-track-label track)
                          (if status "nothing playing" "connecting…"))))
-         (right (format "%s / %s  [%s] %3d%%  vol %d  %s%s"
+         (right (format "%s / %s  [%s] %3d%%  vol %d  %s%s%s"
                         (orpheus-format-time elapsed)
                         (orpheus-format-time total)
                         (orpheus-ui--progress-string
@@ -564,6 +570,7 @@ WIDTH is in columns; nil keeps the natural width."
                         (orpheus-progress-percent elapsed total)
                         (if status (orpheus-status-volume status) 0)
                         flags
+                        (or (orpheus-ui--background-summary-string) "")
                         (or (orpheus-ui--download-summary-string) ""))))
     (if width
         (orpheus-ui--columns left right width)

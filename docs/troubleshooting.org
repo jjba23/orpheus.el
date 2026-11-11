@@ -88,8 +88,9 @@ found:
   from its embedded cue sheet: the first search returns cached rows and
   indexes the FLACs in the result in the background, then refreshes the Search
   tab.  Titles need a ~CUESHEET~ Vorbis comment; a binary ~CUESHEET~ block has
-  track boundaries but no titles.  A new or changed file is indexed again on
-  the next search.
+  track boundaries but no titles.  The header shows ~indexing cues n/m~ while
+  the background index runs, and a new or changed file is indexed again on the
+  next search.
 - On SSH, only sidecar ~.cue~ sheets are read; an embedded FLAC cue is not
   searched.  Add a sidecar with the image's base name when a remote title must
   be searchable.  The sheets are fetched with one ~cat~ per sheet.  If the
