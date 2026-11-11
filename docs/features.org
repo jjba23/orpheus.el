@@ -31,16 +31,21 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   ~orpheus-ssh-concurrency~ at once.  A play request jumps ahead of prefetches,
   the next ~orpheus-ssh-prefetch~ queue entries arrive before you need them,
   and the Downloads tab shows every transfer's state, completion, rolling
-  speed, ETA and bytes.  The file streams with ~cat~; a separate ~ls -l~
-  probe supplies its size for progress when the host allows it, so a host that
-  cannot report a size still downloads and shows ~--%~.  When the shell
+  speed, ETA and bytes.  A whole file streams with ~cat~, while a track of a
+  disc fetches only its byte range with ~dd~; a separate ~ls -l~ probe
+  supplies a whole file's size for progress when the host allows it, so a host
+  that cannot report a size still downloads and shows ~--%~.  When the shell
   rejects ~cat~, the transfer goes over ~sftp~ instead.  A one-time check on
   connect reports which remote commands and shell features work, and
   ~M-x orpheus-ssh-diagnose~ shows the same table on demand.  The header line
   counts active and queued transfers and shows their aggregate throughput.
-  ~d~ cancels one and ~RET~ plays a finished copy or retries a failure.  A
-  progress update touches the header line, not the queue or another tab behind
-  the Downloads tab.
+  ~d~ cancels one and ~RET~ plays a finished copy or retries a failure.  A CD
+  kept as one FLAC file is not fetched whole: its seek table, or an estimate
+  from the average bitrate, yields the chosen track's byte range, ~dd~ copies
+  only that range, and ~ffmpeg~ here cuts the track, the row saying ~cutting
+  locally~ while it does.  The whole image is copied once only when no range
+  can be planned.  A progress update touches the header line, not the queue or
+  another tab behind the Downloads tab.
 - *Browsing does not wait for a transfer.* :: Listings, searches and cover
   lookups share one multiplexed ssh connection, so they never pay a fresh key
   exchange while downloads saturate a slow link, and their bytes do not queue
@@ -53,8 +58,11 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
 - *Search close to home.* :: MPD searches its library, the local backend runs
   ~find~ below ~orpheus-local-directory~, and SSH runs ~find~ below
   ~orpheus-ssh-directory~; when the host has no ~find~, SSH falls back to a
-  recursive ~ls~.  All three answer asynchronously and put the results in the
-  same Search tab.
+  recursive ~ls~.  A ~.cue~ beside an image is read, so a track title, artist
+  or album finds that track rather than only the image file, and a matching
+  image name returns every track of the disc.  The local backend uses GNU
+  ~find~ when it is there and walks the tree in Emacs otherwise (Windows has
+  no GNU ~find~).  The results land in the same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
   artist and album, and a coloured progress bar.  Its controls are a media row:
   one row of plain glyphs — ~◁◁~, ~▶~ or ~⏸~, ~■~, ~▷▷~, ~➦~ — followed by the
@@ -63,6 +71,11 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   the gold face instead of changing its glyph, so the row never shifts.
   ~orpheus-ui-control-icons~ changes any of them.  ~orpheus-ui-show-now-playing~
   turns the card off when the header line is enough.
+- *Audio and video.* :: The files tab lists the common audio containers and
+  the common video ones.  A video is played for its sound only: mpv starts
+  with ~--no-video~ and never opens a video window, so a concert film becomes
+  an album you can listen to.  The full list is ~orpheus-local-extensions~;
+  MPD uses the formats its own daemon supports.
 - *A look of your own.* :: ~orpheus-theme~ names a colour preset and ~M-t~
   cycles the six shipped ones: Aegean, Nord, Gruvbox, Rosé Pine, Solarized
   Light and Graphite.  A preset sets the colours of the status line, title,
@@ -112,6 +125,11 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
 - *It opens where you are.* :: ~M-x orpheus~ reuses the selected window instead
   of splitting the frame.  ~orpheus-ui-display-action~ asks for a pop-up window
   only when you want one.
+- *A frame of its own.* :: ~M-x orpheus-detach~ opens the player in a new
+  graphical frame and closes its old window; the ~⧉ detach~ button after the
+  tabs does the same.  The frame is ordinary Emacs, so the window manager moves
+  and closes it like any other.  A terminal says a new frame needs a display
+  rather than silently splitting the window.
 - *Dired fingers and icons.* :: ~RET~ enters a directory, ~^~ leaves it, ~m~,
   ~u~, ~U~ and ~t~ mark rows, and every row starts with a glyph for what it is
   — a folder, a track, an album, an artist, a playlist.
@@ -145,8 +163,12 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   dark or light frame, with a visualizer ramp that runs from deep sea to gold.
 - *A mode line you can click.* :: ~orpheus-mode-line-mode~ puts the playing
   track in the mode line of every buffer; ~mouse-1~ opens the player,
-  ~mouse-2~ plays or pauses, and ~mouse-3~ opens the transport menu, so the
-  mode line controls the music without changing the buffer you are in.
+  ~mouse-2~ plays or pauses, and ~mouse-3~ opens the transport menu.  Beside
+  the track are previous, play or pause, next and stop buttons, one click
+  each, and the menu also has seeking, the four modes, the equalizer, lyrics,
+  detach and quit.  ~orpheus-mode-line-controls~ nil hides the buttons and
+  leaves the status glyph and the track.  The mode line controls the music
+  without changing the buffer you are in.
 - *Dired and URLs.* :: ~orpheus-play-file~ and ~orpheus-add-file~ take the file
   at point; ~orpheus-play-url~ takes a link, and mpv hands a video page to
   yt-dlp when it is installed.
@@ -230,4 +252,5 @@ itself, because the daemon owns the whole queue.
 - [[file:glossary.org][Words and ideas]] explains the vocabulary in plain language.
 - [[file:configuration.org][Configuration]] lists every option with its default.
 - [[file:backends.org][Backends]] explains MPD, local files, SSH, and how to add a fourth.
+- [[file:architecture.org][How it works]] has the diagrams, the format table and the platform matrix.
 - [[file:troubleshooting.org][Troubleshooting]] is the symptom-by-symptom page.

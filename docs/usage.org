@@ -30,7 +30,7 @@ restarting Emacs.
 |----------------+--------+---------------|
 | in a Music Player Daemon library | ~mpd~ | a running MPD and its socket or address |
 | a folder or links on this computer | ~local~ | ~mpv~ on ~exec-path~ |
-| on another computer, with no daemon there | ~ssh~ | ~ssh~ here, and ~sftp~ when the shell cannot run ~cat~; ~ffmpeg~ there to send one track of a CD image |
+| on another computer, with no daemon there | ~ssh~ | ~ssh~ here, and ~sftp~ when the shell cannot run ~cat~; ~ffmpeg~ there to cut a disc track, and here when it cannot |
 
 If you already run MPD, ~mpd~ is usually the least surprising choice: the
 daemon keeps the library and the queue, and orpheus is the window onto it.
@@ -183,8 +183,12 @@ passphrase.  A host whose key is not in =~/.ssh/known_hosts= needs one
 mpv must be installed here, and the audio comes out of this machine.  When the
 host has ~ffmpeg~, a CD kept as one file is listed by the tracks its ~.cue~
 names and the track you pick is cut out there and remuxed, so only its minutes
-are transferred; without ~ffmpeg~ the image is copied once and the tracks play
-from that copy.  The start
+are transferred.  Without ~ffmpeg~, orpheus plans the track's byte range from
+the FLAC seek table (or estimates it from the average bitrate), fetches that
+range with ~dd~, and cuts it here with this machine's ~ffmpeg~; ~ffprobe~
+corrects an estimate.  The last track, which has no end, works the same way.
+The whole image is copied once only when no range can be planned, and
+~orpheus-ssh-split-images~ nil turns the range path off.  The start
 directory is relative to the login home or absolute; a leading =~= is not
 expanded, because the path is quoted for the remote shell.  The shared socket
 lives in a short private directory (~orpheus-ssh-control-directory~); when ssh
@@ -361,10 +365,19 @@ Outside the player buffer:
 | ~M-x orpheus-ssh-diagnose~ | check the remote SSH commands and shell features |
 | ~M-x orpheus-switch-backend~ | disconnect the current backend and connect another |
 | ~M-x orpheus-mode-line-mode~ | show the track in the mode line              |
+| ~M-x orpheus-detach~     | move the player to a new graphical frame         |
 | ~M-x orpheus-quit~       | stop reading the status and close the player     |
 
 All of the transport commands are ordinary interactive functions, so any of
 them can be bound in ~global-map~ or in a repeat map.
+
+The mode line shows the track with previous, play or pause, next and stop
+buttons beside it, each one click.  Its right-click menu adds seeking, repeat,
+shuffle, single, consume, the equalizer, lyrics, detach and quit;
+~orpheus-mode-line-controls~ nil hides the buttons and leaves the track and the
+status glyph.  The player's tab row ends with a ~⧉ detach~ button: it, and
+~M-x orpheus-detach~, open the player in a new graphical frame and close the
+old window.  A terminal says a frame needs a display.
 
 * Graphics, and how it degrades
 :PROPERTIES:

@@ -58,9 +58,14 @@ A new host also needs its key in =~/.ssh/known_hosts= first; use
 as a permanent setting.
 
 The table lists ~ffmpeg~ last on the host's side.  With it, a track of a CD
-image is cut out on the host and only its minutes are copied; without it the
-whole image is copied once, cached, and the tracks play from that copy.  Either
-way the track is listed, because the ~.cue~ beside the image is what names it.
+image is cut out on the host and only its minutes are copied.  Without it,
+orpheus fetches a byte range planned from the FLAC seek table (or estimated
+from the average bitrate) with ~dd~ and cuts the track here with this
+machine's ~ffmpeg~; ~ffprobe~ corrects an estimate.  If ~dd~, local ~ffmpeg~
+or a usable seek table is missing, the whole image is copied once, cached, and
+the tracks play from that copy; ~orpheus-ssh-split-images~ nil asks for that
+copy explicitly.  Either way the track is listed, because the ~.cue~ beside
+the image is what names it.
 
 If ssh reports ~ControlPath too long~ or ~too long for Unix domain socket~,
 orpheus retries the command without multiplexing, so the listing still works.
@@ -69,6 +74,28 @@ default under ~$XDG_RUNTIME_DIR~ or =/tmp= is unsuitable, or set
 ~orpheus-ssh-multiplex~ nil to stop sharing connections entirely.  To rule out
 the whole backend without restarting Emacs, press ~B~ in the player (or run
 ~M-x orpheus-switch-backend~).
+
+* Search does not find a song inside a disc image
+
+The local and SSH backends read a ~.cue~ file beside an image and list its
+sheet as one row per track.  Search matches the track title, artist and album
+as well as the row and file path, so a matching song returns its track and a
+matching image name returns every track of that disc.  If the title is not
+found:
+
+- Check that the sheet is a sidecar ~.cue~ with the image's base name, such as
+  =disc.cue= next to =disc.flac=.  For a local image, a ~CUESHEET~ block
+  inside a FLAC is read when the image is browsed or played, but a library-wide
+  search does not open every FLAC header; add a sidecar ~.cue~ if search must
+  find it.
+- On SSH, the sheets are fetched with one ~cat~ per sheet.  If the remote
+  shell rejects ~cat~, ~M-x orpheus-ssh-diagnose~ shows it; the disc is still
+  listed, but its track titles cannot be searched until the sheet is readable.
+- A host without ~find~ searches with a recursive ~ls~, and a Windows local
+  search walks the tree in Emacs.  Both fallbacks are slower on a very large
+  library, but they return the same rows.
+- MPD searches its daemon's index, not a cue sheet on this machine; the cue
+  rows above belong to the local and SSH backends.
 
 * A password is rejected
 

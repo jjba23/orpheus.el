@@ -1,0 +1,227 @@
+#+title: How it works
+#+subtitle: the seam, the diagrams and the platform notes
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+#+options: toc:t num:nil
+
+[[file:../README.org][Back to README]] · [[file:index.org][Guide index]] · [[file:features.org][Feature tour]] · [[file:backends.org][Backends]] · [[file:configuration.org][Configuration]] · [[file:troubleshooting.org][Troubleshooting]]
+
+This page is for the reader who wants to know why the package is shaped the
+way it is.  It is not required to use the player.  The short version is that
+Emacs owns the interface, a backend owns the music, and processes, timers and
+text properties do the rest.  The diagrams below are Mermaid, so GitHub,
+GitLab and an Org export with Mermaid support can draw them; the source stays
+readable as plain text everywhere else.
+
+* The seam
+:PROPERTIES:
+:CUSTOM_ID: the-seam
+:END:
+
+The queue, the tabs, the keys and the drawing know nothing about MPD, mpv or
+SSH.  They call the generics in =orpheus-backend.el=; a backend implements
+those and appears in the same interface.  That is the whole reason one player
+can show a daemon, a folder and another machine without three interfaces.
+
+#+begin_src mermaid
+flowchart LR
+  User["keys, mouse, M-x"] --> UI["player buffer<br/>tabs, list, header line"]
+  UI --> Core["orpheus.el<br/>queue and transport"]
+  Core --> Mode["mode line<br/>global-mode-string"]
+  Core --> Backend{"backend"}
+  Backend -->|mpd| MPD["MPD client"]
+  MPD --> Daemon[("mpd daemon")]
+  Backend -->|local| Local["local backend"]
+  Local --> MPV["mpv<br/>JSON IPC"]
+  Backend -->|ssh| SSH["SSH backend"]
+  SSH --> Remote[("remote files")]
+  SSH --> Cache[("local cache")]
+  Cache --> MPV
+  MPV --> Audio[("system audio")]
+  Daemon --> Audio
+#+end_src
+
+A backend answers questions and takes commands.  It does not draw a row, own a
+key or decide where a tab goes.  The interface is a plain Emacs buffer, so the
+same text is a list in a terminal, a mouse target in a graphical frame and a
+buffer over SSH.  A new backend is a ~cl-defstruct~ and a handful of methods,
+not a second player; [[file:backends.org#adding-one][Adding one]] shows the skeleton.
+
+The queue lives where it can be authoritative.  MPD owns its queue in the
+daemon; the local and SSH backends keep it in Emacs, because there is no daemon
+on the far side to keep it for them.  That is also why MPD can be gapless while
+the local backend plays one file at a time.
+
+* One disc image, many tracks
+:PROPERTIES:
+:CUSTOM_ID: disc-images
+:END:
+
+A CD ripped as one file carries its track boundaries outside the audio: in a
+~.cue~ file beside it, or in the ~CUESHEET~ block of a FLAC file.  Browsing
+reads that sheet and makes one row per track, with the track number, title,
+artist and length.  Playing a row seeks to its minutes and stops at its end;
+the position shown counts within the track, not within the whole disc.
+
+#+begin_src mermaid
+flowchart TD
+  File["disc.flac"] --> Sheet{"sidecar .cue<br/>or FLAC CUESHEET"}
+  Sheet -->|tracks| Rows["one row per track"]
+  Rows --> Pick["choose track 02"]
+  Pick --> Local["local: mpv --start=... --end=..."]
+  Pick --> Host["SSH host with ffmpeg:<br/>cut there, send the minutes"]
+  Pick --> Range["SSH host without ffmpeg:<br/>dd the byte range, cut here"]
+#+end_src
+
+The range travels in the URI as a fragment, so a queue entry, a playlist and a
+cache key all keep it without a second data structure.  The local backend
+reads a sidecar first and a FLAC ~CUESHEET~ as the fallback; SSH reads the
+sidecar.
+The cue title and artist are remembered, so the queue and the now-playing card
+name the song instead of the image file.
+
+Over SSH the chosen track is cut on the host with ~ffmpeg~ when it is there,
+remuxed rather than re-encoded, so only its minutes cross the link.  Without
+it, the FLAC seek table (or an estimate from the average bitrate) names the
+byte range, ~dd~ fetches only those bytes, and this machine's ~ffmpeg~ cuts the
+track; ~ffprobe~ corrects an estimate.  The last track has no end and works
+the same way.  Only an image with no usable range is copied whole once, and
+every track of that disc plays from that copy; ~orpheus-ssh-split-images~ nil
+asks for that copy explicitly.
+
+A search reads a sidecar ~.cue~ beside the image, so a song title finds its
+track.  Locally, the ~CUESHEET~ inside a FLAC is used when the disc is browsed
+or played, but a library-wide search does not open the header of every FLAC to
+look for one: that would make a large library slow.  If a title exists only in
+an embedded sheet and search must find it, add a sidecar ~.cue~ with the same
+base name as the image.
+
+* Search matches songs, not only files
+:PROPERTIES:
+:CUSTOM_ID: search
+:END:
+
+Every backend returns rows, and the matching is shared.  A row matches when
+the query is in its label or URI, or in the title, artist or album of the
+track it carries.  A matching track yields only that track of the image; a
+matching image name yields every track of that disc.  The interface therefore
+does not need three search behaviors that drift apart.
+
+#+begin_src mermaid
+sequenceDiagram
+    participant E as Emacs
+    participant F as find or ls
+    participant C as cue reader
+    participant S as shared filter
+    E->>F: list files below the root
+    F-->>E: paths, including .cue files
+    E->>C: parse sidecar cue sheets
+    C-->>E: titles, artists, starts and ends
+    E->>S: rows and query
+    S-->>E: matching rows
+    Note over E,S: A title returns its track; an image path returns the disc.
+#+end_src
+
+MPD searches its library through the daemon.  The local backend runs GNU
+~find~ as a process, so a large tree does not block Emacs; on Windows, or on a
+host with no GNU ~find~, it walks the tree with
+~directory-files-recursively~ instead.  That fallback is synchronous, so a
+very large library can pause for a moment; it is the price of a portable
+search with no extra program.  SSH runs ~find~, and when the host has no
+~find~ it falls back to a recursive ~ls~.  In both remote cases the cue sheets
+in the result are fetched one ~cat~ each, grouped by directory, so a restricted
+shell with no loops still answers.
+
+* The event loop
+:PROPERTIES:
+:CUSTOM_ID: event-loop
+:END:
+
+Nothing waits for a socket.  MPD replies, mpv's JSON, SSH's listings, transfers
+and cava's frames all arrive in process filters or sentinels.  One timer reads
+the status; the list is redrawn only when something it shows changed.  The
+header line and the mode line are functions over the same state, so a redraw
+does not move point or the scroll position.
+
+#+begin_src mermaid
+flowchart LR
+  P["process filters<br/>MPD, mpv, SSH, cava"] --> State["status and queue"]
+  T["one-second timer"] --> State
+  State --> H["header-line-format"]
+  State --> M["global-mode-string"]
+  State --> L["list redraw when it changed"]
+  M --> C["text properties<br/>mouse-1 -> command"]
+#+end_src
+
+Emacs is a good host for this because it already has the pieces:
+
+- *Processes are asynchronous by default.*  ~make-process~ and
+  ~make-network-process~ deliver chunks to a filter, so a slow server cannot
+  block the editor.  There are no worker threads and no locks; callbacks run on
+  the same event loop as the keys.
+- *A buffer is a layout engine.*  Faces, text properties and overlays draw the
+  tabs, the list, the progress bar and the buttons.  A mouse click is a key
+  lookup on the text under the pointer, not a separate GUI toolkit.
+- *The mode line is a variable with a face.*  ~global-mode-string~ lets a
+  global minor mode show the track in every buffer.  Each transport glyph gets
+  its own small ~local-map~, so one click can run one command without changing
+  the buffer you are editing.
+- *Frames are ordinary objects.*  ~make-frame~ is enough to detach the player;
+  the window manager moves and closes it like any other Emacs frame.
+- *A terminal is a first-class display.*  ~display-graphic-p~ is the only test
+  that matters for images and SVG; the text, the progress bar and the ASCII
+  fallbacks work without a display server.
+
+* Formats
+:PROPERTIES:
+:CUSTOM_ID: formats
+:END:
+
+The local and SSH backends use the same extension list,
+~orpheus-local-extensions~.  It is deliberately a broad list of containers mpv
+can open, not a promise that every codec inside every container is installed.
+Tags, duration and cover art come from the file when they are there.
+
+| Group     | Common extensions | What orpheus does |
+|-----------+-------------------+------------------|
+| Audio     | ~mp3~, ~mp2~, ~flac~, ~ogg~, ~oga~, ~opus~, ~m4a~, ~m4b~, ~aac~, ~wav~, ~aiff~, ~wma~, ~alac~, ~ape~, ~wv~, ~tta~, ~dsf~, ~dff~, ~mid~, ~midi~, ~amr~, ~ac3~, ~dts~, ~mka~, ~caf~, ~au~ | played by mpv; tags and cover art are read where the file provides them |
+| Video     | ~mp4~, ~m4v~, ~mkv~, ~webm~, ~avi~, ~mov~, ~mpg~, ~mpeg~, ~ogv~, ~ts~, ~m2ts~, ~mts~, ~flv~, ~wmv~, ~vob~, ~3gp~, ~3g2~, ~rm~, ~rmvb~, ~divx~, ~asf~ | *sound only*: mpv starts with ~--no-video~ and ~--force-window=no~, so no video window opens |
+| Playlists | ~m3u~, ~m3u8~ | listed and played as lists; orpheus writes portable M3U8 |
+
+MPD does not use this list: it asks its daemon, so a format is available when
+the daemon's own build supports it.  A cue sheet is not a format mpv decodes;
+it is read in Emacs and turned into track ranges.
+
+* Platforms
+:PROPERTIES:
+:CUSTOM_ID: platforms
+:END:
+
+The Emacs Lisp is the same everywhere; the program that plays the audio and the
+program that lists the files are not.  The player degrades by dropping a
+feature, not by failing to open.
+
+| Feature | GNU/Linux | macOS | Windows |
+|---------+-----------+-------+---------|
+| Playback | mpv with PipeWire, PulseAudio or ALSA | mpv with CoreAudio | mpv with WASAPI; the named-pipe path is written and compiled but unproven |
+| MPD | TCP or a Unix socket | TCP or a Unix socket | TCP; use ~orpheus-mpd-host~ and ~orpheus-mpd-port~ |
+| SSH | OpenSSH, optional multiplexing | OpenSSH, optional multiplexing | OpenSSH; multiplexing is left to it |
+| Search | asynchronous GNU ~find~ | asynchronous BSD ~find~ | no GNU ~find~, so Emacs walks the tree synchronously |
+| Visualizer | cava with PipeWire | cava with PortAudio; a loopback device is needed for system output | cava is not normally available; playback still works |
+| Cover art | images in a graphical frame | images in a graphical frame | images in a graphical frame |
+| Detach | a new graphical frame | a new graphical frame | a new graphical frame; a terminal says it needs a display |
+| Terminal | text, Unicode and ASCII fallbacks | same | same |
+
+The Windows search fallback is covered by a unit test that makes ~find~
+unavailable; the WASAPI and named-pipe playback path is not exercised on this
+machine and is documented as unproven rather than called supported.  Everything
+else in the table is the same code on every platform, with the external program
+doing the platform-specific part.
+
+* Where to go next
+
+- [[file:backends.org][Backends]] is the protocol in full, and how to add a fourth.
+- [[file:configuration.org][Configuration]] is the option table for every backend.
+- [[file:troubleshooting.org][Troubleshooting]] starts with the checks to run when something is silent.
+- [[file:features.org][Feature tour]] is the short, user-facing version of this page.

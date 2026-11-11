@@ -19,7 +19,7 @@ Emacs.
 |---------+----------+-------|
 | MPD     | an existing library and daemon, especially on another machine | ~mpd~ and a running daemon |
 | local   | files and URLs on this machine | ~mpv~; ~ffmpeg~ for extracted covers, ~yt-dlp~ for video links |
-| SSH     | a library on a remote machine with no daemon there | ~ssh~; ~sftp~ only when the remote shell cannot run ~cat~; ~ffmpeg~ there to send one track of a disc instead of the whole image |
+| SSH     | a library on a remote machine with no daemon there | ~ssh~; ~sftp~ only when the remote shell cannot run ~cat~; ~ffmpeg~ there to cut a disc track on the host, and here when it cannot |
 
 The trade-off is where the queue lives.  MPD owns its queue in the daemon;
 local and SSH keep the queue in Emacs, and SSH copies each track before mpv
@@ -88,7 +88,10 @@ Three backends are shipped and are the reference implementations:
   mpv (and so to yt-dlp).  A disc kept as one file is listed as the tracks its
   cue sheet names — a ~.cue~ beside the image, or the ~CUESHEET~ block inside a
   FLAC file — and each track plays from its own minutes with mpv's ~start~ and
-  ~end~, so the position shown counts within the track.
+  ~end~, so the position shown counts within the track.  The cue title is what
+  the queue and now-playing card show, not the image's file name.  Search
+  reads a sidecar ~.cue~ and matches its track titles, artists and albums, so
+  a song name finds its track.
 - =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
   files tab, ~find~ fills Search, and ~cat~ streams the chosen track into the
   cache; a cover near the track's folder is copied to the same cache.  ~sftp~
@@ -99,10 +102,20 @@ Three backends are shipped and are the reference implementations:
   probes and covers share one multiplexed connection
   (~orpheus-ssh-multiplex~), while downloads keep connections of their own, so
   a slow link still answers a directory change.  A disc kept as one file is
-  listed from its cue sheet, which costs one extra cat for the folder, and the
-  track you pick is cut out on the host by ~ffmpeg~ and remuxed, so only its
-  minutes cross the link.  A host without ~ffmpeg~ sends the whole image once
-  and every track of that disc plays from the copy.  The control socket is kept in
+  listed from its cue sheet, which costs one cat per sheet for the folder, and
+  the track you pick is cut out on the host by ~ffmpeg~ and remuxed, so only
+  its minutes cross the link.  A host without ~ffmpeg~ does not force the whole
+  image over the link: the FLAC seek table, or an estimate from the average
+  bitrate, names the track's byte range, ~dd~ fetches only those bytes, and
+  ~ffmpeg~ here cuts the track from them.  The last track, which has no end,
+  works the same way.  Only an image with no usable range is copied once, and
+  every track of that disc plays from the copy; ~orpheus-ssh-split-images~ nil
+  makes that choice explicit.  Search fetches the cue sheets in a result and
+  matches their track titles, artists and albums; a host without ~find~ uses
+  the recursive ~ls~ fallback and still reads them.  The cue title is
+  remembered, so the queue and the now-playing card name the song rather than
+  the image.  The control
+  socket is kept in
   a short private directory (~orpheus-ssh-control-directory~); a host that
   rejects it is retried once without multiplexing instead of failing the
   listing.  The local backend plays a copy
@@ -203,19 +216,27 @@ as anywhere else.
 
 The local backend asks mpv for ~--ao=wasapi~ on Windows and drives it over a
 named pipe; that path is written and compiled but untested, so treat it as
-unproven rather than supported.  ssh multiplexing is left to OpenSSH; orpheus
-gives it a short private socket directory and retries without multiplexing
-when OpenSSH rejects it, so a path limit does not fail the listing.  With
+unproven rather than supported.  Windows has no GNU ~find~, so the local
+search walks the tree with ~directory-files-recursively~ instead; that walk is
+synchronous and is meant for ordinary libraries.  Video files are listed and
+played for their sound only, on every platform, because mpv starts with
+~--no-video~.  ssh multiplexing is left to OpenSSH; orpheus gives it a short
+private socket directory and retries without multiplexing when OpenSSH rejects
+it, so a path limit does not fail the listing.  With
 ~(setq orpheus-ssh-multiplex nil)~ the backend opens one connection per
-command, as before.  MPD works wherever MPD does — that includes
-an MPD on another machine, which is the case that needs no platform support at
-all.  Nothing in the package reads or writes a path in a platform-specific way
-beyond ~temporary-file-directory~ and ~orpheus-cache-directory~.
+command, as before.  MPD works wherever MPD does — that includes an MPD on
+another machine, which is the case that needs no platform support at all.  A
+terminal can use every command except ~orpheus-detach~, which needs a
+graphical frame and says so.  Nothing in the package reads or writes a path in
+a platform-specific way beyond ~temporary-file-directory~ and
+~orpheus-cache-directory~.  The visualizer's ~cava~ is least likely to be
+available on Windows; playback does not depend on it.
 
 
 * Where to go next
 
 - [[file:configuration.org][Configuration]] has the option tables for every backend.
+- [[file:architecture.org][How it works]] has the diagrams, the format table and the platform matrix.
 - [[file:usage.org][Using orpheus]] covers MPD passwords, local playback and SSH transfers in
   context.
 - [[file:troubleshooting.org][Troubleshooting]] starts with the checks to run when a connection is silent.

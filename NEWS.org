@@ -9,6 +9,57 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- Search matches the titles, artists and albums in a cue sheet, so a song name
+  finds its track of a disc image instead of only the image file.  The local
+  and SSH backends read a ~.cue~ beside the image; a matching image name still
+  returns every track of the disc, and a file with no cue sheet is searched by
+  its path as before.  Locally, the ~CUESHEET~ inside a FLAC is used when the
+  image is browsed or played, but a library-wide search does not open every
+  FLAC header; add a sidecar ~.cue~ if search must find it.
+- The mode line now has previous, play or pause, next and stop buttons, each
+  one mouse-1 click, and its menu adds seeking, repeat, shuffle, single,
+  consume, the equalizer, lyrics, detach and quit.  Set
+  ~orpheus-mode-line-controls~ to nil to keep only the status glyph and track.
+- ~M-x orpheus-detach~ shows the player in a new graphical frame and closes its
+  old window; a ~⧉ detach~ button after the tabs does the same.  A terminal
+  says a frame needs a display instead of silently splitting the window.
+- The local and SSH backends list the common audio and video containers, and a
+  video plays its sound only: mpv starts with ~--no-video~ and never opens a
+  video window.
+- A new guide page, =docs/architecture.org=, explains the backend seam, cue
+  track ranges, search and the event loop with Mermaid diagrams, and adds a
+  format table and a platform matrix.
+
+*** Changed
+
+- A disc image's cue title and artist are remembered, so the queue and the
+  now-playing card name the song rather than the image file.
+- Over SSH, a track of a disc image is fetched by byte range when the host has
+  no ~ffmpeg~: the FLAC seek table or an average-bitrate estimate names the
+  range, ~dd~ fetches it and this machine's ~ffmpeg~ cuts it; ~ffprobe~
+  corrects an estimate, and the last track works the same way.  A host with
+  ~ffmpeg~ cuts the track there instead.  Only an image with no usable range
+  is copied whole, and ~orpheus-ssh-split-images~ nil asks for that copy.
+- A whole image copied as the fallback is cached once and shared by every track
+  of the disc; a track cut here keeps its own cache file.
+- Local search uses GNU ~find~ when it is there and walks the tree in Emacs
+  when it is not, so Windows and a stripped-down host still answer; the walk
+  is synchronous and meant for ordinary libraries.
+- Playback through mpv asks for a track's tags and duration once and for the
+  position only while it is not stopped, instead of on every tick.
+
+*** Fixed
+
+- A range cut here is written with an explicit FLAC format, so the temporary
+  ~.part~ suffix no longer makes ~ffmpeg~ refuse it and fall back to the whole
+  image.
+- Cue sheets are fetched one ~cat~ at a time, so a restricted shell with no
+  loops can still list a disc's tracks.
+
 * 0.19.0 (2026-11-11)
 
 *** Added

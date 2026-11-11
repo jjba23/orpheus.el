@@ -61,6 +61,7 @@ matches what you are doing; every page links back here and to its neighbours.
 | Page | What it covers |
 |------+----------------|
 | [[file:docs/features.org][Feature tour]] | the tabs, transfer queue, now-playing card, playlists, equalizer, lyrics and visualizer |
+| [[file:docs/architecture.org][How it works]] | the backend seam, Mermaid diagrams, formats and the platform matrix |
 | [[file:docs/usage.org][Using orpheus]] | a working backend, MPD passwords, the keys and the graphical fallbacks |
 | [[file:docs/glossary.org][Words and ideas]] | a friendly glossary of backends, queues, tabs, caches and the rest |
 | [[file:docs/configuration.org][Configuration]] | every option, its default and complete examples |
@@ -103,17 +104,29 @@ machine that program lives on is the part worth checking:
 | ~emacs~     | this computer                  | Emacs 29.1 or newer                                     |
 | ~mpd~       | the machine running the daemon | the MPD backend                                         |
 | ~mpv~       | this computer                  | the local and SSH backends play through it              |
-| ~ffmpeg~    | this computer                  | covers extracted from a file, and lyrics tags inside it  |
-| ~ffmpeg~    | the SSH host                   | sending one track of a CD image instead of the whole image |
+| ~ffmpeg~    | this computer                  | covers, lyrics tags, and a disc track fetched as a range |
+| ~ffmpeg~    | the SSH host                   | cutting a disc track on the host when it has one         |
 | ~ssh~       | this computer                  | the SSH backend                                         |
 | ~sftp~      | this computer                  | the SSH backend when the host's shell cannot run ~cat~   |
 | ~cava~      | this computer                  | the visualizer                                          |
 | ~yt-dlp~    | this computer                  | video links played by the local backend                 |
 
-Cue sheets need no program: a ~.cue~ beside an image, or a ~CUESHEET~ block
-inside a FLAC file, is read in Emacs.  A missing ~ffmpeg~ on the SSH host is
-not fatal, only slower: the whole image is copied once and its tracks play
-from that copy.
+Cue sheets need no program: a ~.cue~ beside an image is read in Emacs, and the
+local backend also falls back to the ~CUESHEET~ block inside a FLAC file.  A
+missing ~ffmpeg~ on the SSH host does
+not mean copying the whole image: a track of a FLAC image is fetched as the
+byte range its seek table names, or estimated from the average bitrate when
+there is none, and cut here with this computer's ~ffmpeg~; ~ffprobe~ corrects
+an estimate.  Only an image that cannot be planned that way is copied once,
+and every track of it plays from that copy.  ~orpheus-ssh-split-images~ turns
+the range path off.
+
+Audio and video are the common containers mpv opens: MP3, FLAC, Ogg and Opus,
+M4A and AAC, WAV, AIFF, WMA, ALAC, APE, WavPack, DSD, MIDI and more; MP4, MKV,
+WebM, AVI, MOV, MPEG and TS, FLV, WMV, VOB and 3GP among video.  A video plays
+its sound only: mpv starts with ~--no-video~.  The list is
+~orpheus-local-extensions~; MPD uses the formats its daemon supports.
+[[file:docs/architecture.org][How it works]] has the format table and the platform matrix.
 
 * Quick start
 
