@@ -60,7 +60,11 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   ~orpheus-ssh-directory~; when the host has no ~find~, SSH falls back to a
   recursive ~ls~.  A ~.cue~ beside an image is read, so a track title, artist
   or album finds that track rather than only the image file, and a matching
-  image name returns every track of the disc.  The local backend uses GNU
+  image name returns every track of the disc.  Locally, a FLAC with no sidecar
+  is indexed from its ~CUESHEET~ Vorbis comment in the background; the first
+  search answers from the cache and refreshes when indexing finishes, and the
+  binary ~CUESHEET~ block still supplies the track boundaries when only it is
+  present.  SSH reads sidecar ~.cue~ files only.  The local backend uses GNU
   ~find~ when it is there and walks the tree in Emacs otherwise (Windows has
   no GNU ~find~).  The results land in the same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its

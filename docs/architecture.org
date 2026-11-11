@@ -59,14 +59,15 @@ the local backend plays one file at a time.
 :END:
 
 A CD ripped as one file carries its track boundaries outside the audio: in a
-~.cue~ file beside it, or in the ~CUESHEET~ block of a FLAC file.  Browsing
-reads that sheet and makes one row per track, with the track number, title,
-artist and length.  Playing a row seeks to its minutes and stops at its end;
-the position shown counts within the track, not within the whole disc.
+~.cue~ file beside it, in a ~CUESHEET~ Vorbis comment, or in the binary
+~CUESHEET~ block of a FLAC file.  Browsing reads that sheet and makes one row
+per track, with the track number, title, artist and length.  Playing a row
+seeks to its minutes and stops at its end; the position shown counts within
+the track, not within the whole disc.
 
 #+begin_src mermaid
 flowchart TD
-  File["disc.flac"] --> Sheet{"sidecar .cue<br/>or FLAC CUESHEET"}
+  File["disc.flac"] --> Sheet{"sidecar .cue<br/>FLAC CUESHEET tag or block"}
   Sheet -->|tracks| Rows["one row per track"]
   Rows --> Pick["choose track 02"]
   Pick --> Local["local: mpv --start=... --end=..."]
@@ -75,9 +76,9 @@ flowchart TD
 #+end_src
 
 The range travels in the URI as a fragment, so a queue entry, a playlist and a
-cache key all keep it without a second data structure.  The local backend
-reads a sidecar first and a FLAC ~CUESHEET~ as the fallback; SSH reads the
-sidecar.
+cache key all keep it without a second data structure.  The local backend reads
+a sidecar first, then a FLAC ~CUESHEET~ Vorbis comment, then the binary block;
+SSH reads the sidecar.
 The cue title and artist are remembered, so the queue and the now-playing card
 name the song instead of the image file.
 
@@ -91,11 +92,13 @@ every track of that disc plays from that copy; ~orpheus-ssh-split-images~ nil
 asks for that copy explicitly.
 
 A search reads a sidecar ~.cue~ beside the image, so a song title finds its
-track.  Locally, the ~CUESHEET~ inside a FLAC is used when the disc is browsed
-or played, but a library-wide search does not open the header of every FLAC to
-look for one: that would make a large library slow.  If a title exists only in
-an embedded sheet and search must find it, add a sidecar ~.cue~ with the same
-base name as the image.
+track.  Locally, a FLAC with no sidecar is served from an embedded-cue cache:
+the first search returns whatever the cache has at once and indexes the FLACs
+in its result in small background batches, then refreshes the tab.  The index
+is keyed by path, size and modification time, so a normal search is a lookup
+and a stat per FLAC rather than opening every file.  Titles come from a
+~CUESHEET~ Vorbis comment; the binary ~CUESHEET~ block supplies track
+boundaries but has no titles.  SSH still reads sidecar ~.cue~ files only.
 
 * Search matches songs, not only files
 :PROPERTIES:
@@ -116,7 +119,7 @@ sequenceDiagram
     participant S as shared filter
     E->>F: list files below the root
     F-->>E: paths, including .cue files
-    E->>C: parse sidecar cue sheets
+    E->>C: parse sidecar and cached embedded cue sheets
     C-->>E: titles, artists, starts and ends
     E->>S: rows and query
     S-->>E: matching rows

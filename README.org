@@ -112,10 +112,12 @@ machine that program lives on is the part worth checking:
 | ~yt-dlp~    | this computer                  | video links played by the local backend                 |
 
 Cue sheets need no program: a ~.cue~ beside an image is read in Emacs, and the
-local backend also falls back to the ~CUESHEET~ block inside a FLAC file.  A
-missing ~ffmpeg~ on the SSH host does
-not mean copying the whole image: a track of a FLAC image is fetched as the
-byte range its seek table names, or estimated from the average bitrate when
+local backend also reads the ~CUESHEET~ Vorbis comment inside a FLAC file (and
+falls back to its binary ~CUESHEET~ block for track boundaries).  Library-wide
+search indexes those embedded sheets in the background, so a title is found
+without opening every FLAC on each search.  A missing ~ffmpeg~ on the SSH host
+does not mean copying the whole image: a track of a FLAC image is fetched as
+the byte range its seek table names, or estimated from the average bitrate when
 there is none, and cut here with this computer's ~ffmpeg~; ~ffprobe~ corrects
 an estimate.  Only an image that cannot be planned that way is copied once,
 and every track of it plays from that copy.  ~orpheus-ssh-split-images~ turns

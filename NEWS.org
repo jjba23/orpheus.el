@@ -9,6 +9,19 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- Library-wide search finds titles inside a FLAC's embedded cue sheet without
+  opening every FLAC on each query.  The first search returns cached rows and
+  indexes the FLACs in its result in the background; the index is keyed by
+  path, size and modification time and lives under ~orpheus-cache-directory~.
+  Titles come from a ~CUESHEET~ Vorbis comment, with the binary ~CUESHEET~
+  block as the titleless fallback.
+- A local FLAC with a ~CUESHEET~ Vorbis comment now shows its track titles when
+  browsed, not just its track numbers.
+
 * 0.20.0 (2026-11-11)
 
 *** Added

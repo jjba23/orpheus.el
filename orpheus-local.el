@@ -774,7 +774,8 @@ Embedded art is extracted when no cover file is found anywhere near it."
 ;;; CD images and their tracks
 
 ;; A disc ripped as one file carries its track boundaries outside the audio:
-;; in a cue sheet beside it, or in the CUESHEET block of a FLAC file.  A track
+;; in a cue sheet beside it, in a CUESHEET tag, or in the CUESHEET block of a
+;; FLAC file.  A track
 ;; of such a disc is the part of the file it occupies, written by
 ;; `orpheus-track-range-uri', so browsing lists tracks and the SSH backend can
 ;; fetch one without the rest.
@@ -867,6 +868,14 @@ the file.  A sheet with no INDEX line names no track and gives back nil."
       (setq value (+ (* value 256) (aref bytes (+ position index)))))
     value))
 
+(defun orpheus-local--bytes-le-uint (bytes position count)
+  "Return COUNT little-endian bytes of BYTES, read from POSITION."
+  (let ((value 0))
+    (dotimes (index count)
+      (setq value (+ value (* (aref bytes (+ position index))
+                              (ash 1 (* 8 index))))))
+    value))
+
 (defun orpheus-local--flac-blocks (file)
   "Return FILE's FLAC metadata blocks as a list of (TYPE START END).
 START and END are byte positions in FILE.  Only the four-byte headers are
@@ -902,6 +911,41 @@ BLOCKS is what `orpheus-local--flac-blocks' returned."
             (logior (ash (logand (aref bytes 13) 15) 32)
                     (orpheus-local--bytes-uint bytes 14 4))))))
 
+(defun orpheus-local--flac-cue-text (file blocks)
+  "Return FILE's cue sheet text from its Vorbis comments, or nil.
+BLOCKS is what `orpheus-local--flac-blocks' returned.  The CUESHEET tag
+holds a text cue sheet with track titles; the binary CUESHEET block has
+track boundaries but no titles."
+  (when-let* ((block (cl-find-if (lambda (block) (eq (nth 0 block) 4))
+                                 blocks))
+              (bytes (orpheus-local--file-bytes file (nth 1 block)
+                                                (nth 2 block))))
+    (when (>= (length bytes) 8)
+      (let* ((vendor-end (+ 4 (orpheus-local--bytes-le-uint bytes 0 4)))
+             (count (and (<= (+ vendor-end 4) (length bytes))
+                         (orpheus-local--bytes-le-uint bytes vendor-end 4)))
+             (position (+ vendor-end 4))
+             (text nil)
+             (index 0))
+        (while (and count (< index count) (not text)
+                    (<= (+ position 4) (length bytes)))
+          (let* ((size (orpheus-local--bytes-le-uint bytes position 4))
+                 (start (+ position 4))
+                 (end (+ start size)))
+            (setq index (1+ index))
+            (when (> end (length bytes))
+              (setq index count))
+            (when (<= end (length bytes))
+              (let* ((comment (decode-coding-string
+                               (substring bytes start end) 'utf-8))
+                     (equals (cl-position ?= comment)))
+                (when (and equals
+                           (string-equal-ignore-case
+                            (substring comment 0 equals) "CUESHEET"))
+                  (setq text (substring comment (1+ equals)))))
+              (setq position end))))
+        text))))
+
 (defun orpheus-local--flac-cuesheet (bytes rate)
   "Return the tracks in BYTES, a FLAC CUESHEET block, in playing order.
 RATE turns the block's sample offsets into seconds.  A track's offset is where
@@ -927,15 +971,19 @@ where the last track ends."
                                :end (if rest (cdr (car rest)) lead)))))))
 
 (defun orpheus-local--flac-tracks (file)
-  "Return the tracks in FILE's FLAC cue sheet, or nil when it has none."
+  "Return the tracks in FILE's FLAC cue sheet, or nil when it has none.
+The text CUESHEET tag is preferred, because it carries titles; the binary
+CUESHEET block is the fallback."
   (when (equal (downcase (or (file-name-extension file) "")) "flac")
     (let ((blocks (orpheus-local--flac-blocks file)))
-      (when-let* ((block (cl-find-if (lambda (block) (eq (nth 0 block) 5))
-                                     blocks))
-                  (rate (car (orpheus-local--flac-stream file blocks)))
-                  (bytes (orpheus-local--file-bytes file (nth 1 block)
-                                                    (nth 2 block))))
-        (orpheus-local--flac-cuesheet bytes rate)))))
+      (or (when-let* ((text (orpheus-local--flac-cue-text file blocks)))
+            (orpheus-local--cue-tracks text))
+          (when-let* ((block (cl-find-if (lambda (block) (eq (nth 0 block) 5))
+                                         blocks))
+                      (rate (car (orpheus-local--flac-stream file blocks)))
+                      (bytes (orpheus-local--file-bytes file (nth 1 block)
+                                                        (nth 2 block))))
+            (orpheus-local--flac-cuesheet bytes rate))))))
 
 (defun orpheus-local--cue-file (file)
   "Return the cue sheet beside FILE, or nil when there is none.
@@ -958,6 +1006,225 @@ The cue sheet beside FILE is read first, then the one inside a FLAC file."
               (insert-file-contents cue)
               (buffer-string)))
     (orpheus-local--flac-tracks file)))
+
+;;; Embedded cue sheet index
+
+;; A library-wide search must not open every FLAC on every query.  The first
+;; search returns sidecar and cached rows at once; the FLACs in that result are
+;; then indexed in small batches.  The index is keyed by path, size and
+;; modification time, so a normal search is a lookup and a stat per FLAC.
+
+(defvar orpheus-local--cue-cache (make-hash-table :test #'equal)
+  "Embedded FLAC cue tracks, keyed by absolute file name.
+Each value is (SIZE MTIME TRACKS).  TRACKS is nil when the file has no
+CUESHEET tag or block, which is also worth remembering.")
+
+(defvar orpheus-local--cue-cache-file nil
+  "Cache file for embedded cue tracks, or nil for the orpheus cache.")
+
+(defvar orpheus-local--cue-cache-loaded nil
+  "Whether `orpheus-local--cue-cache' has been read from disk.")
+
+(defvar orpheus-local--cue-cache-dirty nil
+  "Whether `orpheus-local--cue-cache' has changes to save.")
+
+(defvar orpheus-local--cue-index-queue nil
+  "FLAC files waiting for the embedded cue indexer.")
+
+(defvar orpheus-local--cue-index-waiters nil
+  "Callbacks waiting for the embedded cue indexer to finish.")
+
+(defvar orpheus-local--cue-index-running nil
+  "Whether the embedded cue indexer has work in flight.")
+
+(defconst orpheus-local--cue-index-batch 16
+  "Number of FLACs read before the indexer yields to the event loop.")
+
+(defun orpheus-local--cue-cache-path ()
+  "Return the file holding the embedded cue cache."
+  (or orpheus-local--cue-cache-file
+      (expand-file-name "local-cues.json" orpheus-cache-directory)))
+
+(defun orpheus-local--cue-cache-key (path)
+  "Return PATH's size and modification time, or nil when it is not a file."
+  (let ((attributes (file-attributes path)))
+    (when (and attributes (not (file-directory-p path)))
+      (list (file-attribute-size attributes)
+            (float-time (file-attribute-modification-time attributes))))))
+
+(defun orpheus-local--cue-cache-read (file)
+  "Read the embedded cue cache from FILE, ignoring a broken cache."
+  (when (file-readable-p file)
+    (condition-case err
+        (let* ((text (with-temp-buffer
+                       (insert-file-contents file)
+                       (buffer-string)))
+               (data (json-parse-string text :object-type 'hash-table
+                                        :null-object nil
+                                        :false-object nil))
+               (files (and (hash-table-p data) (gethash "files" data))))
+          (when (hash-table-p files)
+            (maphash
+             (lambda (path value)
+               (when (and (vectorp value) (= (length value) 3))
+                 (puthash path
+                          (list (aref value 0) (aref value 1)
+                                (delq nil
+                                      (mapcar
+                                       (lambda (track)
+                                         (when (and (vectorp track)
+                                                    (= (length track) 6))
+                                           (list :number (aref track 0)
+                                                 :title (aref track 1)
+                                                 :artist (aref track 2)
+                                                 :album (aref track 3)
+                                                 :start (aref track 4)
+                                                 :end (aref track 5))))
+                                       (append (aref value 2) nil))))
+                          orpheus-local--cue-cache)))
+             files)))
+      (error
+       (message "orpheus: ignoring the cue cache: %s"
+                (error-message-string err))))))
+
+(defun orpheus-local--cue-cache-load ()
+  "Read the embedded cue cache once, then keep it in memory."
+  (unless orpheus-local--cue-cache-loaded
+    (setq orpheus-local--cue-cache-loaded t)
+    (clrhash orpheus-local--cue-cache)
+    (orpheus-local--cue-cache-read (orpheus-local--cue-cache-path))))
+
+(defun orpheus-local--cue-cache-json ()
+  "Return the embedded cue cache as JSON text."
+  (json-encode
+   (list
+    (cons "version" 1)
+    (cons "files"
+          (cl-loop for path being the hash-keys of orpheus-local--cue-cache
+                   using (hash-value entry)
+                   collect
+                   (cons path
+                         (vector
+                          (nth 0 entry) (nth 1 entry)
+                          (vconcat
+                           (mapcar
+                            (lambda (track)
+                              (vector (plist-get track :number)
+                                      (plist-get track :title)
+                                      (plist-get track :artist)
+                                      (plist-get track :album)
+                                      (plist-get track :start)
+                                      (plist-get track :end)))
+                            (nth 2 entry))))))))))
+
+(defun orpheus-local--cue-cache-save ()
+  "Write the embedded cue cache, if it has changed."
+  (let ((file (orpheus-local--cue-cache-path)))
+    (condition-case err
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert (orpheus-local--cue-cache-json)))
+          (setq orpheus-local--cue-cache-dirty nil)
+          t)
+      (error
+       (message "orpheus: cannot save the cue cache: %s"
+                (error-message-string err))
+       nil))))
+
+(defun orpheus-local--cue-cache-store (path tracks)
+  "Remember TRACKS for PATH under its current size and modification time."
+  (when-let* ((key (orpheus-local--cue-cache-key path)))
+    (puthash path (list (car key) (cadr key) tracks)
+             orpheus-local--cue-cache)
+    (setq orpheus-local--cue-cache-dirty t)))
+
+(defun orpheus-local--cue-cache-stale-p (path)
+  "Return non-nil when PATH is not indexed at its current size and time."
+  (let ((entry (gethash path orpheus-local--cue-cache))
+        (key (orpheus-local--cue-cache-key path)))
+    (or (null entry) (null key)
+        (not (equal (list (nth 0 entry) (nth 1 entry)) key)))))
+
+(defun orpheus-local--cue-cache-tracks (path)
+  "Return the indexed embedded cue tracks of PATH, or nil."
+  (nth 2 (gethash path orpheus-local--cue-cache)))
+
+(defun orpheus-local--embedded-cue-p (path)
+  "Return non-nil when PATH is a FLAC file."
+  (and (file-regular-p path)
+       (string-equal-ignore-case (or (file-name-extension path) "") "flac")))
+
+(defun orpheus-local--cue-index-candidates (paths)
+  "Return the FLACs in PATHS whose embedded cue sheet needs indexing."
+  (let ((paths (mapcar #'expand-file-name paths))
+        (cues (make-hash-table :test #'equal)))
+    (dolist (path paths)
+      (when (string-match-p "\\.cue\\'" path)
+        (puthash (cons (file-name-directory path)
+                       (downcase (file-name-base path)))
+                 t cues)))
+    (delete-dups
+     (cl-loop for path in paths
+              when (and (orpheus-local--embedded-cue-p path)
+                        (not (gethash
+                              (cons (file-name-directory path)
+                                    (downcase (file-name-base path)))
+                              cues))
+                        (orpheus-local--cue-cache-stale-p path))
+              collect path))))
+
+(defun orpheus-local--cue-index-step ()
+  "Index one batch of FLACs, then either schedule more or finish."
+  (let* ((count (min orpheus-local--cue-index-batch
+                     (length orpheus-local--cue-index-queue)))
+         (batch (cl-subseq orpheus-local--cue-index-queue 0 count)))
+    (setq orpheus-local--cue-index-queue
+          (nthcdr count orpheus-local--cue-index-queue))
+    (dolist (path batch)
+      (condition-case err
+          (progn
+            (orpheus-local--cue-cache-store
+             path (orpheus-local--flac-tracks path))
+            (setq orpheus-local--cue-cache-dirty t))
+        (error
+         (message "orpheus: cannot index %s: %s"
+                  path (error-message-string err)))))
+    (if orpheus-local--cue-index-queue
+        (run-at-time 0 nil #'orpheus-local--cue-index-step)
+      (orpheus-local--cue-index-finish))))
+
+(defun orpheus-local--cue-index-finish ()
+  "Save the cache and tell every waiting search to read its rows again."
+  (when orpheus-local--cue-cache-dirty
+    (orpheus-local--cue-cache-save))
+  (setq orpheus-local--cue-index-running nil)
+  (let ((waiters (nreverse orpheus-local--cue-index-waiters)))
+    (setq orpheus-local--cue-index-waiters nil)
+    (dolist (callback waiters)
+      (condition-case err
+          (funcall callback)
+        (error
+         (message "orpheus: cue search refresh failed: %s"
+                  (error-message-string err)))))))
+
+(defun orpheus-local--embedded-cue-index-start (paths callback)
+  "Index embedded cue sheets in PATHS, then call CALLBACK once.
+The first batch is read now and the rest in short timer slices, so a search
+never waits for the whole library.  Return non-nil when work was started or
+already in flight."
+  (orpheus-local--cue-cache-load)
+  (let ((candidates (orpheus-local--cue-index-candidates paths)))
+    (when (or candidates orpheus-local--cue-index-running)
+      (when candidates
+        (setq orpheus-local--cue-index-queue
+              (delete-dups
+               (append orpheus-local--cue-index-queue candidates))))
+      (push callback orpheus-local--cue-index-waiters)
+      (unless orpheus-local--cue-index-running
+        (setq orpheus-local--cue-index-running t)
+        (orpheus-local--cue-index-step))
+      t)))
 
 (defun orpheus-local--cd-item (path track)
   "Return the row for TRACK, one track of the CD image at PATH."
@@ -1006,28 +1273,43 @@ tracks you can pick instead of a single file."
 (defun orpheus-local--search-items (dir query output)
   "Return tracks below DIR from find OUTPUT that match QUERY.
 A cue sheet's track titles are searched too: a matching song yields that
-track of the image, and a matching image name yields every track of it."
+track of the image, and a matching image name yields every track of it.  A
+FLAC with no sidecar uses the embedded cue index when that index is ready."
   (let* ((root (file-name-as-directory (expand-file-name dir)))
          (paths (split-string (or output "") "\n" t))
-         (cues (cl-loop for path in paths
-                        when (string-match-p "\\.cue\\'" path)
-                        collect (downcase (file-name-base path)))))
+         (cues (make-hash-table :test #'equal)))
+    (dolist (path paths)
+      (when (string-match-p "\\.cue\\'" path)
+        (puthash (cons (file-name-directory path)
+                       (downcase (file-name-base path)))
+                 t cues)))
     (delq nil
           (mapcan
            (lambda (path)
              (when (orpheus-local--media-file-p path)
-               (let ((items
-                      (if (member (downcase (file-name-base path)) cues)
-                          (orpheus-local--file-items path)
-                        (list
-                         (orpheus-item-create
-                          :label (if (string-prefix-p root path)
-                                     (substring path (length root))
-                                   path)
-                          :kind 'track
-                          :detail (upcase (or (file-name-extension path)
-                                              "file"))
-                          :data (list (cons 'uri path)))))))
+               (let* ((key (cons (file-name-directory path)
+                                 (downcase (file-name-base path))))
+                      (sidecar (gethash key cues))
+                      (tracks (and (not sidecar)
+                                   (orpheus-local--cue-cache-tracks path)))
+                      (items
+                       (cond
+                        (sidecar (orpheus-local--file-items path))
+                        (tracks
+                         (mapcar (lambda (track)
+                                   (orpheus-local--cd-item
+                                    (expand-file-name path) track))
+                                 tracks))
+                        (t
+                         (list
+                          (orpheus-item-create
+                           :label (if (string-prefix-p root path)
+                                      (substring path (length root))
+                                    path)
+                           :kind 'track
+                           :detail (upcase (or (file-name-extension path)
+                                               "file"))
+                           :data (list (cons 'uri path))))))))
                  (orpheus-search-filter items query path))))
            paths))))
 
@@ -1042,16 +1324,27 @@ track of the image, and a matching image name yields every track of it."
 (defun orpheus-local--search (query callback)
   "Find local files matching QUERY, then call CALLBACK with the rows.
 GNU find runs as a process, so a large library does not block Emacs.  Windows
-ships a different find, so its tree is walked here instead."
+ships a different find, so its tree is walked here instead.  CALLBACK may run
+once more when the embedded cue index for the result finishes."
+  (orpheus-local--cue-cache-load)
   (let* ((dir (expand-file-name (or orpheus-local-directory "~")))
          (program (and (not (eq system-type 'windows-nt))
-                       (executable-find "find"))))
+                       (executable-find "find")))
+         (emit
+          (lambda (output)
+            (funcall callback
+                     (and output
+                          (orpheus-local--search-items dir query output)))
+            (when output
+              (orpheus-local--embedded-cue-index-start
+               (split-string output "\n" t)
+               (lambda ()
+                 (funcall callback
+                          (orpheus-local--search-items dir query output))))))))
     (if (null program)
         ;; shortcut: the Windows fallback is synchronous, revisit if a large
         ;; library starts to block; find has no portable replacement there.
-        (funcall callback
-                 (orpheus-local--search-items
-                  dir query (orpheus-local--search-files dir)))
+        (funcall emit (orpheus-local--search-files dir))
       (let ((buffer (generate-new-buffer " *orpheus-find*")))
         (condition-case err
             (make-process
@@ -1067,10 +1360,7 @@ ships a different find, so its tree is walked here instead."
                                     (zerop (process-exit-status process))
                                     (with-current-buffer buffer (buffer-string)))))
                    (when (buffer-live-p buffer) (kill-buffer buffer))
-                   (funcall callback
-                            (and output
-                                 (orpheus-local--search-items
-                                  dir query output)))))))
+                   (funcall emit output)))))
           (error
            (when (buffer-live-p buffer) (kill-buffer buffer))
            (message "orpheus: cannot search %s: %s"

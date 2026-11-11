@@ -84,12 +84,17 @@ matching image name returns every track of that disc.  If the title is not
 found:
 
 - Check that the sheet is a sidecar ~.cue~ with the image's base name, such as
-  =disc.cue= next to =disc.flac=.  For a local image, a ~CUESHEET~ block
-  inside a FLAC is read when the image is browsed or played, but a library-wide
-  search does not open every FLAC header; add a sidecar ~.cue~ if search must
-  find it.
-- On SSH, the sheets are fetched with one ~cat~ per sheet.  If the remote
-  shell rejects ~cat~, ~M-x orpheus-ssh-diagnose~ shows it; the disc is still
+  =disc.cue= next to =disc.flac=.  Locally, a FLAC with no sidecar is indexed
+  from its embedded cue sheet: the first search returns cached rows and
+  indexes the FLACs in the result in the background, then refreshes the Search
+  tab.  Titles need a ~CUESHEET~ Vorbis comment; a binary ~CUESHEET~ block has
+  track boundaries but no titles.  A new or changed file is indexed again on
+  the next search.
+- On SSH, only sidecar ~.cue~ sheets are read; an embedded FLAC cue is not
+  searched.  Add a sidecar with the image's base name when a remote title must
+  be searchable.  The sheets are fetched with one ~cat~ per sheet.  If the
+  remote shell rejects ~cat~, ~M-x orpheus-ssh-diagnose~ shows it; the disc is
+  still
   listed, but its track titles cannot be searched until the sheet is readable.
 - A host without ~find~ searches with a recursive ~ls~, and a Windows local
   search walks the tree in Emacs.  Both fallbacks are slower on a very large

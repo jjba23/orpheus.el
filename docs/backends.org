@@ -86,12 +86,15 @@ Three backends are shipped and are the reference implementations:
   Emacs, tags read from mpv's ~metadata~ property, cover art found next to the
   file or in its album folder, or extracted with ffmpeg, and URLs delegated to
   mpv (and so to yt-dlp).  A disc kept as one file is listed as the tracks its
-  cue sheet names — a ~.cue~ beside the image, or the ~CUESHEET~ block inside a
-  FLAC file — and each track plays from its own minutes with mpv's ~start~ and
-  ~end~, so the position shown counts within the track.  The cue title is what
-  the queue and now-playing card show, not the image's file name.  Search
-  reads a sidecar ~.cue~ and matches its track titles, artists and albums, so
-  a song name finds its track.
+  cue sheet names — a ~.cue~ beside the image, a ~CUESHEET~ Vorbis comment, or
+  the binary ~CUESHEET~ block inside a FLAC file — and each track plays from
+  its own minutes with mpv's ~start~ and ~end~, so the position shown counts
+  within the track.  The cue title is what the queue and now-playing card show,
+  not the image's file name.  Search reads a sidecar ~.cue~ and matches its
+  track titles, artists and albums, so a song name finds its track.  A local
+  FLAC with no sidecar uses the background index of its embedded cue sheet;
+  the first search answers from the cache and refreshes when indexing
+  finishes, and the binary ~CUESHEET~ block remains the titleless fallback.
 - =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
   files tab, ~find~ fills Search, and ~cat~ streams the chosen track into the
   cache; a cover near the track's folder is copied to the same cache.  ~sftp~

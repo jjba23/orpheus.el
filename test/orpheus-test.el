@@ -152,6 +152,44 @@ TRACKS is a list of (SAMPLE-OFFSET . NUMBER), lead-out track included."
             (unibyte-string 133) (orpheus-test--u24-bytes (length cuesheet))
             cuesheet)))
 
+(defun orpheus-test--write-flac-image (file)
+  "Write a small FLAC image with three tracks to FILE."
+  (with-temp-file file
+    (set-buffer-multibyte nil)
+    (let ((coding-system-for-write 'binary))
+      (insert (orpheus-test--flac-image
+               44100 1323000
+               '((0 . 1) (441000 . 2) (882000 . 3)
+                 (1323000 . 170)))))))
+
+(defun orpheus-test--le32-bytes (value)
+  "Return VALUE as four little-endian bytes."
+  (apply #'unibyte-string
+         (cl-loop for shift from 0 to 24 by 8
+                  collect (logand (ash value (- shift)) 255))))
+
+(defun orpheus-test--flac-cue-comment (text)
+  "Return a FLAC Vorbis comment block holding TEXT as a CUESHEET tag."
+  (let* ((vendor (encode-coding-string "orpheus-test" 'utf-8))
+         (comment (encode-coding-string (concat "CUESHEET=" text) 'utf-8))
+         (body (concat (orpheus-test--le32-bytes (length vendor)) vendor
+                       (orpheus-test--le32-bytes 1)
+                       (orpheus-test--le32-bytes (length comment)) comment)))
+    (concat (unibyte-string 132) (orpheus-test--u24-bytes (length body)) body)))
+
+(defun orpheus-test--write-flac-cue (file)
+  "Write a FLAC with three titled tracks in a CUESHEET comment to FILE."
+  (with-temp-file file
+    (set-buffer-multibyte nil)
+    (let ((coding-system-for-write 'binary))
+      (insert
+       "fLaC"
+       (orpheus-test--flac-cue-comment
+        (concat "PERFORMER \"Band\"\nTITLE \"Record\"\n"
+                "TRACK 01 AUDIO\n  TITLE \"First\"\n  INDEX 01 00:00:00\n"
+                "TRACK 02 AUDIO\n  TITLE \"Second\"\n  INDEX 01 00:10:00\n"
+                "TRACK 03 AUDIO\n  TITLE \"Third\"\n  INDEX 01 00:20:00\n"))))))
+
 (defun orpheus-test--flac-info-bytes (rate samples seeks)
   "Return a FLAC header of RATE and SAMPLES with SEEKS as (SAMPLE . OFFSET).
 The header ends with an empty last metadata block, as a real file does."
@@ -1003,6 +1041,81 @@ and the password with it."
           (should (= 2 (length (orpheus-local--search-items
                                 dir "disc.flac"
                                 (concat image "\n" cue "\n"))))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-search-indexes-embedded-flac-cues ()
+  "A FLAC CUESHEET comment title is searchable after the background index."
+  (let* ((dir (make-temp-file "orpheus-embedded-search" t))
+         (file (expand-file-name "disc.flac" dir))
+         (cache (expand-file-name "cues.json" dir))
+         (orpheus-local-directory dir)
+         (orpheus-local--cue-cache-file cache)
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded nil)
+         (orpheus-local--cue-index-queue nil)
+         (orpheus-local--cue-index-waiters nil)
+         (orpheus-local--cue-index-running nil)
+         (results nil))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-cue file)
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (_program) nil)))
+            (orpheus-local--search
+             "Second" (lambda (rows) (push rows results))))
+          ;; The first answer is immediate; the index then adds the track.
+          (should (= 2 (length results)))
+          (should-not (nth 1 results))
+          (should (equal (mapcar #'orpheus-item-label (car results))
+                         '("02  Second")))
+          (should (file-readable-p cache))
+          ;; A second search reuses the cache instead of reading the FLAC.
+          (let ((calls 0))
+            (cl-letf (((symbol-function 'orpheus-local--flac-tracks)
+                       (lambda (_file)
+                         (setq calls (1+ calls)) nil))
+                      ((symbol-function 'executable-find)
+                       (lambda (_program) nil)))
+              (setq results nil)
+              (orpheus-local--search
+               "Second" (lambda (rows) (push rows results))))
+            (should (= 0 calls))
+            (should (equal (mapcar #'orpheus-item-label (car results))
+                           '("02  Second"))))
+          ;; The cache survives a new session, so the first answer has it.
+          (let ((orpheus-local--cue-cache (make-hash-table :test #'equal))
+                (orpheus-local--cue-cache-loaded nil)
+                (orpheus-local--cue-index-queue nil)
+                (orpheus-local--cue-index-waiters nil)
+                (orpheus-local--cue-index-running nil)
+                (calls 0))
+            (cl-letf (((symbol-function 'orpheus-local--flac-tracks)
+                       (lambda (_file)
+                         (setq calls (1+ calls)) nil))
+                      ((symbol-function 'executable-find)
+                       (lambda (_program) nil)))
+              (setq results nil)
+              (orpheus-local--search
+               "Second" (lambda (rows) (push rows results))))
+            (should (= 0 calls))
+            (should (= 1 (length results)))
+            (should (equal (mapcar #'orpheus-item-label (car results))
+                           '("02  Second")))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-cue-cache-invalidates-a-changed-flac ()
+  "A FLAC with a new modification time is indexed again."
+  (let* ((dir (make-temp-file "orpheus-cue-cache" t))
+         (file (expand-file-name "disc.flac" dir))
+         (orpheus-local--cue-cache-file (expand-file-name "cues.json" dir))
+         (orpheus-local--cue-cache (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-image file)
+          (orpheus-local--cue-cache-store file nil)
+          (should-not (orpheus-local--cue-cache-stale-p file))
+          (set-file-times file (time-add (current-time) 60))
+          (should (orpheus-local--cue-cache-stale-p file)))
       (delete-directory dir t))))
 
 (ert-deftest orpheus-test/local-search-walks-the-tree-without-find ()
