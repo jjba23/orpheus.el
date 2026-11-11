@@ -1213,6 +1213,106 @@ and the password with it."
             (should (string-match-p "\"version\":1" (buffer-string)))))
       (delete-directory dir t))))
 
+(ert-deftest orpheus-test/local-cue-cache-prunes-changed-and-missing-files ()
+  "Pruning forgets a cached file that is gone or no longer matches."
+  (let* ((dir (make-temp-file "orpheus-cue-prune" t))
+         (file (expand-file-name "disc.flac" dir))
+         (missing (expand-file-name "gone.flac" dir))
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-dirty nil))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-image file)
+          (orpheus-local--cue-cache-store file nil)
+          (puthash missing (list 1 2.0 nil) orpheus-local--cue-cache)
+          (should (= 1 (orpheus-local--cue-cache-prune)))
+          (should (gethash file orpheus-local--cue-cache))
+          (should-not (gethash missing orpheus-local--cue-cache))
+          (should orpheus-local--cue-cache-dirty)
+          (set-file-times file (time-add (current-time) 60))
+          (should (= 1 (orpheus-local--cue-cache-prune)))
+          (should (= 0 (hash-table-count orpheus-local--cue-cache))))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-cue-cache-tracks-drops-a-changed-entry ()
+  "A changed FLAC's old titles are not served before it is indexed again."
+  (let* ((dir (make-temp-file "orpheus-cue-tracks" t))
+         (file (expand-file-name "disc.flac" dir))
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-dirty nil)
+         (tracks (list (list :number 1 :title "Old" :start 0.0 :end 1.0))))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-image file)
+          (orpheus-local--cue-cache-store file tracks)
+          (should (equal tracks (orpheus-local--cue-cache-tracks file)))
+          (set-file-times file (time-add (current-time) 60))
+          (should-not (orpheus-local--cue-cache-tracks file))
+          (should-not (gethash file orpheus-local--cue-cache)))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-cue-cache-load-prunes-missing-files ()
+  "Reading a cache from disk drops entries whose files are gone."
+  (let* ((dir (make-temp-file "orpheus-cue-load" t))
+         (cache (expand-file-name "cues.json" dir))
+         (missing (expand-file-name "gone.flac" dir))
+         (orpheus-local--cue-cache-file cache)
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded nil)
+         (orpheus-local--cue-cache-dirty nil))
+    (unwind-protect
+        (progn
+          (puthash missing (list 1 2.0 nil) orpheus-local--cue-cache)
+          (setq orpheus-local--cue-cache-dirty t)
+          (should (orpheus-local--cue-cache-save))
+          (setq orpheus-local--cue-cache (make-hash-table :test #'equal)
+                orpheus-local--cue-cache-loaded nil)
+          (orpheus-local--cue-cache-load)
+          (should (= 0 (hash-table-count orpheus-local--cue-cache)))
+          (should orpheus-local--cue-cache-dirty))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-update-prunes-the-cue-cache ()
+  "Updating a local library removes entries that no longer match files."
+  (let* ((dir (make-temp-file "orpheus-cue-update" t))
+         (file (expand-file-name "disc.flac" dir))
+         (missing (expand-file-name "gone.flac" dir))
+         (cache (expand-file-name "cues.json" dir))
+         (orpheus-local--cue-cache-file cache)
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded t)
+         (orpheus-local--cue-cache-dirty nil))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-image file)
+          (orpheus-local--cue-cache-store file nil)
+          (puthash missing (list 1 2.0 nil) orpheus-local--cue-cache)
+          (orpheus-backend-command (make-orpheus-local :name 'local)
+                                   'update nil)
+          (should (gethash file orpheus-local--cue-cache))
+          (should-not (gethash missing orpheus-local--cue-cache))
+          (should-not orpheus-local--cue-cache-dirty))
+      (delete-directory dir t))))
+
+(ert-deftest orpheus-test/local-rescan-clears-the-cue-cache ()
+  "Rescanning a local library forgets every embedded cue entry."
+  (let* ((dir (make-temp-file "orpheus-cue-rescan" t))
+         (file (expand-file-name "disc.flac" dir))
+         (cache (expand-file-name "cues.json" dir))
+         (orpheus-local--cue-cache-file cache)
+         (orpheus-local--cue-cache (make-hash-table :test #'equal))
+         (orpheus-local--cue-cache-loaded t)
+         (orpheus-local--cue-cache-dirty nil))
+    (unwind-protect
+        (progn
+          (orpheus-test--write-flac-image file)
+          (orpheus-local--cue-cache-store file nil)
+          (orpheus-backend-command (make-orpheus-local :name 'local)
+                                   'rescan nil)
+          (should (= 0 (hash-table-count orpheus-local--cue-cache)))
+          (should (file-readable-p cache)))
+      (delete-directory dir t))))
+
 (ert-deftest orpheus-test/local-search-walks-the-tree-without-find ()
   "A host without GNU find is searched by walking the tree in Emacs."
   (let* ((dir (make-temp-file "orpheus-search" t))
@@ -4085,6 +4185,48 @@ A track cut on the host or here is cached separately, because it is the track."
             (orpheus-ui-refresh)
             (should (= loads 1))))
       (kill-buffer orpheus-ui-buffer-name))))
+
+(ert-deftest orpheus-test/ui-library-change-invalidates-every-tab ()
+  "A library update forgets cached rows in every tab, not just the visible one."
+  (let ((orpheus-ui-buffer-name
+         (generate-new-buffer-name "*orpheus-cache-invalidation*"))
+        (first (orpheus-ui-tab-create :kind 'queue :title "Queue"
+                                      :loaded t :loaded-at (float-time)))
+        (second (orpheus-ui-tab-create :kind 'directories :title "Directories"
+                                       :loaded t :loaded-at (float-time)))
+        (orpheus-ui--art-cache (make-hash-table :test #'equal))
+        (orpheus-ui--image-cache (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (puthash "song" "cover.jpg" orpheus-ui--art-cache)
+          (puthash "cover" 'image orpheus-ui--image-cache)
+          (with-current-buffer (get-buffer-create orpheus-ui-buffer-name)
+            (orpheus-ui-mode)
+            (setq orpheus-ui--tabs (vector first second)
+                  orpheus-ui--tab 0
+                  orpheus-ui--needs-refresh nil)
+            (orpheus-ui-invalidate-cache)
+            (should-not (orpheus-ui-tab-loaded first))
+            (should-not (orpheus-ui-tab-loaded second))
+            (should (= 0 (orpheus-ui-tab-loaded-at first)))
+            (should (= 0 (orpheus-ui-tab-loaded-at second)))
+            (should (= 0 (hash-table-count orpheus-ui--art-cache)))
+            (should (= 0 (hash-table-count orpheus-ui--image-cache)))
+            (should orpheus-ui--needs-refresh)))
+      (kill-buffer orpheus-ui-buffer-name))))
+
+(ert-deftest orpheus-test/ui-database-commands-invalidate-the-tab-cache ()
+  "Updating or rescanning the library drops rows cached in every tab."
+  (let ((actions nil)
+        (invalidated 0))
+    (cl-letf (((symbol-function 'orpheus--command)
+               (lambda (action &optional _value) (push action actions)))
+              ((symbol-function 'orpheus-ui-invalidate-cache)
+               (lambda () (setq invalidated (1+ invalidated)))))
+      (orpheus-update-database)
+      (orpheus-rescan-database))
+    (should (equal (nreverse actions) '(update rescan)))
+    (should (= invalidated 2))))
 
 (ert-deftest orpheus-test/ui-card-height-is-stable ()
   "The card keeps its line count when the first track starts."

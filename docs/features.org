@@ -66,8 +66,11 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   binary ~CUESHEET~ block still supplies the track boundaries when only it is
   present.  SSH reads sidecar ~.cue~ files only.  Browsing a local FLAC uses
   the same cache, and the header line shows ~indexing cues n/m~ while the
-  background index fills it.  The local backend uses GNU ~find~ when it is
-  there and walks the tree in Emacs otherwise (Windows has no GNU ~find~).
+  background index fills it.  ~M-u~ prunes entries for files that are gone or
+  changed and ~M-U~ clears the local cue cache; either library command also
+  drops cached tab rows and cover lookups, so a changed library does not wait
+  for ~orpheus-ui-cache-seconds~.  The local backend uses GNU ~find~ when it
+  is there and walks the tree in Emacs otherwise (Windows has no GNU ~find~).
   The results land in the same Search tab.
 - *A now-playing card.* :: Above the list, a centred card shows the track, its
   artist and album, and a coloured progress bar.  Its controls are a media row:

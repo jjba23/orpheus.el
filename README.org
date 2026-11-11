@@ -116,7 +116,9 @@ local backend also reads the ~CUESHEET~ Vorbis comment inside a FLAC file (and
 falls back to its binary ~CUESHEET~ block for track boundaries).  Library-wide
 search indexes those embedded sheets in the background, so a title is found
 without opening every FLAC on each search.  The header line shows the run as
-~indexing cues n/m~; browsing a local FLAC reuses the same cache.  A missing
+~indexing cues n/m~; browsing a local FLAC reuses the same cache.  ~M-u~
+prunes cache entries for files that are gone or changed, ~M-U~ clears the
+index, and either command drops cached tab rows and covers.  A missing
 ~ffmpeg~ on the SSH host does not mean copying the whole image: a track of a
 FLAC image is fetched as
 the byte range its seek table names, or estimated from the average bitrate when

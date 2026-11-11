@@ -101,8 +101,11 @@ and a stat per FLAC rather than opening every file.  Titles come from a
 boundaries but has no titles.  Browsing a local FLAC uses the same cache, and
 the header line shows ~indexing cues n/m~ while the background run is in
 flight.  The cache file is versioned and replaced through a temporary file, so
-an interrupted write leaves the previous index intact.  SSH still reads
-sidecar ~.cue~ files only.
+an interrupted write leaves the previous index intact.  Loading the cache
+prunes entries for files that are gone or changed, so a removed title is not
+served; ~M-u~ prunes on demand and ~M-U~ clears the index.  Either library
+command also drops the cached tab rows and covers.  SSH still reads sidecar
+~.cue~ files only.
 
 * Search matches songs, not only files
 :PROPERTIES:

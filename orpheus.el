@@ -469,14 +469,16 @@ open, and says so rather than opening a copy that is not here."
       (message "orpheus: opened %s" (file-name-nondirectory file))))))
 
 (defun orpheus-update-database ()
-  "Ask the backend to look for new music."
+  "Ask the backend to look for new music, then drop cached rows."
   (interactive)
-  (orpheus--command 'update))
+  (orpheus--command 'update)
+  (orpheus-ui-invalidate-cache))
 
 (defun orpheus-rescan-database ()
   "Ask the backend to forget the library and read it again."
   (interactive)
-  (orpheus--command 'rescan))
+  (orpheus--command 'rescan)
+  (orpheus-ui-invalidate-cache))
 
 (defun orpheus-refresh ()
   "Read the status and the current tab again."

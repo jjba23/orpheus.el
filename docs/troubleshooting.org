@@ -91,6 +91,9 @@ found:
   track boundaries but no titles.  The header shows ~indexing cues n/m~ while
   the background index runs, and a new or changed file is indexed again on the
   next search.
+- If a removed or retitled image still appears, ~M-u~ prunes cue entries for
+  files that are gone or changed; ~M-U~ clears the local cue cache and also
+  drops cached tab rows and covers.  ~g~ only rereads the current tab.
 - On SSH, only sidecar ~.cue~ sheets are read; an embedded FLAC cue is not
   searched.  Add a sidecar with the image's base name when a remote title must
   be searchable.  The sheets are fetched with one ~cat~ per sheet.  If the

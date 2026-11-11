@@ -1099,12 +1099,39 @@ CUESHEET tag or block, which is also worth remembering.")
        (message "orpheus: ignoring the cue cache: %s"
                 (error-message-string err))))))
 
+(defun orpheus-local--cue-cache-prune ()
+  "Forget cached entries whose file is gone or no longer matches.
+Return the number of entries removed."
+  (let ((stale nil))
+    (maphash
+     (lambda (path entry)
+       (let ((key (orpheus-local--cue-cache-key path)))
+         (unless (and key
+                      (equal (list (nth 0 entry) (nth 1 entry)) key))
+           (push path stale))))
+     orpheus-local--cue-cache)
+    (dolist (path stale)
+      (remhash path orpheus-local--cue-cache))
+    (when stale
+      (setq orpheus-local--cue-cache-dirty t))
+    (length stale)))
+
+(defun orpheus-local--cue-cache-clear ()
+  "Forget every cached embedded cue entry.
+Return the number of entries removed."
+  (let ((count (hash-table-count orpheus-local--cue-cache)))
+    (when (> count 0)
+      (clrhash orpheus-local--cue-cache)
+      (setq orpheus-local--cue-cache-dirty t))
+    count))
+
 (defun orpheus-local--cue-cache-load ()
   "Read the embedded cue cache once, then keep it in memory."
   (unless orpheus-local--cue-cache-loaded
     (setq orpheus-local--cue-cache-loaded t)
     (clrhash orpheus-local--cue-cache)
-    (orpheus-local--cue-cache-read (orpheus-local--cue-cache-path))))
+    (orpheus-local--cue-cache-read (orpheus-local--cue-cache-path))
+    (orpheus-local--cue-cache-prune)))
 
 (defun orpheus-local--cue-cache-json ()
   "Return the embedded cue cache as JSON text."
@@ -1172,8 +1199,16 @@ CUESHEET tag or block, which is also worth remembering.")
         (not (equal (list (nth 0 entry) (nth 1 entry)) key)))))
 
 (defun orpheus-local--cue-cache-tracks (path)
-  "Return the indexed embedded cue tracks of PATH, or nil."
-  (nth 2 (gethash path orpheus-local--cue-cache)))
+  "Return the indexed embedded cue tracks of PATH, or nil.
+A changed or missing file is forgotten, so its old titles are not served."
+  (let ((entry (gethash path orpheus-local--cue-cache)))
+    (when entry
+      (if (orpheus-local--cue-cache-stale-p path)
+          (progn
+            (remhash path orpheus-local--cue-cache)
+            (setq orpheus-local--cue-cache-dirty t)
+            nil)
+        (nth 2 entry)))))
 
 (defun orpheus-local--cached-flac-tracks (file)
   "Return FILE's embedded cue tracks, reading it only when the cache is stale."
@@ -1573,9 +1608,22 @@ backend, so a parent row here would show the way up twice."
            ('shuffle
             (setf (orpheus-local-instance-queue local)
                   (orpheus-local--shuffle (orpheus-local-instance-queue local))))
+           ('update
+            (orpheus-local--cue-cache-load)
+            (let ((pruned (orpheus-local--cue-cache-prune)))
+              (when orpheus-local--cue-cache-dirty
+                (orpheus-local--cue-cache-save))
+              (message "orpheus: cue cache pruned %d stale entr%s"
+                       pruned (if (= pruned 1) "y" "ies"))))
+           ('rescan
+            (orpheus-local--cue-cache-load)
+            (let ((cleared (orpheus-local--cue-cache-clear)))
+              (orpheus-local--cue-cache-save)
+              (message "orpheus: cleared %d cue cache entr%s"
+                       cleared (if (= cleared 1) "y" "ies"))))
            ((or 'single 'consume)
             (message "orpheus: mpv does not do %s; MPD does" action))
-           ((or 'update 'rescan 'save 'playid 'load)
+           ((or 'save 'playid 'load)
             (message "orpheus: mpv has no library to %s" action))
            (_ (message "orpheus: mpv cannot %s" action)))))
 

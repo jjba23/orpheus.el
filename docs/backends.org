@@ -96,8 +96,10 @@ Three backends are shipped and are the reference implementations:
   FLAC with no sidecar uses the background index of its embedded cue sheet;
   the first search answers from the cache and refreshes when indexing
   finishes, browsing reuses the same cache, and the header line reports
-  ~indexing cues n/m~ while it fills.  The binary ~CUESHEET~ block remains the
-  titleless fallback.
+  ~indexing cues n/m~ while it fills.  ~M-u~ prunes entries for files that are
+  gone or changed, and ~M-U~ clears the cache; either command drops cached tab
+  rows and covers.  The binary ~CUESHEET~ block remains the titleless
+  fallback.
 - =orpheus-ssh.el= — remote files over ssh and mpv here: ~ls -1p~ fills the
   files tab, ~find~ fills Search, and ~cat~ streams the chosen track into the
   cache; a cover near the track's folder is copied to the same cache.  ~sftp~

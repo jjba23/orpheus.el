@@ -9,6 +9,23 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Changed
+
+- ~M-u~ and ~M-U~ now maintain the local embedded cue cache instead of
+  reporting that mpv has no library.  Update prunes entries for files that are
+  gone or changed, and rescan clears the cache.  Either command also drops
+  every tab's cached rows and the cover caches, so a changed library does not
+  linger behind ~orpheus-ui-cache-seconds~.
+
+*** Fixed
+
+- A changed FLAC's cached cue titles are dropped as soon as its size or
+  modification time changes, instead of being served until the background
+  index catches up.  Entries for deleted files are pruned when the cache is
+  loaded.
+
 * 0.21.0 (2026-11-11)
 
 *** Added

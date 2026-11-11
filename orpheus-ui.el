@@ -691,6 +691,19 @@ A redraw every second must not decode the same cover again.")
   "Ask the player to read its current tab again on the next tick."
   (setq orpheus-ui--needs-refresh t))
 
+(defun orpheus-ui-invalidate-cache ()
+  "Forget cached rows and covers, for a library that has changed."
+  (let ((buffer (get-buffer orpheus-ui-buffer-name)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (vectorp orpheus-ui--tabs)
+          (dolist (tab (append orpheus-ui--tabs nil))
+            (setf (orpheus-ui-tab-loaded tab) nil
+                  (orpheus-ui-tab-loaded-at tab) 0)))
+        (setq orpheus-ui--needs-refresh t))))
+  (clrhash orpheus-ui--art-cache)
+  (clrhash orpheus-ui--image-cache))
+
 (defun orpheus-ui--current-tab ()
   "Return the tab this buffer shows."
   (and (vectorp orpheus-ui--tabs)
