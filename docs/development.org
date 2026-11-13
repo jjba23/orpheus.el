@@ -83,6 +83,7 @@ programs in a temporary directory and skips itself when ~mpd~, ~mpv~ or
 | =orpheus-ui.el= | the buffer, header line, tabs, card, art and logo |
 | =orpheus-equalizer.el=, =orpheus-visualizer.el= | sound shaping and the cava spectrum |
 | =orpheus-lyrics.el= | the formats and the buffer that follows the music |
+| =orpheus-mpris.el= | the desktop's media keys and now-playing widget |
 | =test/= | the unit suite; =test/integration/= starts real players |
 | =docs/= | the guide; this page is one of its pages |
 | =scripts/record-demo.sh=, =scripts/record-demo.el= | the reproducible GIF |

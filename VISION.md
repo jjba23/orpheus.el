@@ -8,7 +8,7 @@ carry the project next, and what would have to change.
 
 ## Where orpheus is today
 
-Eleven Emacs Lisp modules, roughly fifteen thousand lines, no dependencies
+Twelve Emacs Lisp modules, roughly fifteen thousand lines, no dependencies
 outside Emacs 29.1, MIT throughout. Three backends ship and are the reference
 implementations: `orpheus-mpd.el`, a complete MPD client on
 `make-network-process` with its own reply parser, `ACK` handling and the
@@ -106,9 +106,6 @@ supported. The equalizer reaches only the backends that play through mpv.
   and a queue that lives server-side. `docs/backends.org` ships no backend for a
   subscription service, because its sign-in belongs to an account; a self-hosted
   server has no such problem.
-- **MPRIS2 over D-Bus.** Emacs ships `dbus`, so `org.mpris.MediaPlayer2` is a
-  few hundred lines and buys media keys and a volume slider from state the mode
-  line already renders.
 - **Scrobbling as a hook, not a feature.** One function on the track-change
   hook, off by default, ListenBrainz first because it takes a token rather than
   a password — and ReplayGain or EBU R128 handed to mpv as a gain filter, so a

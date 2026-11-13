@@ -60,7 +60,7 @@ matches what you are doing; every page links back here and to its neighbours.
 
 | Page | What it covers |
 |------+----------------|
-| [[file:docs/features.org][Feature tour]] | the tabs, transfer queue, now-playing card, playlists, equalizer, lyrics and visualizer |
+| [[file:docs/features.org][Feature tour]] | the tabs, transfer queue, now-playing card, media keys, playlists, equalizer, lyrics and visualizer |
 | [[file:docs/architecture.org][How it works]] | the backend seam, Mermaid diagrams, formats and the platform matrix |
 | [[file:docs/platforms.org][Cross-platform guide]] | what works on Linux, macOS and Windows, what falls back, and what still needs a real machine |
 | [[file:docs/usage.org][Using orpheus]] | a working backend, MPD passwords, the keys and the graphical fallbacks |

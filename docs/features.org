@@ -247,6 +247,26 @@ The image is the package's own ~orpheus-vis--svg~ fed a sample frame and
 exported with Inkscape — no screenshot of a separate application.
 #+end_quote
 
+** Media keys and the desktop
+:PROPERTIES:
+:CUSTOM_ID: media-keys
+:END:
+
+A keyboard's media keys do not reach a program: the desktop takes them and
+hands them to whichever MPRIS2 player is playing.  While orpheus runs it is one
+of those players, on the session bus as
+~org.mpris.MediaPlayer2.orpheus~, so the pause key pauses it and the next key
+skips a track with the focus in any window.  The desktop's now-playing widget
+shows the title, artist, album and cover, offers the same transport controls,
+and can seek and read the position, the repeat state and the volume.
+
+The media keys travel the player's own commands, so they behave exactly like
+~SPC~, ~>~ and ~<~ and work with every backend; with MPD the daemon receives
+them as it receives any other command.  Nothing is gained by orpheus holding
+the name while another player holds it, so a second Emacs session leaves it
+alone, ~M-x orpheus-quit~ releases it, and ~orpheus-mpris-enabled~ turns the
+whole thing off.
+
 ** What is not here yet
 :PROPERTIES:
 :CUSTOM_ID: what-is-not-here-yet

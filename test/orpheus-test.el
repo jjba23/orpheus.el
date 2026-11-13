@@ -5122,4 +5122,94 @@ A track cut on the host or here is cached separately, because it is the track."
     (should (string-match-p "'/Music/a b.lrc'" command))
     (should (string-match-p "'/Music/a b.txt'" command))))
 
+;;; MPRIS
+;;
+;; The desktop's media keys arrive as MPRIS calls on the session bus.  What
+;; travels back is a status string, a track id, a loop status and a metadata
+;; dictionary, so those are checked here without a bus; the bus is only the
+;; transport between them.
+
+(ert-deftest orpheus-test/mpris-playback-status-follows-the-state ()
+  "A stopped player says so, and a backend that has not answered too."
+  (should (equal (orpheus-mpris--playback-status
+                  (orpheus-status-create :state 'play))
+                 "Playing"))
+  (should (equal (orpheus-mpris--playback-status
+                  (orpheus-status-create :state 'pause))
+                 "Paused"))
+  (should (equal (orpheus-mpris--playback-status
+                  (orpheus-status-create :state 'stop))
+                 "Stopped"))
+  (should (equal (orpheus-mpris--playback-status nil) "Stopped")))
+
+(ert-deftest orpheus-test/mpris-loop-status-follows-repeat ()
+  "MPRIS names the three repeat states the player cycles through."
+  (should (equal (orpheus-mpris--loop-status
+                  (orpheus-status-create :single t))
+                 "Track"))
+  (should (equal (orpheus-mpris--loop-status
+                  (orpheus-status-create :repeat t))
+                 "Playlist"))
+  (should (equal (orpheus-mpris--loop-status (orpheus-status-create))
+                 "None"))
+  (should (equal (orpheus-mpris--loop-status nil) "None")))
+
+(ert-deftest orpheus-test/mpris-track-id-is-an-object-path ()
+  "A track id is an object path, so nothing in a tag may break it."
+  (should (equal (orpheus-mpris--trackid (orpheus-status-create :songid 12))
+                 "/org/mpris/MediaPlayer2/orpheus/track/12"))
+  (should (equal (orpheus-mpris--trackid (orpheus-status-create :songid "a/b 3"))
+                 "/org/mpris/MediaPlayer2/orpheus/track/a_b_3"))
+  (should (equal (orpheus-mpris--trackid nil)
+                 "/org/mpris/MediaPlayer2/TrackList/NoTrack")))
+
+(ert-deftest orpheus-test/mpris-metadata-describes-the-track ()
+  "The dictionary carries the tags a desktop's now-playing widget shows."
+  (let* ((status (orpheus-status-create :songid 2 :total 210.5))
+         (track (orpheus-track-create :uri "/Music/a.mp3" :title "Song"
+                                      :artist "Band" :album "Record"
+                                      :trackno "4"))
+         (metadata (orpheus-mpris--metadata track status nil)))
+    (should (equal (cdr (assoc "mpris:trackid" metadata))
+                   '(:object-path "/org/mpris/MediaPlayer2/orpheus/track/2")))
+    (should (equal (cdr (assoc "mpris:length" metadata)) '(:int64 210500000)))
+    (should (equal (cdr (assoc "xesam:title" metadata)) '(:string "Song")))
+    (should (equal (cdr (assoc "xesam:artist" metadata))
+                   '(:array :string "Band")))
+    (should (equal (cdr (assoc "xesam:album" metadata)) '(:string "Record")))
+    (should (equal (cdr (assoc "xesam:trackNumber" metadata)) '(:int32 4)))
+    (should (equal (cdr (assoc "xesam:url" metadata))
+                   '(:string "/Music/a.mp3")))))
+
+(ert-deftest orpheus-test/mpris-metadata-leaves-out-what-it-does-not-know ()
+  "An unknown length or tag is absent, not an empty string."
+  (let* ((status (orpheus-status-create :songid 1))
+         (track (orpheus-track-create :uri "/Music/a.mp3" :title "Song"))
+         (metadata (orpheus-mpris--metadata track status nil)))
+    (should-not (assoc "mpris:length" metadata))
+    (should-not (assoc "xesam:artist" metadata))
+    (should-not (assoc "xesam:album" metadata))
+    (should-not (assoc "mpris:artUrl" metadata))
+    (should (equal (cdr (assoc "xesam:title" metadata)) '(:string "Song")))))
+
+(ert-deftest orpheus-test/mpris-metadata-points-at-the-cover ()
+  "A cover on disk travels as a file URL."
+  (let ((metadata (orpheus-mpris--metadata
+                   (orpheus-track-create :uri "/Music/a.mp3" :title "Song")
+                   (orpheus-status-create :songid 1) "/tmp/cover.jpg")))
+    (should (equal (cdr (assoc "mpris:artUrl" metadata))
+                   '(:string "file:///tmp/cover.jpg")))))
+
+(ert-deftest orpheus-test/mpris-metadata-is-a-dictionary-of-variants ()
+  "What D-Bus carries as a{sv}, one entry per tag."
+  (should (equal (orpheus-mpris--dict '(("xesam:title" . (:string "Song"))))
+                 '(:array (:dict-entry :string "xesam:title"
+                            :variant (:string "Song"))))))
+
+(ert-deftest orpheus-test/mpris-can-be-turned-off ()
+  "The switch stops orpheus claiming the name, without touching the bus."
+  (let ((orpheus-mpris-enabled nil))
+    (should-not (orpheus-mpris-start))
+    (should-not orpheus-mpris--active)))
+
 ;;; orpheus-test.el ends here

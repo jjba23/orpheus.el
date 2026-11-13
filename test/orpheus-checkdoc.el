@@ -22,8 +22,8 @@
 
 (defconst orpheus-checkdoc--files
   '("orpheus.el" "orpheus-backend.el" "orpheus-mpd.el" "orpheus-local.el"
-    "orpheus-ssh.el" "orpheus-equalizer.el" "orpheus-lyrics.el"
-    "orpheus-ui.el" "orpheus-vis.el")
+    "orpheus-ssh.el" "orpheus-mpris.el" "orpheus-equalizer.el"
+    "orpheus-lyrics.el" "orpheus-ui.el" "orpheus-vis.el")
   "Source files that must pass checkdoc.")
 
 (let ((count 0)

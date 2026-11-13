@@ -9,9 +9,22 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- The keyboard's media keys reach orpheus.  While the player runs it offers
+  ~org.mpris.MediaPlayer2.orpheus~ on the session bus, the MPRIS2 interface
+  every desktop sends those keys to, so pause, play, next, previous, stop and
+  seek work from the keyboard (and from ~playerctl~) while another window has
+  the focus.  The desktop's now-playing widget shows the title, artist, album
+  and cover of the current track.  Every call runs the player's own command,
+  so it works with all three backends.  ~orpheus-mpris-enabled~ turns it off,
+  and ~M-x orpheus-quit~ releases the name.
+
 * 1.0.3 (2026-11-12)
 
-- Builds against the channels this project builds against: the jointhefreeworld collection at v1.0.4, and Guix master `3b4e873`.
+- Builds against the channels this project builds against: the jointhefreeworld collection at v1.0.4, and Guix master ~3b4e873~.
 
 * 1.0.2 (2026-11-11)
 

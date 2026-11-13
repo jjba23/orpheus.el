@@ -1994,6 +1994,12 @@ playlist opens in its editor."
          "  and single.  i prints the track in the echo area and o opens it in\n"
          "  another program.  The card's media row does the same, and mouse-1\n"
          "  selects a row, mouse-2 plays it and mouse-3 opens its menu.\n\n")
+        (insert
+         "  The keyboard's media keys come the long way round: the desktop\n"
+         "  takes them and hands them to the player over MPRIS2, so pause,\n"
+         "  next and previous work while another window has the focus, and\n"
+         "  the desktop's now-playing widget shows the track.\n"
+         "  orpheus-mpris-enabled turns that off.\n\n")
         (insert (propertize "Themes and layout\n" 'face 'orpheus-title-face))
         (insert
          "  M-t cycles the colour presets, M-l the layouts and M-c the\n"

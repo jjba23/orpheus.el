@@ -56,6 +56,7 @@
 (require 'orpheus-local)
 (require 'orpheus-ssh)
 (require 'orpheus-ui)
+(require 'orpheus-mpris)
 (require 'orpheus-vis)
 
 (declare-function notifications-notify "notifications" (&rest args))
@@ -133,6 +134,7 @@ Register another with `orpheus-register-backend'."
 (defun orpheus-start ()
   "Start reading the player's status on a timer."
   (interactive)
+  (orpheus-mpris-start)
   (unless (timerp orpheus--timer)
     (setq orpheus--timer
       (run-with-timer 0 orpheus-refresh-interval #'orpheus--tick))))
@@ -145,6 +147,7 @@ Register another with `orpheus-register-backend'."
   (setq orpheus--timer nil
         orpheus--status-pending nil
         orpheus--track-pending nil)
+  (orpheus-mpris-stop)
   (let ((backend orpheus-backend-current))
     (when backend
       (ignore-errors (orpheus-backend-disconnect backend)))))
@@ -237,6 +240,7 @@ until the editor felt them."
              orpheus-status-current status)
            (orpheus--maybe-song-changed status)
            (force-mode-line-update t)
+           (orpheus-mpris--sync)
            (orpheus-ui-tick)))))))
 
 (defun orpheus--maybe-song-changed (status)

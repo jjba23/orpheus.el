@@ -57,6 +57,7 @@ pick, the [[file:usage.org#choose-a-backend][backend chooser]] is shorter.
 | ~orpheus-notifications~    | ~t~     | notify on track change                         |
 | ~orpheus-mode-line-width~  | ~40~    | columns the mode-line track is given           |
 | ~orpheus-mode-line-controls~ | ~t~   | show previous, play, next and stop buttons in the mode line |
+| ~orpheus-mpris-enabled~    | ~t~     | answer the desktop's media keys                |
 | ~orpheus-cache-directory~  | ~$XDG_CACHE_HOME/orpheus/~ | downloaded tracks, covers and generated files |
 | ~orpheus-cache-max-bytes~  | ~10737418240~ | largest size of the cache, 10 GiB; nil keeps everything |
 
@@ -70,6 +71,13 @@ The cache lives in =~/.cache/orpheus= by default and survives a reboot.
 Tracks and covers are deleted, least recently used first, when the directory
 grows past ~orpheus-cache-max-bytes~; the track being played is never one of
 them.  Deleting the directory is always safe: it is read again.
+
+~orpheus-mpris-enabled~ is on by default.  Where there is a session bus,
+orpheus then offers the MPRIS2 interface the desktop sends its media keys to,
+so the keyboard's pause, next and previous keys work while another window has
+the focus, and the desktop's now-playing widget shows the track, its artist and
+its cover.  Set it to ~nil~ to claim no name and leave the player exactly as it
+was; it also stays out of the way when another player already holds the name.
 
 ~orpheus-mode-line-controls~ is on by default.  The mode line then shows
 previous, play or pause, next and stop buttons beside the track, each one
