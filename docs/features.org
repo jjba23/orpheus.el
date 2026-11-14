@@ -25,8 +25,10 @@ If a word is new, [[file:glossary.org][Words and ideas]] explains it without jar
   Playlists and Search, numbered 1 to 7, each keeping its own place in the
   hierarchy while you move between them.  Every backend gets Queue,
   Directories, Playlists and Search, and one with file transfers adds
-  Downloads after Queue.  A tab is simply one view of your music; switching
-  tabs never changes what is playing.
+  Downloads after Queue.  Spotify gets Queue, Artists, Albums, Playlists and
+  Search, because its library is an account rather than a folder tree, and the
+  top of its Playlists tab is the saved songs.  A tab is simply one view of
+  your music; switching tabs never changes what is playing.
 - *A visible transfer queue.* :: SSH downloads run in the background, up to
   ~orpheus-ssh-concurrency~ at once.  A play request jumps ahead of prefetches,
   the next ~orpheus-ssh-prefetch~ queue entries arrive before you need them,
@@ -285,6 +287,6 @@ itself, because the daemon owns the whole queue.
   tabs.
 - [[file:glossary.org][Words and ideas]] explains the vocabulary in plain language.
 - [[file:configuration.org][Configuration]] lists every option with its default.
-- [[file:backends.org][Backends]] explains MPD, local files, SSH, and how to add a fourth.
+- [[file:backends.org][Backends]] explains MPD, local files, SSH, Spotify, and how to add another.
 - [[file:architecture.org][How it works]] has the diagrams, the format table and the platform matrix.
 - [[file:troubleshooting.org][Troubleshooting]] is the symptom-by-symptom page.

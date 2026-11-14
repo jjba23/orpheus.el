@@ -20,12 +20,14 @@ Emacs.
 | MPD     | an existing library and daemon, especially on another machine | ~mpd~ and a running daemon |
 | local   | files and URLs on this machine | ~mpv~; ~ffmpeg~ for extracted covers, ~yt-dlp~ for video links |
 | SSH     | a library on a remote machine with no daemon there | ~ssh~; ~sftp~ only when the remote shell cannot run ~cat~; ~ffmpeg~ there to cut a disc track on the host, and here when it cannot |
+| Spotify | a Spotify account, on any device you already play it with | a Spotify app and one signed-in device; Premium for playback control |
 
 The trade-off is where the queue lives.  MPD owns its queue in the daemon;
 local and SSH keep the queue in Emacs, and SSH copies each track before mpv
 plays it.  MPD can be gapless because it owns the whole queue; the local
-backend plays one file at a time.  The visualizer is independent of all three:
-it listens to the system output through cava.
+backend plays one file at a time.  Spotify owns both the queue and the audio,
+and orpheus moves them through the Web API.  The visualizer is independent of
+all four: it listens to the system output through cava.
 
 * Backends
 :PROPERTIES:
@@ -76,8 +78,7 @@ per kind a backend claims.  A row is an ~orpheus-item~ with a label, a detail co
 kind, and an alist whose ~uri~ makes it playable and whose ~browse~ is a
 ~(KIND . ARG)~ to descend into.
 
-Three backends are shipped and are the reference implementations:
-
+Four backends are shipped and are the reference implementations:
 - =orpheus-mpd.el= — a complete MPD client on ~make-network-process~: TCP or a
   unix socket, password, serialized replies, ~ACK~ errors, and the ~albumart~
   and ~readpicture~ binary payloads for cover art.  A daemon that owes a reply
@@ -140,6 +141,18 @@ Three backends are shipped and are the reference implementations:
   is killed and reported; a transfer, which may legitimately take minutes, is
   never timed out.
 
+- =orpheus-spotify.el= — the Spotify Web API over ~url-retrieve~, with the
+  authorization code flow and PKCE for the sign-in, a loopback listener for
+  the one request that carries the code, and a token file that a later session
+  reads and renews.  The daemon-shaped backend that lives on another company's
+  server: Spotify owns the library, the queue and the audio, and orpheus
+  browses it and moves it.  One reply holds both the status and the track, so
+  a tick costs one request; the answer is reused for
+  ~orpheus-spotify-poll-interval~ seconds, with the seconds that passed added
+  to the position; a ~429~ with ~Retry-After~ silences the client until it
+  expires, and a token Spotify rejects is renewed once, for every request that
+  was waiting on the same one.
+
 ** Adding one
 :PROPERTIES:
 :CUSTOM_ID: adding-one
@@ -176,8 +189,58 @@ Two things make a backend feel finished: it calls its callbacks from process
 filters rather than from a blocking read, and it degrades by claiming fewer
 capabilities instead of lying about them.  A skeleton like the one above needs
 a ~my-player--call~ of your own: an asynchronous wrapper around the command
-line client you drive.  No backend for a subscription service ships here,
-because its sign-in belongs to your account, not to this repository.
+line client you drive.  A backend for a service that signs you in keeps the
+token that service gives it and nothing else: =orpheus-spotify.el= is the
+example, and the file it writes belongs to your account, never to this
+repository.
+
+** Spotify
+:PROPERTIES:
+:CUSTOM_ID: spotify
+:END:
+
+Spotify plays the music, not orpheus.  The Web API is a remote control: it can
+start, pause, skip, seek, set the volume, fill the queue and list what the
+account holds, and it never sends a byte of audio.  So the backend has the same
+shape as MPD's — a player elsewhere owns the output and the queue — with two
+consequences worth knowing before you set it up:
+
+- Playback control needs a *Premium* account.  Browsing works without it.
+- Something has to be an *active device*: the desktop app, the phone app, or a
+  small daemon such as ~spotifyd~.  A command sent while no device is running
+  fails, and orpheus shows Spotify's own sentence about it.
+
+*Signing in* takes an app of your own, which is free:
+
+1. Create an app at https://developer.spotify.com/dashboard.
+2. Add ~orpheus-spotify-redirect-uri~ to its redirect URIs exactly as written
+   — ~http://127.0.0.1:8899/orpheus/callback~ by default.  Any port works; the
+   address must be a loopback one, because the code it carries belongs to you.
+3. Put the app's client id in ~orpheus-spotify-client-id~.  There is no secret:
+   orpheus uses the authorization code flow with PKCE.
+4. Run ~M-x orpheus-spotify-login~, allow the app in the browser page it opens,
+   and the session is stored in ~orpheus-spotify-token-file~.
+
+A later Emacs reads that file and renews the access token by itself.  ~M-x
+orpheus-spotify-logout~ deletes it.  If the file is lost you sign in again;
+nothing else breaks.
+
+The tabs Spotify fills are *Queue*, *Artists*, *Albums*, *Playlists* and
+*Search*.  The playlists tab starts with *Liked Songs*, which is where saved
+tracks live.  The artists tab lists the artists you follow, each one opening
+its albums; the albums tab lists the albums you saved.  Cross a row with ~RET~
+to play it, and ~a~ to add it to Spotify's queue.
+
+What Spotify has no command for, orpheus says so instead of pretending:
+stopping (pausing is the closest thing, and it keeps the queue), editing the
+queue (it can be added to, not reordered), consume mode, the equalizer, which
+shapes mpv's audio, and lyrics, which the Web API does not serve.  Playing a
+row of the Queue tab sends the queue from that row on, because the API has no
+step that jumps inside it.
+
+~M-x orpheus-spotify-devices~ lists the devices Spotify can see and moves
+playback to the one you pick.  It asks after the reply arrives, so the editor
+is never blocked by the question.
 
 ** YouTube
 :PROPERTIES:

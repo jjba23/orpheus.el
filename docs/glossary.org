@@ -28,10 +28,23 @@ Everything else is a detail around those three.
 :CUSTOM_ID: backend
 :END:
 
-The part of orpheus that knows how to reach your music.  Three ship here:
+The part of orpheus that knows how to reach your music.  Four ship here:
 ~mpd~ talks to a Music Player Daemon, ~local~ plays files and links on this
-machine, and ~ssh~ copies files from another machine before playing them
-here.  The player looks the same with all three.  Press ~B~ to switch.
+machine, ~ssh~ copies files from another machine before playing them here, and
+~spotify~ moves a Spotify account's queue through its Web API while Spotify
+plays the music on a device of yours.  The player looks the same with all
+four.  Press ~B~ to switch.
+
+** Device
+:PROPERTIES:
+:CUSTOM_ID: device
+:END:
+
+Something that plays Spotify's audio: the desktop app, a phone, or a small
+daemon such as ~spotifyd~.  The Web API moves a device's queue and never
+carries the sound itself, so orpheus can browse Spotify with no device running
+and can only start, pause or skip while one is.  ~M-x orpheus-spotify-devices~
+picks which one.
 
 ** Client and daemon
 :PROPERTIES:
@@ -188,6 +201,18 @@ Your Emacs startup file, usually =~/.emacs.d/init.el= or
 =~/.config/emacs/init.el=.  The examples in this guide are meant to go there,
 or to be evaluated once with ~M-x eval-buffer~ while you experiment.
 
+** Token
+:PROPERTIES:
+:CUSTOM_ID: token
+:END:
+
+The password-shaped thing Spotify gives orpheus after you allow the app, and
+the only credential the backend keeps.  It lives in
+~orpheus-spotify-token-file~, readable by your user alone, and it is renewed
+without asking until Spotify stops accepting it; then ~M-x
+orpheus-spotify-login~ is one run of the command.  ~M-x
+orpheus-spotify-logout~ deletes the file.
+
 ** Option
 :PROPERTIES:
 :CUSTOM_ID: option
@@ -225,5 +250,5 @@ If these are new, the [[file:usage.org#first-five-minutes][first five minutes]] 
 
 - [[file:usage.org][Using orpheus]] for the first track and the keys.
 - [[file:configuration.org][Configuration]] for every option.
-- [[file:backends.org][Backends]] for MPD, local files and SSH.
+- [[file:backends.org][Backends]] for MPD, local files, SSH and Spotify.
 - [[file:troubleshooting.org][Troubleshooting]] when something is quiet or stuck.

@@ -50,7 +50,7 @@ pick, the [[file:usage.org#choose-a-backend][backend chooser]] is shorter.
 
 | Option                     | Default | Meaning                                        |
 |----------------------------+---------+------------------------------------------------|
-| ~orpheus-backend~          | ~mpd~   | ~mpd~, ~local~, or any registered backend      |
+| ~orpheus-backend~          | ~mpd~   | ~mpd~, ~local~, ~ssh~, ~spotify~, or any registered backend |
 | ~orpheus-refresh-interval~ | ~1.0~   | seconds between two status reads               |
 | ~orpheus-volume-step~      | ~2~     | volume change of the volume commands           |
 | ~orpheus-seek-step~        | ~5~     | seconds of the seek commands                   |
@@ -171,6 +171,37 @@ directory, and ~orpheus-ssh-control-persist~ to change how long the shared
 connection outlives its last command.  Native Windows OpenSSH has no
 ~ControlMaster~, so multiplexing is off there.  If ssh still rejects the
 socket, the command is retried once without multiplexing.
+
+** The Spotify backend
+:PROPERTIES:
+:CUSTOM_ID: the-spotify-backend
+:END:
+
+| Option                          | Default                          | Meaning |
+|---------------------------------+----------------------------------+---------|
+| ~orpheus-spotify-client-id~     | ~nil~                            | the id of your Spotify app; the backend stays inert until it is set |
+| ~orpheus-spotify-redirect-uri~  | ~"http://127.0.0.1:8899/orpheus/callback"~ | where Spotify sends the browser, and where the sign-in listens |
+| ~orpheus-spotify-token-file~    | ~$XDG_CONFIG_HOME/orpheus/spotify-token.json~ | the access and refresh tokens, readable by you alone |
+| ~orpheus-spotify-api-url~       | ~"https://api.spotify.com/v1"~   | the Web API, or a proxy in front of it |
+| ~orpheus-spotify-auth-url~      | ~"https://accounts.spotify.com"~ | the accounts service that signs you in |
+| ~orpheus-spotify-poll-interval~ | ~3.0~                            | seconds between two reads of what is playing |
+
+Nothing is needed here until you want Spotify: create an app at
+https://developer.spotify.com/dashboard, add ~orpheus-spotify-redirect-uri~ to
+its redirect URIs exactly as written, set ~orpheus-spotify-client-id~ to its
+client id and run ~M-x orpheus-spotify-login~ once.  The app needs no secret;
+orpheus signs in with PKCE, so the token file is the only thing that has to
+stay private.  ~M-x orpheus-spotify-logout~ deletes it.
+
+The token file holds a live session and is written with mode ~0600~.  It sits
+under your configuration directory rather than ~orpheus-cache-directory~,
+because the cache is pruned and losing a token only costs one sign-in.
+
+~orpheus-spotify-poll-interval~ is not a refresh rate to lower: Spotify counts
+requests over a rolling window, and the backend answers from the last reply
+between reads, adding the seconds that passed to the position it shows.  When
+Spotify answers ~429~ with a ~Retry-After~, orpheus stops asking until that
+moment instead of earning a longer ban.
 
 ** Playlists
 :PROPERTIES:

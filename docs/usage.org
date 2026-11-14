@@ -31,11 +31,14 @@ restarting Emacs.
 | in a Music Player Daemon library | ~mpd~ | a running MPD and its socket or address |
 | a folder or links on this computer | ~local~ | ~mpv~ on ~exec-path~ |
 | on another computer, with no daemon there | ~ssh~ | ~ssh~ here, and ~sftp~ when the shell cannot run ~cat~; ~ffmpeg~ there to cut a disc track, and here when it cannot |
+| in a Spotify account | ~spotify~ | a free Spotify app of your own, and a device already signed in; Premium to control playback |
 
 If you already run MPD, ~mpd~ is usually the least surprising choice: the
 daemon keeps the library and the queue, and orpheus is the window onto it.
 If you have a folder of files and no daemon, start with ~local~.  If the music
-is on a server, ~ssh~ copies one track at a time and plays it here.
+is on a server, ~ssh~ copies one track at a time and plays it here.  If it is
+in Spotify, ~spotify~ browses the account and moves the queue of the device
+you already play on; Spotify keeps the audio, so nothing is copied.
 
 Every section below is self-contained; read the one that matches your choice
 and skip the others for now.
@@ -197,6 +200,26 @@ cannot use it, the command is retried without multiplexing rather than failing
 the tab.  To change backend without restarting Emacs, press ~B~ in the player
 or run ~M-x orpheus-switch-backend~; the current backend is disconnected and
 the tabs follow the new one.
+
+A Spotify account is driven through the Web API while Spotify plays:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'spotify)
+(setq orpheus-spotify-client-id "the id of your Spotify app")
+;; once: M-x orpheus-spotify-login
+(orpheus)
+#+end_src
+
+The app, the redirect URI and the sign-in are one page in
+[[file:backends.org#spotify][Backends]].  Once it is done the token is read from
+~orpheus-spotify-token-file~ and renewed by itself, so the player starts like
+any other.  The Queue, Artists, Albums, Playlists and Search tabs browse the
+account, ~RET~ plays a row and ~a~ adds it to Spotify's queue.  The audio never
+leaves Spotify: the phone, the desktop app or a daemon such as ~spotifyd~
+plays it, and ~M-x orpheus-spotify-devices~ chooses which one.  That makes two
+limits worth remembering: playback control needs Premium, and with no device
+running a command fails with Spotify's own sentence, which the echo area shows
+as it came.
 
 * Your first five minutes
 :PROPERTIES:

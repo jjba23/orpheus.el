@@ -74,6 +74,27 @@ the tracks play from that copy; ~orpheus-ssh-split-images~ nil asks for that
 copy explicitly.  Either way the track is listed, because the ~.cue~ beside
 the image is what names it.
 
+** Spotify
+
+The backend says it is not connected, or a key answers with a sentence:
+
+- “set ~orpheus-spotify-client-id~ to the id of your Spotify app” means the
+  option is still nil; the app, the redirect URI and the sign-in are in
+  [[file:backends.org#spotify][Backends]].
+- “Run M-x orpheus-spotify-login” means no token was found in
+  ~orpheus-spotify-token-file~.  A token that Spotify no longer accepts says
+  the same thing: sign in again.
+- “Player command failed: No active device found” is Spotify's own sentence,
+  and it is accurate: nothing is running that can play.  Start the desktop app
+  or the phone, then ~M-x orpheus-spotify-devices~ to pick it.
+- “Spotify asked orpheus to wait Ns” is a rate limit.  The client stops
+  sending requests until the moment Spotify named; raising
+  ~orpheus-spotify-poll-interval~ leaves more room in the window.
+- Browsing works and pressing play does not: playback control needs Premium.
+- The browser page after allowing the app cannot reach ~127.0.0.1~ when the
+  browser runs on another machine.  Register a redirect URI whose port that
+  machine can reach, or sign in from a browser on this one.
+
 Native Windows OpenSSH has no multiplexing, so orpheus leaves it off there.
 Elsewhere, if ssh reports ~ControlPath too long~ or ~too long for Unix domain
 socket~, orpheus retries the command without multiplexing, so the listing

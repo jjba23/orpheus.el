@@ -87,7 +87,7 @@ flowchart TB
 :END:
 
 The backend follows where the music lives, not the operating system.  All
-three backends are available from every client platform; the difference is
+four backends are available from every client platform; the difference is
 what the other end must provide.
 
 #+begin_src mermaid
@@ -102,7 +102,9 @@ flowchart TD
   SSHB --> Remote["remote needs a POSIX shell,<br/>find, cat and dd"]
 #+end_src
 
-MPD owns its queue and its audio output.  The local and SSH backends keep the
+MPD owns its queue and its audio output, and so does Spotify: the Web API moves
+the queue and never carries audio, which is why the backend needs the app or
+the daemon to be running somewhere.  The local and SSH backends keep the
 queue in Emacs, and SSH copies a track here before mpv plays it.  That is why
 a slow link affects SSH browsing and playback while the local backend keeps
 working at disk speed.

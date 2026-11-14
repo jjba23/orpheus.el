@@ -367,11 +367,13 @@ Return PREDICATE's last value, so a test can assert on it."
 ;;; The backend registry
 
 (ert-deftest orpheus-test/backends-are-registered ()
-  "MPD and local files are known backends, and both can be built."
+  "MPD, local files and Spotify are known backends, and all three can be built."
   (should (orpheus-backend-exists-p 'mpd))
   (should (orpheus-backend-exists-p 'local))
+  (should (orpheus-backend-exists-p 'spotify))
   (should (orpheus-backend-p (orpheus-make-backend 'mpd)))
   (should (orpheus-backend-p (orpheus-make-backend 'local)))
+  (should (orpheus-backend-p (orpheus-make-backend 'spotify)))
   (should-error (orpheus-make-backend 'nonsense)))
 
 (ert-deftest orpheus-test/backend-capabilities ()
@@ -5211,5 +5213,1284 @@ A track cut on the host or here is cached separately, because it is the track."
   (let ((orpheus-mpris-enabled nil))
     (should-not (orpheus-mpris-start))
     (should-not orpheus-mpris--active)))
+
+;;; The fake Spotify server
+;;
+;; Spotify's Web API is HTTP with JSON: a bearer token in the request, a JSON
+;; object in the reply, and errors that carry their own JSON too.  The server
+;; below answers `url-retrieve' on a loopback port, records each request, and
+;; keeps several requests on one connection, which is what the client reuses.
+
+(defvar orpheus-test--spotify-handler nil
+  "Function called with each request the fake Spotify receives.")
+
+(defvar orpheus-test--spotify-requests nil
+  "Requests the fake Spotify received, the most recent first.")
+
+(defvar orpheus-test--spotify-server nil
+  "The fake Spotify server process.")
+
+(defvar orpheus-test--spotify-port nil
+  "Port the fake Spotify listens on.")
+
+(defvar orpheus-test--spotify-token-file nil
+  "Token file the backend under test writes.")
+
+(defvar orpheus-test--spotify-pending nil
+  "Text received on each connection that is not a whole request yet.")
+
+(defun orpheus-test--spotify-parse (head body)
+  "Return one request as a plist of its method, path, query, headers and body."
+  (let* ((lines (split-string head "\r\n"))
+         (request (split-string (car lines) " "))
+         (target (nth 1 request)))
+    (list :method (car request)
+          :path (car (split-string target "?"))
+          :query (cadr (split-string target "?"))
+          :headers (mapcar
+                    (lambda (line)
+                      (let ((pair (split-string line ":")))
+                        (cons (downcase (car pair))
+                              (string-trim (mapconcat #'identity (cdr pair) ":")))))
+                    (cdr lines))
+          :body body)))
+
+(defun orpheus-test--spotify-header (request name)
+  "Return REQUEST's header NAME, or nil."
+  (cdr (assoc name (plist-get request :headers))))
+
+(defun orpheus-test--spotify-answer (response)
+  "Return RESPONSE, a JSON string or a plist, as the reply to send."
+  (let* ((response (if (stringp response) (list :body response) response))
+         (body (or (plist-get response :body) ""))
+         (headers (plist-get response :headers)))
+    (concat (format "HTTP/1.1 %d %s\r\nContent-Length: %d\r\n"
+                    (or (plist-get response :status) 200) "X" (length body))
+            (if (assoc "Content-Type" headers)
+                ""
+              "Content-Type: application/json\r\n")
+            (mapconcat (lambda (header)
+                         (format "%s: %s\r\n" (car header) (cdr header)))
+                       headers "")
+            "\r\n"
+            body)))
+
+(defun orpheus-test--spotify-serve (client chunk)
+  "Answer every whole request in CHUNK, and keep the rest for the next one."
+  (let ((text (concat (gethash client orpheus-test--spotify-pending "") chunk)))
+    (puthash client text orpheus-test--spotify-pending)
+    (let ((more t))
+      (while more
+        (setq more nil)
+        (let ((text (gethash client orpheus-test--spotify-pending "")))
+          (when (string-match "\r\n\r\n" text)
+            (let* ((head (substring text 0 (match-beginning 0)))
+                   (rest (substring text (match-end 0)))
+                   (length (if (string-match "Content-Length: *\\([0-9]+\\)" head)
+                               (string-to-number (match-string 1 head))
+                             0)))
+              (when (>= (length rest) length)
+                (let ((request (orpheus-test--spotify-parse
+                                head (substring rest 0 length))))
+                  (push request orpheus-test--spotify-requests)
+                  (puthash client (substring rest length)
+                           orpheus-test--spotify-pending)
+                  (process-send-string
+                   client
+                   (orpheus-test--spotify-answer
+                    (funcall orpheus-test--spotify-handler request)))
+                  (setq more t))))))))))
+
+(defmacro orpheus-test--with-fake-spotify (handler &rest body)
+  "Run BODY with a fake Spotify Web API on `orpheus-test--spotify-port'.
+HANDLER is a function of one request plist returning the reply: a string for
+a 200 with that JSON body, or a plist of :status, :headers and :body."
+  (declare (indent 1))
+  `(let ((orpheus-test--spotify-handler ,handler)
+         (orpheus-test--spotify-requests nil)
+         (orpheus-test--spotify-pending (make-hash-table :test #'eq))
+         (orpheus-test--spotify-token-file nil)
+         (url-proxy-services nil))
+     (setq orpheus-test--spotify-server
+           (make-network-process :name "orpheus-spotify-fake"
+                                 :server t :host "127.0.0.1" :service t
+                                 :family 'ipv4 :coding 'binary :noquery t
+                                 :filter #'orpheus-test--spotify-serve))
+     (setq orpheus-test--spotify-port
+           (process-contact orpheus-test--spotify-server :service)
+           orpheus-test--spotify-token-file
+           (expand-file-name "token.json"
+                             (make-temp-file "orpheus-spotify-test" t)))
+     (unwind-protect
+         (progn ,@body)
+       (let ((directory (file-name-directory orpheus-test--spotify-token-file)))
+         (dolist (process (process-list))
+           (when (and (process-live-p process)
+                      (not (eq process orpheus-test--spotify-server))
+                      (string-prefix-p "orpheus" (process-name process)))
+             (ignore-errors (delete-process process))))
+         (ignore-errors (delete-process orpheus-test--spotify-server))
+         (ignore-errors (delete-directory directory t))))))
+
+(defun orpheus-test--spotify-client (&rest arguments)
+  "Return a Spotify backend pointed at the fake server.
+ARGUMENTS are extra struct slots, such as a different client id."
+  (apply #'make-orpheus-spotify
+         :name 'spotify
+         :api-url (format "http://127.0.0.1:%d/v1" orpheus-test--spotify-port)
+         :auth-url (format "http://127.0.0.1:%d" orpheus-test--spotify-port)
+         :token-file orpheus-test--spotify-token-file
+         :client-id "cid"
+         arguments))
+
+(defun orpheus-test--spotify-token (client &optional access refresh expires)
+  "Give CLIENT a token, as if it had signed in.
+ACCESS and REFRESH default to names that say what they are, and EXPIRES to an
+hour from now."
+  (orpheus-spotify--adopt-token
+   client (list :access-token (or access "access")
+                :refresh-token (or refresh "refresh")
+                :expires-at (or expires (+ (float-time) 3600))
+                :scope "user-read-playback-state")))
+
+(defun orpheus-test--spotify-call (client method path &optional body)
+  "Call METHOD PATH on CLIENT with BODY, and return the reply once it arrives."
+  (let ((reply 'waiting))
+    (orpheus-spotify--request client method path body
+                              (lambda (result) (setq reply result)))
+    (orpheus-test--wait (lambda () (not (eq reply 'waiting))))
+    reply))
+
+(defun orpheus-test--spotify-paths ()
+  "Return the paths of the requests the fake Spotify received, oldest first."
+  (mapcar (lambda (request) (plist-get request :path))
+          (reverse orpheus-test--spotify-requests)))
+
+
+;;; Spotify, the sign-in and the wire
+
+(ert-deftest orpheus-test/spotify-base64url ()
+  "Base64url uses its own alphabet and carries no padding."
+  (should (equal (orpheus-spotify--base64url "") ""))
+  (should (equal (orpheus-spotify--base64url "a") "YQ"))
+  (should (equal (orpheus-spotify--base64url "abc") "YWJj"))
+  (should (equal (orpheus-spotify--base64url (unibyte-string 251 255)) "-_8")))
+
+(ert-deftest orpheus-test/spotify-pkce-challenge-matches-the-rfc-vector ()
+  "The challenge is the value RFC 7636 appendix B gives for that verifier."
+  (should (equal (orpheus-spotify--pkce-challenge
+                  "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+                 "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")))
+
+(ert-deftest orpheus-test/spotify-pkce-verifier-is-url-safe ()
+  "A verifier is long enough for S256 and needs no escaping."
+  (let ((verifier (orpheus-spotify--pkce-verifier)))
+    (should (>= (length verifier) 43))
+    (should (string-match-p "\\`[A-Za-z0-9._~-]+\\'" verifier))
+    (should-not (equal verifier (orpheus-spotify--pkce-verifier)))))
+
+(ert-deftest orpheus-test/spotify-query-encode ()
+  "Values are escaped and the ones that are nil are left out."
+  (should (equal (orpheus-spotify--query-encode
+                  '(("a" . "b c") ("d" . "e&f") ("g" . nil)))
+                 "a=b%20c&d=e%26f"))
+  (should (equal (orpheus-spotify--query-encode nil) "")))
+
+(ert-deftest orpheus-test/spotify-authorize-url-carries-the-pkce-challenge ()
+  "The sign-in URL names the app, the redirect, the scopes and the challenge."
+  (let* ((orpheus-spotify-client-id "cid")
+         (orpheus-spotify-redirect-uri "http://127.0.0.1:8899/orpheus/callback")
+         (orpheus-spotify-auth-url "https://accounts.example.org")
+         (url (orpheus-spotify--authorize-url "verifier" "state")))
+    (should (string-prefix-p "https://accounts.example.org/authorize?" url))
+    (should (string-match-p "client_id=cid" url))
+    (should (string-match-p "response_type=code" url))
+    (should (string-match-p "code_challenge_method=S256" url))
+    (should (string-match-p "state=state" url))
+    (should (string-match-p (regexp-quote
+                             "redirect_uri=http%3A%2F%2F127.0.0.1%3A8899%2Forpheus%2Fcallback")
+                            url))
+    (should (string-match-p "scope=user-read-playback-state%20user-modify-playback-state"
+                            url))))
+
+(ert-deftest orpheus-test/spotify-callback-parameters ()
+  "The loopback page's query string is read for its code and its state."
+  (should (equal (orpheus-spotify--callback-parameters "/orpheus/callback?code=abc&state=xyz")
+                 '(("code" . "abc") ("state" . "xyz"))))
+  (should (equal (orpheus-spotify--callback-parameters
+                  "/orpheus/callback?error=access_denied")
+                 '(("error" . "access_denied"))))
+  (should (equal (orpheus-spotify--callback-parameters "/orpheus/callback") nil)))
+
+(ert-deftest orpheus-test/spotify-token-file-is-private ()
+  "The token file is written whole, and only the user can read it."
+  (orpheus-test--with-fake-spotify (lambda (_request) "{}")
+    (let ((client (orpheus-test--spotify-client))
+          (token (list :access-token "a" :refresh-token "r"
+                       :expires-at 1234567890.0 :scope "s")))
+      (orpheus-spotify--adopt-token client token)
+      (should (file-exists-p orpheus-test--spotify-token-file))
+      (should (equal (logand (file-modes orpheus-test--spotify-token-file) #o777)
+                     #o600))
+      (should (equal (orpheus-spotify--read-token orpheus-test--spotify-token-file)
+                     token)))))
+
+(ert-deftest orpheus-test/spotify-missing-token-file-is-not-an-error ()
+  "A token file that is not there yet reads as no token at all."
+  (should-not (orpheus-spotify--read-token
+               (expand-file-name "nothing-here.json"
+                                 temporary-file-directory))))
+
+(ert-deftest orpheus-test/spotify-request-sends-the-bearer-token ()
+  "An API call carries the access token and hands back the parsed JSON."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) "{\"is_playing\":true,\"device\":null}")
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client "tok")
+      (let ((reply (orpheus-test--spotify-call client "GET" "/me/player")))
+        (should (plist-get reply :ok))
+        (should (eq (orpheus-spotify--field (plist-get reply :json) "is_playing")
+                    t))
+        (should (equal (orpheus-test--spotify-paths) '("/v1/me/player")))
+        (should (equal (orpheus-test--spotify-header
+                        (car orpheus-test--spotify-requests) "authorization")
+                       "Bearer tok"))))))
+
+(ert-deftest orpheus-test/spotify-request-sends-a-json-body ()
+  "A write goes out as JSON, with the content type Spotify expects."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client "tok")
+      (let ((reply (orpheus-test--spotify-call
+                    client "PUT" "/me/player/play" '((uris . ["spotify:track:1"])))))
+        (should (plist-get reply :ok))
+        (let ((request (car orpheus-test--spotify-requests)))
+          (should (equal (plist-get request :method) "PUT"))
+          (should (equal (plist-get request :body)
+                         "{\"uris\":[\"spotify:track:1\"]}"))
+          (should (equal (orpheus-test--spotify-header request "content-type")
+                         "application/json")))))))
+
+(ert-deftest orpheus-test/spotify-api-error-is-reported-in-its-own-words ()
+  "Spotify's own message is what the caller reads, not the status code."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        (list :status 404
+              :body (concat "{\"error\":{\"status\":404,\"message\":"
+                            "\"Player command failed: No active device found\"}}")))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((reply (orpheus-test--spotify-call client "PUT" "/me/player/play")))
+        (should-not (plist-get reply :ok))
+        (should (= (plist-get reply :status) 404))
+        (should (string-match-p "No active device found"
+                                (plist-get reply :error)))))))
+
+(ert-deftest orpheus-test/spotify-unreachable-server-answers ()
+  "A server that is not there answers at once, instead of hanging the editor."
+  (let* ((probe (make-network-process :name "orpheus-spotify-probe" :server t
+                                      :host "127.0.0.1" :service t
+                                      :family 'ipv4 :noquery t))
+         (port (process-contact probe :service)))
+    (delete-process probe)
+    (let ((client (make-orpheus-spotify
+                   :name 'spotify
+                   :api-url (format "http://127.0.0.1:%d/v1" port)
+                   :auth-url (format "http://127.0.0.1:%d" port)
+                   :token-file orpheus-test--spotify-token-file
+                   :client-id "cid"))
+          (reply 'waiting))
+      (orpheus-spotify--adopt-token client (list :access-token "access"
+                                                 :expires-at (+ (float-time) 3600)))
+      (orpheus-spotify--request client "GET" "/me/player" nil
+                                (lambda (result) (setq reply result)))
+      (should (orpheus-test--wait (lambda () (not (eq reply 'waiting)))))
+      (should-not (plist-get reply :ok))
+      (should (string-match-p "cannot reach Spotify" (plist-get reply :error))))))
+
+(ert-deftest orpheus-test/spotify-refreshes-the-token-once ()
+  "A stale token is refreshed, stored, and the request is tried again."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (pcase (plist-get request :path)
+          ("/api/token"
+           "{\"access_token\":\"fresh\",\"expires_in\":3600,\"token_type\":\"Bearer\"}")
+          ("/v1/me/player"
+           (if (equal (orpheus-test--spotify-header request "authorization")
+                      "Bearer fresh")
+               "{\"is_playing\":false}"
+             '(:status 401
+               :body "{\"error\":{\"status\":401,\"message\":\"The access token expired\"}}")))))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client "stale" "r")
+      (let ((reply (orpheus-test--spotify-call client "GET" "/me/player")))
+        (should (plist-get reply :ok))
+        (should (equal (plist-get (orpheus-spotify--token client) :access-token)
+                       "fresh"))
+        (should (equal (plist-get (orpheus-spotify--read-token
+                                   orpheus-test--spotify-token-file)
+                                  :access-token)
+                       "fresh"))
+        (should (equal (orpheus-test--spotify-paths)
+                       '("/v1/me/player" "/api/token" "/v1/me/player")))
+        (let ((refresh (seq-find (lambda (request)
+                                   (equal (plist-get request :path)
+                                          "/api/token"))
+                                 orpheus-test--spotify-requests)))
+          (should (equal (plist-get refresh :method) "POST"))
+          (should (string-match-p "grant_type=refresh_token"
+                                  (plist-get refresh :body)))
+          (should (string-match-p "refresh_token=r" (plist-get refresh :body))))))))
+
+(ert-deftest orpheus-test/spotify-refresh-only-happens-once-per-token ()
+  "A second stale token in the same breath is not refreshed twice."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (pcase (plist-get request :path)
+          ("/api/token"
+           "{\"access_token\":\"fresh\",\"expires_in\":3600,\"token_type\":\"Bearer\"}")
+          (_ '(:status 401 :body "{}"))))
+    (let ((client (orpheus-test--spotify-client))
+          (replies 0))
+      (orpheus-test--spotify-token client "stale" "r")
+      (orpheus-spotify--request client "GET" "/me/player" nil
+                                (lambda (_result) (cl-incf replies)))
+      (orpheus-spotify--request client "GET" "/me/player" nil
+                                (lambda (_result) (cl-incf replies)))
+      (should (orpheus-test--wait (lambda () (= replies 2))))
+      (should (= 1 (seq-count (lambda (path) (equal path "/api/token"))
+                              (orpheus-test--spotify-paths)))))))
+
+(ert-deftest orpheus-test/spotify-rate-limit-stops-the-requests ()
+  "A 429 with Retry-After silences the client until the wait is over."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        '(:status 429 :headers (("Retry-After" . "30")) :body "{}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((first (orpheus-test--spotify-call client "GET" "/me/player")))
+        (should-not (plist-get first :ok))
+        (should (> (orpheus-spotify--not-before client) (float-time)))
+        (let* ((count (length orpheus-test--spotify-requests))
+               (second (orpheus-test--spotify-call client "GET" "/me/player")))
+          (should (plist-get second :throttled))
+          (should (= count (length orpheus-test--spotify-requests))))))))
+
+(ert-deftest orpheus-test/spotify-without-a-client-id-says-what-to-set ()
+  "A backend with no app to sign in to answers nil and names the option."
+  (orpheus-test--with-fake-spotify (lambda (_request) "{}")
+    (let ((client (orpheus-test--spotify-client :client-id nil))
+          (connected 'waiting))
+      (orpheus-backend-connect client (lambda (backend) (setq connected backend)))
+      (should (orpheus-test--wait (lambda () (not (eq connected 'waiting)))))
+      (should-not connected)
+      (should-not (orpheus-backend-connected-p client)))))
+
+(ert-deftest orpheus-test/spotify-without-a-token-says-what-to-run ()
+  "A backend with no token does not pretend to be connected."
+  (orpheus-test--with-fake-spotify (lambda (_request) "{}")
+    (let ((client (orpheus-test--spotify-client))
+          (connected 'waiting))
+      (should-not (orpheus-backend-connected-p client))
+      (orpheus-backend-connect client (lambda (backend) (setq connected backend)))
+      (should (orpheus-test--wait (lambda () (not (eq connected 'waiting)))))
+      (should-not connected))))
+
+(ert-deftest orpheus-test/spotify-connects-with-a-token ()
+  "A stored token that still has time on it is enough to connect."
+  (orpheus-test--with-fake-spotify (lambda (_request) "{}")
+    (let ((client (orpheus-test--spotify-client))
+          (connected 'waiting))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-connect client (lambda (backend) (setq connected backend)))
+      (should (orpheus-test--wait (lambda () (not (eq connected 'waiting)))))
+      (should (eq connected client))
+      (should (orpheus-backend-connected-p client)))))
+
+(ert-deftest orpheus-test/spotify-connect-refreshes-an-expired-token ()
+  "An expired token is renewed before the backend says it is ready."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        "{\"access_token\":\"fresh\",\"expires_in\":3600,\"token_type\":\"Bearer\"}")
+    (let ((client (orpheus-test--spotify-client))
+          (connected 'waiting))
+      (orpheus-test--spotify-token client "old" "r" (- (float-time) 60))
+      (orpheus-backend-connect client (lambda (backend) (setq connected backend)))
+      (should (orpheus-test--wait (lambda () (not (eq connected 'waiting)))))
+      (should (eq connected client))
+      (should (equal (orpheus-test--spotify-paths) '("/api/token"))))))
+
+(ert-deftest orpheus-test/spotify-sign-in-swallows-the-callback ()
+  "The listener answers the browser and stores the token it is given."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (if (equal (plist-get request :path) "/api/token")
+            "{\"access_token\":\"signed\",\"refresh_token\":\"r\",\"expires_in\":3600}"
+          "{}"))
+    (let* ((probe (make-network-process :name "orpheus-spotify-probe" :server t
+                                        :host "127.0.0.1" :service t
+                                        :family 'ipv4 :noquery t))
+           (port (process-contact probe :service))
+           (client (orpheus-test--spotify-client)))
+      (delete-process probe)
+      (let ((orpheus-spotify-redirect-uri
+             (format "http://127.0.0.1:%d/orpheus/callback" port))
+            (page 'waiting)
+            (orpheus-spotify--login-text ""))
+        (unwind-protect
+            (progn
+              (orpheus-spotify--listen client "state" "verifier")
+              (should (process-live-p orpheus-spotify--login-server))
+              ;; The browser arrives with the code Spotify sent it, and the
+              ;; one request it makes is all the listener answers.
+              (url-retrieve (format "http://127.0.0.1:%d/orpheus/callback?code=abc&state=state"
+                                    port)
+                            (lambda (_status) (setq page (buffer-string)))
+                            nil t t)
+              (should (orpheus-test--wait (lambda () (not (eq page 'waiting)))))
+              (should (string-match-p "signed in" page))
+              (should (orpheus-test--wait (lambda () (orpheus-spotify--token client))))
+              (should-not (process-live-p orpheus-spotify--login-server))
+              (should (equal (plist-get (orpheus-spotify--token client)
+                                        :access-token)
+                             "signed"))
+              (should (equal (plist-get (orpheus-spotify--read-token
+                                         orpheus-test--spotify-token-file)
+                                        :refresh-token)
+                             "r"))
+              (let ((request (seq-find (lambda (candidate)
+                                         (equal (plist-get candidate :path)
+                                                "/api/token"))
+                                       orpheus-test--spotify-requests)))
+                (should request)
+                (should (string-match-p "code=abc" (plist-get request :body)))
+                (should (string-match-p "code_verifier=verifier"
+                                        (plist-get request :body)))
+                (should (string-match-p "grant_type=authorization_code"
+                                        (plist-get request :body)))))
+          (orpheus-spotify--stop-listening))))))
+
+(ert-deftest orpheus-test/spotify-sign-in-ignores-a-foreign-state ()
+  "An answer that did not start in this Emacs is refused, and no code spent."
+  (orpheus-test--with-fake-spotify (lambda (_request) "{}")
+    (let* ((probe (make-network-process :name "orpheus-spotify-probe" :server t
+                                        :host "127.0.0.1" :service t
+                                        :family 'ipv4 :noquery t))
+           (port (process-contact probe :service))
+           (client (orpheus-test--spotify-client)))
+      (delete-process probe)
+      (let ((orpheus-spotify-redirect-uri
+             (format "http://127.0.0.1:%d/orpheus/callback" port))
+            (orpheus-spotify--login-text ""))
+        (unwind-protect
+            (progn
+              (orpheus-spotify--listen client "state" "verifier")
+              (url-retrieve (format "http://127.0.0.1:%d/orpheus/callback?code=abc&state=other"
+                                    port)
+                            (lambda (_status) nil) nil t t)
+              (should (orpheus-test--wait
+                       (lambda ()
+                         (not (process-live-p orpheus-spotify--login-server)))))
+              (should-not (orpheus-spotify--token client))
+              (should (equal (orpheus-test--spotify-paths) nil)))
+          (orpheus-spotify--stop-listening))))))
+
+;;; Spotify, the player state and the track
+
+(defconst orpheus-test--spotify-player
+  (concat
+   "{\"device\":{\"id\":\"dev1\",\"is_active\":true,"
+   "\"name\":\"orpheus test\",\"type\":\"Computer\","
+   "\"volume_percent\":64},"
+   "\"shuffle_state\":false,\"repeat_state\":\"context\","
+   "\"is_playing\":true,\"progress_ms\":42500,"
+   "\"currently_playing_type\":\"track\","
+   "\"item\":{\"id\":\"6rqhFgbbKwnb9MLmUQDhG6\","
+   "\"uri\":\"spotify:track:6rqhFgbbKwnb9MLmUQDhG6\",\"name\":\"Song\","
+   "\"duration_ms\":215000,\"track_number\":3,\"disc_number\":1,"
+   "\"artists\":[{\"name\":\"Band\"},{\"name\":\"Other\"}],"
+   "\"album\":{\"name\":\"Record\",\"release_date\":\"1994-05-01\","
+   "\"artists\":[{\"name\":\"Band\"}],"
+   "\"images\":[{\"url\":\"https://i.scdn.co/image/abc\","
+   "\"width\":640,\"height\":640}]}}}")
+  "A `GET /me/player' reply, cut down to the fields orpheus reads.")
+
+(defun orpheus-test--spotify-player-json (&optional text)
+  "Return the player fixture TEXT, or the default one, as JSON."
+  (orpheus-spotify--json (or text orpheus-test--spotify-player)))
+
+(ert-deftest orpheus-test/spotify-status-from-player ()
+  "The player state becomes a status the interface understands."
+  (let ((status (orpheus-spotify--status-from-player
+                 (orpheus-test--spotify-player-json))))
+    (should (eq (orpheus-status-state status) 'play))
+    (should (= (orpheus-status-elapsed status) 42.5))
+    (should (= (orpheus-status-total status) 215.0))
+    (should (= (orpheus-status-volume status) 64))
+    (should (orpheus-status-repeat status))
+    (should-not (orpheus-status-random status))
+    (should-not (orpheus-status-single status))
+    (should (equal (orpheus-status-songid status)
+                   "6rqhFgbbKwnb9MLmUQDhG6"))))
+
+(ert-deftest orpheus-test/spotify-status-is-paused-when-not-playing ()
+  "A paused player is paused, not stopped, and track repeat is single."
+  (let ((status (orpheus-spotify--status-from-player
+                 (orpheus-test--spotify-player-json
+                  (replace-regexp-in-string
+                   "\"is_playing\":true" "\"is_playing\":false"
+                   (replace-regexp-in-string
+                    "\"repeat_state\":\"context\"" "\"repeat_state\":\"track\""
+                    orpheus-test--spotify-player))))))
+    (should (eq (orpheus-status-state status) 'pause))
+    (should (orpheus-status-single status))))
+
+(ert-deftest orpheus-test/spotify-status-with-nothing-playing-is-stopped ()
+  "A 204, which Spotify sends when no device plays, is a stopped status.
+The player reads nil as a backend that is not answering, which is not what a
+quiet device means."
+  (let ((status (orpheus-spotify--status-from-player nil)))
+    (should status)
+    (should (eq (orpheus-status-state status) 'stop))
+    (should (= (orpheus-status-elapsed status) 0))
+    (should (= (orpheus-status-total status) 0))))
+
+(ert-deftest orpheus-test/spotify-track-from-player ()
+  "The playing item becomes a track with the tags the tabs show."
+  (let ((track (orpheus-spotify--track-from-player
+                (orpheus-test--spotify-player-json))))
+    (should (equal (orpheus-track-uri track)
+                   "spotify:track:6rqhFgbbKwnb9MLmUQDhG6"))
+    (should (equal (orpheus-track-title track) "Song"))
+    (should (equal (orpheus-track-artist track) "Band, Other"))
+    (should (equal (orpheus-track-album track) "Record"))
+    (should (equal (orpheus-track-albumartist track) "Band"))
+    (should (= (orpheus-track-duration track) 215.0))
+    (should (= (orpheus-track-trackno track) 3))
+    (should (equal (orpheus-track-year track) "1994"))
+    (should (equal (orpheus-track-label track) "Band, Other – Song")))
+  (should-not (orpheus-spotify--track-from-player nil)))
+
+(ert-deftest orpheus-test/spotify-status-is-read-from-the-api ()
+  "A status read asks `/me/player' and caches what it learned."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) orpheus-test--spotify-player)
+    (let ((client (orpheus-test--spotify-client))
+          (status 'waiting))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-status client (lambda (result) (setq status result)))
+      (should (orpheus-test--wait (lambda () (not (eq status 'waiting)))))
+      (should (eq (orpheus-status-state status) 'play))
+      (should (equal (orpheus-test--spotify-paths) '("/v1/me/player")))
+      (should (orpheus-backend-connected-p client)))))
+
+(ert-deftest orpheus-test/spotify-status-is-not-asked-twice-in-one-interval ()
+  "The second ask inside the poll interval costs no request."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) orpheus-test--spotify-player)
+    (let ((client (orpheus-test--spotify-client))
+          (orpheus-spotify-poll-interval 30)
+          (first 'waiting)
+          (second 'waiting))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-status client (lambda (result) (setq first result)))
+      (should (orpheus-test--wait (lambda () (not (eq first 'waiting)))))
+      (orpheus-backend-status client (lambda (result) (setq second result)))
+      (should (orpheus-test--wait (lambda () (not (eq second 'waiting)))))
+      (should (eq (orpheus-status-state second) 'play))
+      (should (= 1 (length orpheus-test--spotify-requests))))))
+
+(ert-deftest orpheus-test/spotify-status-moves-on-between-reads ()
+  "A cached status counts the seconds that passed, so progress does not stop."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) orpheus-test--spotify-player)
+    (let ((client (orpheus-test--spotify-client))
+          (orpheus-spotify-poll-interval 30)
+          (first 'waiting)
+          (second 'waiting))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-status client (lambda (result) (setq first result)))
+      (should (orpheus-test--wait (lambda () (not (eq first 'waiting)))))
+      (setf (orpheus-spotify--status-at client) (- (float-time) 5))
+      (orpheus-backend-status client (lambda (result) (setq second result)))
+      (should (orpheus-test--wait (lambda () (not (eq second 'waiting)))))
+      (should (<= 47.5 (orpheus-status-elapsed second) 48))
+      (should (< 42.5 (orpheus-status-elapsed first) 43)))))
+
+(ert-deftest orpheus-test/spotify-track-is-read-from-the-api ()
+  "The current track comes from the same reply as the status."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) orpheus-test--spotify-player)
+    (let ((client (orpheus-test--spotify-client))
+          (track 'waiting))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-track client (lambda (result) (setq track result)))
+      (should (orpheus-test--wait (lambda () (not (eq track 'waiting)))))
+      (should (equal (orpheus-track-title track) "Song"))
+      (should (equal (orpheus-test--spotify-paths) '("/v1/me/player"))))))
+
+(ert-deftest orpheus-test/spotify-a-failed-read-is-not-a-stopped-player ()
+  "A refused read answers with what was known, not with silence."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) orpheus-test--spotify-player)
+    (let ((client (orpheus-test--spotify-client))
+          (first 'waiting)
+          (second 'waiting))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-status client (lambda (result) (setq first result)))
+      (should (orpheus-test--wait (lambda () (not (eq first 'waiting)))))
+      (let ((orpheus-test--spotify-handler
+             (lambda (_request) '(:status 500 :body "{}")))
+            (orpheus-spotify-poll-interval 0))
+        (orpheus-backend-status client (lambda (result) (setq second result)))
+        (should (orpheus-test--wait (lambda () (not (eq second 'waiting)))))
+        (should (eq (orpheus-status-state second) 'play))))))
+
+;;; Spotify, the tabs and the queue
+
+(defconst orpheus-test--spotify-track-json
+  (concat "{\"id\":\"t1\",\"uri\":\"spotify:track:t1\",\"name\":\"One\","
+          "\"duration_ms\":1000,\"track_number\":1,"
+          "\"artists\":[{\"name\":\"A\"}],"
+          "\"album\":{\"name\":\"B\",\"release_date\":\"2001-02-03\","
+          "\"artists\":[{\"name\":\"A\"}],"
+          "\"images\":[{\"url\":\"https://i.scdn.co/image/t1\","
+          "\"width\":640,\"height\":640}]}}")
+  "One track as Spotify sends it, cut down to the fields orpheus reads.")
+
+(defun orpheus-test--spotify-browse (client kind arg)
+  "Browse KIND with ARG on CLIENT and return the rows once they arrive."
+  (let ((rows 'waiting))
+    (orpheus-backend-browse client kind arg (lambda (result) (setq rows result)))
+    (orpheus-test--wait (lambda () (not (eq rows 'waiting))))
+    rows))
+
+(defun orpheus-test--spotify-labels (rows)
+  "Return the labels of ROWS."
+  (mapcar #'orpheus-item-label rows))
+
+(defun orpheus-test--spotify-query (path)
+  "Return the query string of the most recent request to PATH, or nil."
+  (let ((request (seq-find (lambda (candidate)
+                             (equal (plist-get candidate :path) path))
+                           orpheus-test--spotify-requests)))
+    (plist-get request :query)))
+
+(ert-deftest orpheus-test/spotify-gets-its-own-tabs ()
+  "The interface draws the tabs Spotify fills, starting with the queue."
+  (let ((tabs (orpheus-ui--tabs-for-capabilities
+               (orpheus-backend-capabilities
+                (orpheus-make-backend 'spotify)))))
+    (should (equal (mapcar #'car tabs)
+                   '(queue artists albums playlists search)))))
+
+(ert-deftest orpheus-test/spotify-can-browse-what-it-has ()
+  "Spotify claims the tabs it can fill, and nothing more."
+  (let ((client (make-orpheus-spotify :name 'spotify)))
+    (should (equal (orpheus-backend-capabilities client)
+                   '(queue artists albums playlists search)))))
+
+(ert-deftest orpheus-test/spotify-playlists-tab-starts-with-liked-songs ()
+  "Saved songs come first, then the playlists Spotify holds."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        (concat "{\"items\":["
+                "{\"id\":\"p1\",\"name\":\"Mix\",\"tracks\":{\"total\":12}},"
+                "{\"id\":\"p2\",\"name\":\"Drive\",\"tracks\":{\"total\":4}}],"
+                "\"next\":null}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'playlists nil)))
+        (should (equal (orpheus-test--spotify-labels rows)
+                       '("Liked Songs" "Mix" "Drive")))
+        (should (equal (orpheus-item-browse (nth 0 rows)) '(playlists "liked")))
+        (should (equal (orpheus-item-browse (nth 1 rows)) '(playlists "p1")))
+        (should (equal (orpheus-item-detail (nth 1 rows)) "12 tracks"))
+        ;; A playlist row descends, so there is nothing for it to play yet.
+        (should-not (orpheus-item-playable (nth 1 rows)))
+        (should (equal (orpheus-test--spotify-paths) '("/v1/me/playlists")))))))
+
+(ert-deftest orpheus-test/spotify-playlist-tracks-are-rows-that-play ()
+  "Opening a playlist asks for its tracks and hands back playable rows."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        (concat "{\"items\":[{\"track\":" orpheus-test--spotify-track-json
+                "},{\"track\":null}],\"next\":null}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'playlists '("p1"))))
+        (should (= 1 (length rows)))
+        (should (equal (orpheus-item-label (car rows)) "A – One"))
+        (should (equal (alist-get 'uri (orpheus-item-data (car rows)))
+                       "spotify:track:t1"))
+        (should (orpheus-item-playable (car rows)))
+        (should (equal (orpheus-test--spotify-paths)
+                       '("/v1/playlists/p1/tracks")))))))
+
+(ert-deftest orpheus-test/spotify-liked-songs-are-a-playlist ()
+  "Saved songs are listed like the tracks of a playlist."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        (concat "{\"items\":[{\"track\":" orpheus-test--spotify-track-json
+                "}],\"next\":null}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'playlists '("liked"))))
+        (should (equal (orpheus-test--spotify-labels rows) '("A – One")))
+        (should (equal (orpheus-test--spotify-paths) '("/v1/me/tracks")))))))
+
+(ert-deftest orpheus-test/spotify-albums-tab-saves-albums ()
+  "Saved albums list, and opening one lists its tracks."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (pcase (plist-get request :path)
+          ("/v1/me/albums"
+           (concat "{\"items\":[{\"album\":{\"id\":\"al1\",\"name\":\"Album\","
+                   "\"release_date\":\"2000-01-01\","
+                   "\"artists\":[{\"name\":\"A\"}]}}],\"next\":null}"))
+          (_ (concat "{\"items\":[" orpheus-test--spotify-track-json
+                     "],\"next\":null}"))))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'albums nil)))
+        (should (equal (orpheus-test--spotify-labels rows) '("Album")))
+        (should (equal (orpheus-item-detail (car rows)) "A"))
+        (should (equal (orpheus-item-browse (car rows)) '(albums "al1"))))
+      (let ((rows (orpheus-test--spotify-browse client 'albums '("al1"))))
+        (should (equal (orpheus-test--spotify-labels rows) '("A – One")))
+        (should (equal (orpheus-test--spotify-paths)
+                       '("/v1/me/albums" "/v1/albums/al1/tracks")))))))
+
+(ert-deftest orpheus-test/spotify-artists-descend-to-their-albums ()
+  "Followed artists list, an artist lists its albums, an album its tracks."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (pcase (plist-get request :path)
+          ("/v1/me/following"
+           (concat "{\"artists\":{\"items\":[{\"id\":\"ar1\",\"name\":\"Artist\","
+                   "\"genres\":[\"rock\",\"pop\"]}],\"next\":null}}"))
+          ("/v1/artists/ar1/albums"
+           (concat "{\"items\":[{\"id\":\"al1\",\"name\":\"Album\","
+                   "\"release_date\":\"2000-01-01\","
+                   "\"artists\":[{\"name\":\"A\"}]}],\"next\":null}"))
+          (_ (concat "{\"items\":[" orpheus-test--spotify-track-json
+                     "],\"next\":null}"))))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'artists nil)))
+        (should (equal (orpheus-test--spotify-labels rows) '("Artist")))
+        (should (equal (orpheus-item-detail (car rows)) "rock, pop"))
+        (should (equal (orpheus-item-browse (car rows)) '(artists "ar1")))
+        (should (string-match-p "type=artist"
+                                (or (orpheus-test--spotify-query
+                                     "/v1/me/following")
+                                    ""))))
+      (let ((rows (orpheus-test--spotify-browse client 'artists '("ar1"))))
+        (should (equal (orpheus-test--spotify-labels rows) '("Album")))
+        (should (equal (orpheus-item-browse (car rows))
+                       '(artists "ar1" "al1"))))
+      (let ((rows (orpheus-test--spotify-browse client 'artists '("ar1" "al1"))))
+        (should (equal (orpheus-test--spotify-labels rows) '("A – One"))))
+      (should (equal (orpheus-test--spotify-paths)
+                     '("/v1/me/following" "/v1/artists/ar1/albums"
+                       "/v1/albums/al1/tracks"))))))
+
+(ert-deftest orpheus-test/spotify-followed-artists-page-by-cursor ()
+  "More than one page of followed artists is read with the after cursor.
+The next page is named by the last artist read, not by an offset, and the
+pages sit under `artists' in the reply."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (if (string-match-p "after=ar1" (or (plist-get request :query) ""))
+            (concat "{\"artists\":{\"items\":[{\"id\":\"ar2\","
+                    "\"name\":\"Second\"}],\"next\":null}}")
+          (concat "{\"artists\":{\"items\":[{\"id\":\"ar1\","
+                  "\"name\":\"First\"}],\"next\":\"more\"}}")))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'artists nil)))
+        (should (equal (orpheus-test--spotify-labels rows) '("First" "Second")))
+        (should (= 2 (length orpheus-test--spotify-requests)))
+        (should (string-match-p
+                 "after=ar1"
+                 (or (orpheus-test--spotify-query "/v1/me/following") "")))))))
+
+(ert-deftest orpheus-test/spotify-search-offers-every-kind-of-result ()
+  "A search lists tracks, then artists, albums and playlists."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        (concat "{\"tracks\":{\"items\":[" orpheus-test--spotify-track-json
+                "]},\"artists\":{\"items\":[{\"id\":\"ar1\",\"name\":\"Artist\"}]},"
+                "\"albums\":{\"items\":[{\"id\":\"al1\",\"name\":\"Album\","
+                "\"artists\":[{\"name\":\"A\"}]}]},"
+                "\"playlists\":{\"items\":[{\"id\":\"p1\",\"name\":\"Mix\","
+                "\"tracks\":{\"total\":3}}]}}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'search '("one"))))
+        (should (equal (orpheus-test--spotify-labels rows)
+                       '("A – One" "Artist" "Album" "Mix")))
+        (should (orpheus-item-playable (nth 0 rows)))
+        (should (equal (orpheus-item-browse (nth 1 rows)) '(artists "ar1")))
+        (should (equal (orpheus-item-browse (nth 2 rows)) '(albums "al1")))
+        (should (equal (orpheus-item-browse (nth 3 rows)) '(playlists "p1")))
+        (should (string-match-p "q=one"
+                                (or (orpheus-test--spotify-query "/v1/search")
+                                    "")))))))
+
+(ert-deftest orpheus-test/spotify-follows-the-next-page ()
+  "A listing with more than one page is read to the end."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (if (string-match-p "offset=0\\|offset=$" (or (plist-get request :query) ""))
+            (concat "{\"items\":[{\"id\":\"p1\",\"name\":\"Mix\","
+                    "\"tracks\":{\"total\":1}}],\"next\":\"more\"}")
+          "{\"items\":[{\"id\":\"p2\",\"name\":\"Drive\",\"tracks\":{\"total\":2}}],\"next\":null}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows (orpheus-test--spotify-browse client 'playlists nil)))
+        (should (equal (orpheus-test--spotify-labels rows)
+                       '("Liked Songs" "Mix" "Drive")))
+        (should (= 2 (length orpheus-test--spotify-requests)))))))
+
+(ert-deftest orpheus-test/spotify-queue-says-what-plays-and-what-is-next ()
+  "The queue tab shows the playing track, then what follows it."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        (concat "{\"currently_playing\":" orpheus-test--spotify-track-json
+                ",\"queue\":[{\"id\":\"t2\",\"uri\":\"spotify:track:t2\","
+                "\"name\":\"Two\",\"duration_ms\":2000,"
+                "\"artists\":[{\"name\":\"A\"}],\"album\":{\"name\":\"B\"}}]}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((rows 'waiting))
+        (orpheus-backend-queue client (lambda (result) (setq rows result)))
+        (should (orpheus-test--wait (lambda () (not (eq rows 'waiting)))))
+        (should (equal (orpheus-test--spotify-labels rows)
+                       '("A – One" "A – Two")))
+        (should (equal (orpheus-item-detail (car rows)) "playing now"))
+        (should (= (alist-get 'pos (orpheus-item-data (car rows))) 0))
+        (should (= (alist-get 'pos (orpheus-item-data (cadr rows))) 1))
+        (should (equal (orpheus-test--spotify-paths)
+                       '("/v1/me/player/queue")))))))
+
+(ert-deftest orpheus-test/spotify-a-listing-that-fails-is-empty ()
+  "A refused listing answers with no rows, and says why in the echo area."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 403 :body "{\"error\":{\"status\":403,\"message\":\"Forbidden\"}}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (should-not (orpheus-test--spotify-browse client 'albums nil)))))
+
+;;; Spotify, the transport and the rest
+
+(defun orpheus-test--spotify-playing (client)
+  "Give CLIENT the player state of the fixture, without a request."
+  (orpheus-spotify--remember-player
+   client (list :ok t :json (orpheus-test--spotify-player-json)))
+  client)
+
+(defun orpheus-test--spotify-said (client action &optional value)
+  "Send ACTION, with VALUE, to CLIENT and return the request it made.
+The commands answer nothing, so the request itself is what a test can read."
+  (let ((before (length orpheus-test--spotify-requests)))
+    (orpheus-backend-command client action value)
+    (orpheus-test--wait (lambda ()
+                          (> (length orpheus-test--spotify-requests) before)
+                          ))
+    (car orpheus-test--spotify-requests)))
+
+(defun orpheus-test--spotify-messages (function)
+  "Call FUNCTION and return the messages it showed."
+  (let ((messages nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest args)
+                 (push (apply #'format format args) messages))))
+      (funcall function))
+    (nreverse messages)))
+
+(ert-deftest orpheus-test/spotify-transport-tells-spotify-what-to-do ()
+  "Each key orpheus offers becomes the request Spotify documents for it."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-playing (orpheus-test--spotify-client))))
+      (orpheus-test--spotify-token client)
+      (let ((request (orpheus-test--spotify-said client 'play)))
+        (should (equal (plist-get request :method) "PUT"))
+        (should (equal (plist-get request :path) "/v1/me/player/play")))
+      (let ((request (orpheus-test--spotify-said client 'pause)))
+        (should (equal (plist-get request :path) "/v1/me/player/pause")))
+      (let ((request (orpheus-test--spotify-said client 'next)))
+        (should (equal (plist-get request :method) "POST"))
+        (should (equal (plist-get request :path) "/v1/me/player/next")))
+      (let ((request (orpheus-test--spotify-said client 'previous)))
+        (should (equal (plist-get request :path) "/v1/me/player/previous")))
+      (let ((request (orpheus-test--spotify-said client 'volume 42)))
+        (should (equal (plist-get request :path) "/v1/me/player/volume"))
+        (should (equal (plist-get request :query) "volume_percent=42")))
+      (let ((request (orpheus-test--spotify-said client 'random t)))
+        (should (equal (plist-get request :path) "/v1/me/player/shuffle"))
+        (should (equal (plist-get request :query) "state=true")))
+      (let ((request (orpheus-test--spotify-said client 'repeat t)))
+        (should (equal (plist-get request :path) "/v1/me/player/repeat"))
+        (should (equal (plist-get request :query) "state=context")))
+      (let ((request (orpheus-test--spotify-said client 'single t)))
+        (should (equal (plist-get request :query) "state=track"))))))
+
+(ert-deftest orpheus-test/spotify-toggle-reads-the-player ()
+  "Play and pause are two requests, so the toggle picks by what it knows."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-playing (orpheus-test--spotify-client))))
+      (orpheus-test--spotify-token client)
+      ;; The fixture says Spotify is playing, so a toggle pauses it.
+      (should (equal (plist-get (orpheus-test--spotify-said client 'toggle)
+                                :path)
+                     "/v1/me/player/pause"))
+      (setf (orpheus-status-state (orpheus-spotify--status client)) 'pause)
+      (should (equal (plist-get (orpheus-test--spotify-said client 'toggle)
+                                :path)
+                     "/v1/me/player/play")))))
+
+(ert-deftest orpheus-test/spotify-seek-is-an-absolute-position ()
+  "Spotify seeks to a place, so the step is added to what is known."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-playing (orpheus-test--spotify-client))))
+      (orpheus-test--spotify-token client)
+      ;; The fixture is 42.5 seconds into the track.
+      (should (equal (plist-get (orpheus-test--spotify-said client 'seek 5)
+                                :query)
+                     "position_ms=47500"))
+      (should (equal (plist-get (orpheus-test--spotify-said client 'seek -50)
+                                :query)
+                     "position_ms=0")))))
+
+(ert-deftest orpheus-test/spotify-the-repeat-cycle-keeps-its-place ()
+  "Repeating the queue is not undone by the command that clears single track.
+The player sends both before either answer arrives, so the backend has to
+remember what the first one asked for."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-playing (orpheus-test--spotify-client))))
+      (orpheus-test--spotify-token client)
+      (setf (orpheus-spotify--mode-repeat client) nil
+            (orpheus-spotify--mode-single client) nil)
+      ;; What `orpheus-cycle-repeat' sends the first time it is pressed.
+      (orpheus-backend-command client 'repeat t)
+      (orpheus-backend-command client 'single nil)
+      (should (orpheus-test--wait
+               (lambda () (= 2 (length orpheus-test--spotify-requests)))))
+      (should (equal (mapcar (lambda (request) (plist-get request :query))
+                             (reverse orpheus-test--spotify-requests))
+                     '("state=context" "state=context"))))))
+
+(ert-deftest orpheus-test/spotify-an-unreadable-reply-is-an-error ()
+  "A reply orpheus cannot read is reported, not shown as an empty tab."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) "<html>not JSON at all</html>")
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((reply (orpheus-test--spotify-call client "GET" "/me/playlists")))
+        (should-not (plist-get reply :ok))
+        (should (string-match-p "could not be read"
+                                (plist-get reply :error)))))
+    ;; A command that answers nothing at all is still a success.
+    (let ((orpheus-test--spotify-handler
+           (lambda (_request) '(:status 204 :body "")))
+          (client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (should (plist-get (orpheus-test--spotify-call client "PUT" "/me/player/pause")
+                         :ok)))))
+
+(ert-deftest orpheus-test/spotify-a-key-it-cannot-do-says-so ()
+  "A key Spotify has no command for is refused in words, and sends nothing."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-playing (orpheus-test--spotify-client))))
+      (orpheus-test--spotify-token client)
+      (dolist (action '(consume update rescan clear shuffle delete save))
+        (let ((messages (orpheus-test--spotify-messages
+                         (lambda () (orpheus-backend-command client action)))))
+          (should messages)
+          (should (string-match-p "Spotify" (car messages)))))
+      (should-not orpheus-test--spotify-requests))))
+
+(ert-deftest orpheus-test/spotify-reads-uris-and-web-links ()
+  "A Spotify URI and a link from the web page name the same thing."
+  (should (equal (orpheus-spotify--parts "spotify:track:abc") '("track" . "abc")))
+  (should (equal (orpheus-spotify--parts "spotify:album:al1") '("album" . "al1")))
+  (should (equal (orpheus-spotify--parts
+                  "https://open.spotify.com/album/xyz?si=1234")
+                 '("album" . "xyz")))
+  (should (equal (orpheus-spotify--parts
+                  "https://open.spotify.com/intl-de/track/zzz")
+                 '("track" . "zzz")))
+  (should-not (orpheus-spotify--parts "/tmp/a.mp3"))
+  (should-not (orpheus-spotify--parts "https://example.org/track/abc"))
+  (should (equal (orpheus-spotify--id "https://open.spotify.com/track/abc")
+                 "abc")))
+
+(ert-deftest orpheus-test/spotify-plays-a-web-link ()
+  "An album link plays the album, and a track link plays that track."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-play-uri
+       client "https://open.spotify.com/album/al1?si=xyz")
+      (should (orpheus-test--wait (lambda () orpheus-test--spotify-requests)))
+      (should (equal (plist-get (car orpheus-test--spotify-requests) :body)
+                     "{\"context_uri\":\"https://open.spotify.com/album/al1?si=xyz\"}")))))
+
+(ert-deftest orpheus-test/spotify-empty-search-asks-nothing ()
+  "A search with no words sends no request, and answers with no rows."
+  (orpheus-test--with-fake-spotify (lambda (_request) "{}")
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (should-not (orpheus-test--spotify-browse client 'search '("")))
+      (should-not orpheus-test--spotify-requests))))
+
+(ert-deftest orpheus-test/spotify-plays-a-track ()
+  "Playing a track sends it as the thing to play."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-play-uri client "spotify:track:t1")
+      (should (orpheus-test--wait (lambda () orpheus-test--spotify-requests)))
+      (let ((request (car orpheus-test--spotify-requests)))
+        (should (equal (plist-get request :method) "PUT"))
+        (should (equal (plist-get request :path) "/v1/me/player/play"))
+        (should (equal (plist-get request :body)
+                       "{\"uris\":[\"spotify:track:t1\"]}"))))))
+
+(ert-deftest orpheus-test/spotify-plays-a-whole-album ()
+  "An album or a playlist is played as a context, not as a track."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-play-uri client "spotify:album:al1")
+      (should (orpheus-test--wait (lambda () orpheus-test--spotify-requests)))
+      (should (equal (plist-get (car orpheus-test--spotify-requests) :body)
+                     "{\"context_uri\":\"spotify:album:al1\"}")))))
+
+(ert-deftest orpheus-test/spotify-refuses-what-it-cannot-play ()
+  "A path is not a Spotify track, and saying so beats sending it."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (let ((messages (orpheus-test--spotify-messages
+                       (lambda () (orpheus-backend-play-uri client "/tmp/a.mp3")))))
+        (should (string-match-p "Spotify" (car messages))))
+      (should-not orpheus-test--spotify-requests))))
+
+(ert-deftest orpheus-test/spotify-queues-one-uri-at-a-time ()
+  "Spotify takes one track per request, so a whole album is several."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request) '(:status 204 :body ""))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-add client '("spotify:track:t1" "spotify:track:t2"))
+      (should (orpheus-test--wait
+               (lambda () (= 2 (length orpheus-test--spotify-requests)))))
+      (should (equal (mapcar (lambda (request) (plist-get request :query))
+                             (reverse orpheus-test--spotify-requests))
+                     '("uri=spotify%3Atrack%3At1" "uri=spotify%3Atrack%3At2")))
+      (should (equal (plist-get (car orpheus-test--spotify-requests) :method)
+                     "POST")))))
+
+(ert-deftest orpheus-test/spotify-no-device-is-explained ()
+  "A command with no device playing says what Spotify said, once."
+  (orpheus-test--with-fake-spotify
+      (lambda (_request)
+        '(:status 404
+          :body "{\"error\":{\"status\":404,\"message\":\"Player command failed: No active device found\",\"reason\":\"NO_ACTIVE_DEVICE\"}}"))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-play-uri client "spotify:track:t1")
+      (should (orpheus-test--wait
+               (lambda () (orpheus-spotify--last-error client))))
+      (should (string-match-p "No active device"
+                              (orpheus-spotify--last-error client)))
+      (should (= 1 (length orpheus-test--spotify-requests))))))
+
+(ert-deftest orpheus-test/spotify-devices-move-playback ()
+  "The devices command lists what Spotify sees and moves playback there."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (if (equal (plist-get request :path) "/v1/me/player/devices")
+            (concat "{\"devices\":[{\"id\":\"dev1\",\"name\":\"Laptop\","
+                    "\"type\":\"Computer\",\"is_active\":false},"
+                    "{\"id\":\"dev2\",\"name\":\"Phone\",\"type\":\"Smartphone\","
+                    "\"is_active\":true}]}")
+          '(:status 204 :body "")))
+    (let ((client (orpheus-test--spotify-client))
+          (orpheus-backend-current nil)
+          (choice "Laptop (Computer)"))
+      (orpheus-test--spotify-token client)
+      (setq orpheus-backend-current client)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _arguments) choice)))
+        (orpheus-spotify-devices)
+        (should (orpheus-test--wait
+                 (lambda ()
+                   (seq-some (lambda (request)
+                               (equal (plist-get request :path)
+                                      "/v1/me/player/transfer"))
+                             orpheus-test--spotify-requests))))
+        (let ((transfer (seq-find (lambda (request)
+                                    (equal (plist-get request :path)
+                                           "/v1/me/player/transfer"))
+                                  orpheus-test--spotify-requests)))
+          (should (equal (plist-get transfer :method) "PUT"))
+          (should (equal (plist-get transfer :body)
+                         "{\"device_ids\":[\"dev1\"],\"play\":true}")))))))
+
+(ert-deftest orpheus-test/spotify-devices-work-before-the-player-opens ()
+  "The device picker connects with the stored token, with no player running."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (if (equal (plist-get request :path) "/v1/me/player/devices")
+            (concat "{\"devices\":[{\"id\":\"dev1\",\"name\":\"Laptop\","
+                    "\"type\":\"Computer\",\"is_active\":false}]}")
+          '(:status 204 :body "")))
+    (let* ((orpheus-backend-current nil)
+           (orpheus-backend 'spotify)
+           (orpheus-spotify-client-id "cid")
+           (orpheus-spotify-token-file orpheus-test--spotify-token-file)
+           (orpheus-spotify-api-url (format "http://127.0.0.1:%d/v1"
+                                            orpheus-test--spotify-port))
+           (orpheus-spotify-auth-url (format "http://127.0.0.1:%d"
+                                             orpheus-test--spotify-port)))
+      ;; The token a previous session stored is all the command needs.
+      (orpheus-test--spotify-token (orpheus-test--spotify-client))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _arguments) "Laptop (Computer)")))
+        (orpheus-spotify-devices)
+        (should (orpheus-test--wait
+                 (lambda ()
+                   (seq-some (lambda (request)
+                               (equal (plist-get request :path)
+                                      "/v1/me/player/transfer"))
+                             orpheus-test--spotify-requests))))
+        (should (equal (plist-get (seq-find
+                                   (lambda (request)
+                                     (equal (plist-get request :path)
+                                            "/v1/me/player/transfer"))
+                                   orpheus-test--spotify-requests)
+                                  :body)
+                       "{\"device_ids\":[\"dev1\"],\"play\":true}"))))))
+
+(ert-deftest orpheus-test/spotify-queue-row-plays-from-there ()
+  "Playing a queue row plays that row and what follows it."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (if (equal (plist-get request :path) "/v1/me/player/queue")
+            (concat "{\"currently_playing\":" orpheus-test--spotify-track-json
+                    ",\"queue\":[{\"id\":\"t2\",\"uri\":\"spotify:track:t2\","
+                    "\"name\":\"Two\",\"duration_ms\":2000,"
+                    "\"artists\":[{\"name\":\"A\"}],\"album\":{\"name\":\"B\"}}]}")
+          '(:status 204 :body "")))
+    (let ((client (orpheus-test--spotify-client)))
+      (orpheus-test--spotify-token client)
+      (orpheus-backend-command client 'playpos 1)
+      (should (orpheus-test--wait
+               (lambda ()
+                 (seq-some (lambda (request)
+                             (equal (plist-get request :path) "/v1/me/player/play"))
+                           orpheus-test--spotify-requests))))
+      (let ((play (seq-find (lambda (request)
+                              (equal (plist-get request :path) "/v1/me/player/play"))
+                            orpheus-test--spotify-requests)))
+        (should (equal (plist-get play :body)
+                       "{\"uris\":[\"spotify:track:t2\"]}"))))))
+
+(ert-deftest orpheus-test/spotify-album-art-is-cached ()
+  "The cover of a track is fetched once and kept in the cache directory."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (pcase (plist-get request :path)
+          ("/v1/tracks/t1"
+           (concat "{\"id\":\"t1\",\"album\":{\"name\":\"B\",\"images\":["
+                   "{\"url\":\"" (format "http://127.0.0.1:%d/cover.jpg"
+                                          orpheus-test--spotify-port) "\","
+                   "\"width\":640},"
+                   "{\"url\":\"" (format "http://127.0.0.1:%d/small.jpg"
+                                          orpheus-test--spotify-port) "\","
+                   "\"width\":64}]}}"))
+          ("/cover.jpg"
+           (list :status 200 :headers '(("Content-Type" . "image/jpeg"))
+                 :body (unibyte-string 0 255 254 1 2)))
+          (_ '(:status 404 :body "{}"))))
+    (let* ((client (orpheus-test--spotify-client))
+           (orpheus-spotify--art-urls (make-hash-table :test #'equal))
+           (orpheus-cache-directory (file-name-as-directory
+                                     (make-temp-file "orpheus-spotify-cache"
+                                                     t)))
+           (file 'waiting))
+      (unwind-protect
+          (progn
+            (orpheus-test--spotify-token client)
+            (orpheus-backend-album-art
+             client (orpheus-track-create :uri "spotify:track:t1")
+             (lambda (result) (setq file result)))
+            (should (orpheus-test--wait (lambda () (not (eq file 'waiting)))))
+            (should file)
+            (should (file-exists-p file))
+            (should (string-prefix-p (expand-file-name orpheus-cache-directory)
+                                     (expand-file-name file)))
+            ;; The largest image is the one worth showing, and the bytes are
+            ;; written as they came, so an image is still an image.
+            (should (equal (with-temp-buffer
+                             (set-buffer-multibyte nil)
+                             (insert-file-contents-literally file)
+                             (buffer-string))
+                           (unibyte-string 0 255 254 1 2)))
+            (should (equal (orpheus-test--spotify-paths)
+                           '("/v1/tracks/t1" "/cover.jpg"))))
+        (ignore-errors (delete-directory orpheus-cache-directory t))))))
+
+(ert-deftest orpheus-test/spotify-art-comes-with-the-listing ()
+  "A cover listed beside a track is used as it is, with no second request.
+Every listing already carries the album images, and the API counts requests."
+  (orpheus-test--with-fake-spotify
+      (lambda (request)
+        (pcase (plist-get request :path)
+          ("/v1/playlists/p1/tracks"
+           (concat "{\"items\":[{\"track\":{\"id\":\"t1\","
+                   "\"uri\":\"spotify:track:t1\",\"name\":\"One\","
+                   "\"duration_ms\":1000,\"artists\":[{\"name\":\"A\"}],"
+                   "\"album\":{\"name\":\"B\",\"images\":[{\"url\":\""
+                   (format "http://127.0.0.1:%d/cover.jpg"
+                           orpheus-test--spotify-port)
+                   "\",\"width\":640}]}}}],\"next\":null}"))
+          ("/cover.jpg"
+           (list :status 200 :headers '(("Content-Type" . "image/jpeg"))
+                 :body "JPEG"))
+          (_ '(:status 404 :body "{}"))))
+    (let* ((client (orpheus-test--spotify-client))
+           (orpheus-spotify--art-urls (make-hash-table :test #'equal))
+           (orpheus-cache-directory (file-name-as-directory
+                                     (make-temp-file "orpheus-spotify-cache"
+                                                     t)))
+           (file 'waiting))
+      (unwind-protect
+          (progn
+            (orpheus-test--spotify-token client)
+            (let ((rows (orpheus-test--spotify-browse client 'playlists '("p1"))))
+              (should (equal (orpheus-test--spotify-labels rows) '("A – One"))))
+            (orpheus-backend-album-art
+             client (orpheus-track-create :uri "spotify:track:t1")
+             (lambda (result) (setq file result)))
+            (should (orpheus-test--wait (lambda () (not (eq file 'waiting)))))
+            (should (file-exists-p file))
+            ;; The listing named the cover, so no /tracks lookup was needed.
+            (should (equal (orpheus-test--spotify-paths)
+                           '("/v1/playlists/p1/tracks" "/cover.jpg"))))
+        (ignore-errors (delete-directory orpheus-cache-directory t))))))
 
 ;;; orpheus-test.el ends here

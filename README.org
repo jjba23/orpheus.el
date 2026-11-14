@@ -32,8 +32,9 @@ layouts, and the [[./screenshots/visualizer-ember.png][Ember]] and
 *orpheus.el is a flexible music player for Emacs*: a queue, a couple of tabs, a
 library, playlists, cover art, an equalizer you can shape with the mouse or the
 keyboard, lyrics that follow the music and a spectrum visualizer, with the keys
-Emacs fingers already know.  MPD, local files and music on another machine all appear
-in the same interface, and ~B~ switches between them without restarting Emacs.
+Emacs fingers already know.  MPD, local files, music on another machine and a
+Spotify account all appear in the same interface, and ~B~ switches between them
+without restarting Emacs.
 
 New here?  You do not need to learn everything at once.  Pick the backend that
 matches where your music already lives, install its program, and run
@@ -66,7 +67,7 @@ matches what you are doing; every page links back here and to its neighbours.
 | [[file:docs/usage.org][Using orpheus]] | a working backend, MPD passwords, the keys and the graphical fallbacks |
 | [[file:docs/glossary.org][Words and ideas]] | a friendly glossary of backends, queues, tabs, caches and the rest |
 | [[file:docs/configuration.org][Configuration]] | every option, its default and complete examples |
-| [[file:docs/backends.org][Backends]] | MPD, local files, SSH, the backend protocol and platform notes |
+| [[file:docs/backends.org][Backends]] | MPD, local files, SSH, Spotify, the backend protocol and platform notes |
 | [[file:docs/troubleshooting.org][Troubleshooting]] | what to check when the player is silent, a password is rejected or a download stalls |
 | [[file:docs/development.org][Development]] | the gate, the test suites, the demo and the release |
 
@@ -110,6 +111,7 @@ machine that program lives on is the part worth checking:
 | ~ssh~       | this computer                  | the SSH backend                                         |
 | ~sftp~      | this computer                  | the SSH backend when the host's shell cannot run ~cat~   |
 | ~cava~      | this computer                  | the visualizer                                          |
+| Spotify app | a device of yours              | the Spotify backend: it plays the music, orpheus controls it |
 | ~yt-dlp~    | this computer                  | video links played by the local backend                 |
 
 Cue sheets need no program: a ~.cue~ beside an image is read in Emacs, and the
@@ -155,6 +157,19 @@ The local backend needs no daemon:
 (setq orpheus-local-directory "~/Music")
 (orpheus)                                  ; then 2 for the files tab, RET to play
 #+end_src
+
+A Spotify account is driven through its Web API, while Spotify plays on the
+phone, the desktop app or a small daemon of your choice:
+
+#+begin_src emacs-lisp
+(setq orpheus-backend 'spotify)
+(setq orpheus-spotify-client-id "your apps client id")
+;; once: M-x orpheus-spotify-login
+(orpheus)                                  ; then p for playlists, RET to play
+#+end_src
+
+Playback control needs Premium and an active device; [[file:docs/backends.org#spotify][the Spotify notes]] walk
+through the app, the redirect URI and the sign-in.
 
 Music on another machine is copied over ssh and played by mpv here:
 

@@ -9,6 +9,42 @@ removals.
 
 This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+*** Added
+
+- A Spotify backend, =orpheus-spotify.el=, and
+  ~(setq orpheus-backend 'spotify)~.  Spotify keeps the library, the queue and
+  the audio; orpheus browses the account and moves the queue through the Web
+  API, which is the same shape as the MPD backend: Queue, Artists, Albums,
+  Playlists (starting with Liked Songs) and Search, with ~RET~ to play and ~a~
+  to queue.  Signing in uses the authorization code flow with PKCE, so there
+  is no client secret to keep: ~M-x orpheus-spotify-login~ opens the account
+  page, listens on the loopback redirect URI for the one request that carries
+  the code, and stores the token in ~orpheus-spotify-token-file~ with mode
+  0600.  A later session renews it without asking.  Transport, seek, volume,
+  repeat and shuffle map to the API's own commands; ~M-x
+  orpheus-spotify-devices~ moves playback to another device.  Every request
+  goes through ~url-retrieve~, so nothing blocks: one reply holds both the
+  status and the track, its answer is reused for
+  ~orpheus-spotify-poll-interval~ seconds with the seconds that passed added to
+  the position, a ~429~ with ~Retry-After~ stops the client until it expires,
+  and a rejected token is renewed once for every request waiting on it.
+  Playback control needs Premium and an active device, and the Web API carries
+  no audio, no queue editing and no lyrics; the backend says so instead of
+  pretending.
+- Cover art for a Spotify track comes from the album images the listing or the
+  player state already carried, so showing a cover costs a download and not a
+  lookup; only a track nothing has listed yet is asked for by id.  Followed
+  artists are read to the end, page by page, with the cursor that endpoint
+  uses, so an account following more than fifty artists browses all of them.
+  A ~spotify:~ URI and a ~https://open.spotify.com/...~ link, with or without
+  an ~intl-xx~ segment or a ~si~ query, are the same thing, so a link from the
+  web player plays the album it names.  ~M-x orpheus-spotify-devices~ also
+  works before the player is open, using the token a previous session stored,
+  and a reply orpheus cannot read is reported in words rather than shown as an
+  empty tab.
+
 * 1.1.0 (2026-11-14)
 
 *** Added

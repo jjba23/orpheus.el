@@ -29,6 +29,11 @@
 ;;; - `ssh' lists music on another machine and copies a track into a temporary
 ;;;   directory before playing it here with mpv.  There is no daemon on the far
 ;;;   side and no tunnel; the queue and transport are the local backend's.
+;;; - `spotify' controls a Spotify account through its Web API.  Spotify plays
+;;;   the music on a device of yours, so this backend browses the playlists,
+;;;   the saved albums, the followed artists and the saved songs, and moves
+;;;   that device's queue; it needs Premium for playback control and it never
+;;;   streams audio into Emacs.
 ;;;
 ;;; Everything is asynchronous: replies arrive in process filters, and the
 ;;; status is read on a timer, so a slow server or a starting player never
@@ -55,6 +60,7 @@
 (require 'orpheus-mpd)
 (require 'orpheus-local)
 (require 'orpheus-ssh)
+(require 'orpheus-spotify)
 (require 'orpheus-ui)
 (require 'orpheus-mpris)
 (require 'orpheus-vis)
@@ -69,11 +75,12 @@
   "Version of orpheus.")
 
 (defcustom orpheus-backend 'mpd
-  "Backend to play with: `mpd', `local' or `ssh', or any registered one.
+  "Backend to play with: `mpd', `local', `ssh' or `spotify', or any registered one.
 Register another with `orpheus-register-backend'."
   :type '(choice (const :tag "Music Player Daemon" mpd)
                  (const :tag "Local files and URLs through mpv" local)
                  (const :tag "Files on another machine, copied over ssh" ssh)
+                 (const :tag "Spotify, controlled through its Web API" spotify)
                  (symbol :tag "Another registered backend"))
   :group 'orpheus)
 

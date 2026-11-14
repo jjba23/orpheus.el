@@ -38,6 +38,9 @@ flowchart LR
   SSH --> Remote[("remote files")]
   SSH --> Cache[("local cache")]
   Cache --> MPV
+  Backend -->|spotify| SP["Spotify client"]
+  SP --> Web[("Spotify Web API")]
+  Web --> Device[("a Spotify device<br/>plays the audio")]
   MPV --> Audio[("system audio")]
   Daemon --> Audio
 #+end_src
@@ -49,7 +52,8 @@ buffer over SSH.  A new backend is a ~cl-defstruct~ and a handful of methods,
 not a second player; [[file:backends.org#adding-one][Adding one]] shows the skeleton.
 
 The queue lives where it can be authoritative.  MPD owns its queue in the
-daemon; the local and SSH backends keep it in Emacs, because there is no daemon
+daemon; Spotify's queue lives on Spotify and is moved through the Web API; the
+local and SSH backends keep it in Emacs, because there is no daemon
 on the far side to keep it for them.  That is also why MPD can be gapless while
 the local backend plays one file at a time.
 
@@ -90,6 +94,39 @@ The SSH backend has the same shape with an ssh process and a download queue
 instead of mpv; MPD connects its socket and reads the greeting.  A backend
 that cannot connect calls back with nil, so the interface says so instead of
 showing a player that is not there.
+
+Spotify has no process to start, so connecting means having a token the API
+still accepts:
+
+#+begin_src mermaid
+sequenceDiagram
+    participant O as orpheus
+    participant S as Spotify backend
+    participant A as accounts.spotify.com
+    participant W as api.spotify.com
+    participant D as your device
+    O->>S: connect
+    S->>S: read orpheus-spotify-token-file
+    opt the access token has run out
+        S->>A: refresh_token grant
+        A-->>S: a new access token, written 0600
+    end
+    S-->>O: connected
+    loop every orpheus-spotify-poll-interval
+        S->>W: GET /me/player
+        W-->>S: the status and the track, one reply
+    end
+    O->>S: play, next, seek
+    S->>W: PUT or POST /me/player/...
+    W-->>D: the device plays
+    Note over S,W: a 429 stops the requests until Retry-After
+#+end_src
+
+The sign-in itself is the one part with no counterpart in the other backends:
+~orpheus-spotify-login~ sends the browser to the account page with a PKCE
+challenge, listens on the loopback redirect URI for the single request that
+carries the code, and swaps that code for a token.  Nothing else in the player
+knows about it, because the token file is what every later request reads.
 
 * One disc image, many tracks
 :PROPERTIES:
@@ -342,7 +379,7 @@ platform-specific part.
 
 * Where to go next
 
-- [[file:backends.org][Backends]] is the protocol in full, and how to add a fourth.
+- [[file:backends.org][Backends]] is the protocol in full, and how to add another.
 - [[file:platforms.org][Cross-platform guide]] has the support matrix, setup checklists and
   the boundary between tested and merely compiled.
 - [[file:configuration.org][Configuration]] is the option table for every backend.
