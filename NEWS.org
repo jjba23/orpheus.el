@@ -23,8 +23,8 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   page, listens on the loopback redirect URI for the one request that carries
   the code, and stores the token in ~orpheus-spotify-token-file~ with mode
   0600.  A later session renews it without asking.  Transport, seek, volume,
-  repeat and shuffle map to the API's own commands; ~M-x
-  orpheus-spotify-devices~ moves playback to another device.  Every request
+  repeat and shuffle map to the API's own commands; the devices command moves
+  playback to another device.  Every request
   goes through ~url-retrieve~, so nothing blocks: one reply holds both the
   status and the track, its answer is reused for
   ~orpheus-spotify-poll-interval~ seconds with the seconds that passed added to
@@ -41,7 +41,7 @@ This project adheres loosely to [[https://semver.org/spec/v2.0.0.html][Semantic 
   A ~spotify:~ URI and a ~https://open.spotify.com/...~ link, with or without
   an ~intl-xx~ segment or a ~si~ query, are the same thing, so a link from the
   web player plays the album it names.  ~M-x orpheus-spotify-devices~ also
-  works before the player is open, using the token a previous session stored,
+  works before the player is open, using the token a previous session kept,
   and a reply orpheus cannot read is reported in words rather than shown as an
   empty tab.
 
